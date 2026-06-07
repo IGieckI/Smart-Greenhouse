@@ -2,13 +2,13 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
-#include "soil_moisture.h"
+#include "soilMoistureSensor.hpp"
 
 static const char *TAG = "MAIN";
 
 void app_main(void)
 {
-    soil_moisture_handle_t sensor_handle = NULL;
+    SoilMoistureSensor sensor;
 
     // Configuration
     soil_moisture_config_t config = {

@@ -1,6 +1,6 @@
 #include "SoilMoistureSensor.hpp"
 #include "esp_log.h"
-#include <algorithm> // for std::clamp
+#include <algorithm>
 
 static const char* TAG = "SOIL_MOISTURE";
 

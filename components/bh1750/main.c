@@ -2,7 +2,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/i2c.h"
-#include "bh1750.h"
+#include "bh1750.hpp"
 
 // I2C Config
 #define I2C_MASTER_NUM     I2C_NUM_0
