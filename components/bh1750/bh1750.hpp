@@ -1,0 +1,69 @@
+#pragma once
+
+#include "driver/i2c.h"
+#include "esp_err.h"
+
+class BH1750 {
+public:
+    /**
+     * @brief I2C addresses based on ADDR pin state.
+     * ADDR = 'L' (<= 0.3VCC) -> 0x23
+     * ADDR = 'H' (>= 0.7VCC) -> 0x5C
+     */
+    static constexpr uint8_t I2C_ADDRESS_LO = 0x23; 
+    static constexpr uint8_t I2C_ADDRESS_HI = 0x5C; 
+
+    /**
+     * @brief Opcodes for measurement modes.
+     */
+    enum class Mode : uint8_t {
+        CONTINUOUS_H_RES  = 0x10, /*!< 1 lx resolution, typ. 120ms */
+        CONTINUOUS_H_RES2 = 0x11, /*!< 0.5 lx resolution, typ. 120ms */
+        CONTINUOUS_L_RES  = 0x13, /*!< 4 lx resolution, typ. 16ms */
+        ONE_TIME_H_RES    = 0x20, /*!< 1 lx resolution, auto power down */
+        ONE_TIME_H_RES2   = 0x21, /*!< 0.5 lx resolution, auto power down */
+        ONE_TIME_L_RES    = 0x23  /*!< 4 lx resolution, auto power down */
+    };
+
+    /**
+     * @brief Construct a new BH1750 object
+     * * @param port I2C Port number (e.g., I2C_NUM_0)
+     * @param addr I2C address of the device (Defaults to I2C_ADDRESS_LO)
+     */
+    BH1750(i2c_port_t port, uint8_t addr = I2C_ADDRESS_LO);
+
+    /**
+     * @brief Power down the sensor (No active state)
+     */
+    esp_err_t power_down();
+
+    /**
+     * @brief Power on the sensor (Waiting for measurement command)
+     */
+    esp_err_t power_on();
+
+    /**
+     * @brief Reset the data register (Must be in Power On state)
+     */
+    esp_err_t reset();
+
+    /**
+     * @brief Configure the measurement mode and wait for the conversion to complete
+     */
+    esp_err_t setup_mode(Mode mode);
+
+    /**
+     * @brief Read the ambient light value in lux
+     */
+    esp_err_t read_lux(Mode mode, float &lux);
+
+private:
+    i2c_port_t _port;
+    uint8_t _addr;
+
+    static constexpr uint8_t CMD_POWER_DOWN = 0x00;
+    static constexpr uint8_t CMD_POWER_ON   = 0x01;
+    static constexpr uint8_t CMD_RESET      = 0x07;
+
+    esp_err_t write_cmd(uint8_t cmd);
+};
