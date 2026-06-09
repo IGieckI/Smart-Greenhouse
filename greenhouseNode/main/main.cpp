@@ -12,6 +12,11 @@
 
 static const char *TAG = "APP_MAIN";
 
+TDS tdsSensor;
+DS18B20 tempSensor(DS18B20_DATA_PIN);
+BH1750 light_sensor(I2C_MASTER_NUM, BH1750::I2C_ADDRESS_LO);
+BH1750::Mode mode = BH1750::Mode::ONE_TIME_H_RES;
+
 static esp_err_t i2c_master_init(void) {
     i2c_config_t conf = {};
     
@@ -51,14 +56,12 @@ void setup() {
 
     // Note: We are passing nullptr for the calibration handle here. 
     // For production, an adc_cali_handle_t should be generated and passed as the 3rd argument.
-    TDS tdsSensor(adc_handle, TDS_ADC_CHANNEL, nullptr);
+    tdsSensor = TDS(adc_handle, TDS_ADC_CHANNEL, nullptr);
 
     ESP_LOGI(TAG, "TDS Sensor Initialized. Starting read loop...");
 
     // Initializing DS18B20 temperature sensor
     ESP_LOGI(TAG, "Initializing DS18B20 Temperature Sensor...");
-
-    DS18B20 tempSensor(DS18B20_DATA_PIN);
 
     if (tempSensor.init() != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize the DS18B20 pin. Halting task.");
@@ -73,14 +76,9 @@ void setup() {
         ESP_LOGE(TAG, "Failed to initialize I2C master!");
         return;
     }
-    
-    BH1750 light_sensor(I2C_MASTER_NUM, BH1750::I2C_ADDRESS_LO);
 
     light_sensor.power_on();
     light_sensor.reset();
-
-    BH1750::Mode mode = BH1750::Mode::ONE_TIME_H_RES;
-    float lux = 0;
 
     ESP_LOGI(TAG, "Sensors initialized successfully. Starting continuous read loop.");
 }
@@ -106,6 +104,7 @@ extern "C" void app_main(void)
 
         // Read ambient light level
         light_sensor.setup_mode(mode);
+        float lux = 0;
 
         if (light_sensor.read_lux(mode, lux) == ESP_OK) {
             ESP_LOGI(TAG, "Ambient Light: %.2f lx", lux);

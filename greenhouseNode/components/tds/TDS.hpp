@@ -13,6 +13,7 @@ public:
      * @param cali_handle (Optional) ADC calibration handle for accurate voltage reading
      */
     TDS(adc_oneshot_unit_handle_t adc_handle, adc_channel_t channel, adc_cali_handle_t cali_handle = nullptr);
+    TDS();
     ~TDS();
 
     /**

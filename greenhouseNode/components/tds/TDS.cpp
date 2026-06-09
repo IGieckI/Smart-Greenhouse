@@ -4,6 +4,16 @@
 
 static const char* TAG = "TDS";
 
+TDS::TDS() 
+    : _adc_handle(nullptr), 
+      _channel(ADC_CHANNEL_0), 
+      _cali_handle(nullptr), 
+      _temperature(25.0f), 
+      _kValue(1.0f), 
+      _tdsValue(0.0f) 
+{
+}
+
 TDS::TDS(adc_oneshot_unit_handle_t adc_handle, adc_channel_t channel, adc_cali_handle_t cali_handle)
     : _adc_handle(adc_handle), 
       _channel(channel), 
