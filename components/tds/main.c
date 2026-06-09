@@ -5,12 +5,11 @@
 #include "esp_adc/adc_oneshot.h"
 
 // Include our custom component header
-#include "GravityTDS.hpp"
+#include "TDS.hpp"
 
 static const char *TAG = "APP_MAIN";
 
-// Define the ADC unit and channel your sensor is connected to.
-// E.g., ADC_UNIT_1 and ADC_CHANNEL_0 corresponds to GPIO36 on many ESP32 boards.
+// Define the ADC unit and channel the sensor is connected to.
 #define TDS_ADC_UNIT    ADC_UNIT_1
 #define TDS_ADC_CHANNEL ADC_CHANNEL_0
 
@@ -18,33 +17,30 @@ extern "C" void app_main(void)
 {
     ESP_LOGI(TAG, "Initializing ADC for TDS Sensor...");
 
-    // 1. Initialize the ADC Unit
+    // Initialize the ADC Unit
     adc_oneshot_unit_handle_t adc_handle;
     adc_oneshot_unit_init_cfg_t init_config = {
         .unit_id = TDS_ADC_UNIT,
-        .clk_src = ADC_DIGI_CLK_SRC_DEFAULT,
+        .clk_src = ADC_RTC_CLK_SRC_DEFAULT,
         .ulp_mode = ADC_ULP_MODE_DISABLE,
     };
     ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config, &adc_handle));
 
-    // 2. Configure the ADC Channel
+    // Configure the ADC Channel
     adc_oneshot_chan_cfg_t config = {
         .atten = ADC_ATTEN_DB_12,       // 12dB attenuation allows reading voltages up to ~3.3V
         .bitwidth = ADC_BITWIDTH_DEFAULT,
     };
     ESP_ERROR_CHECK(adc_oneshot_config_channel(adc_handle, TDS_ADC_CHANNEL, &config));
 
-    // 3. Instantiate the GravityTDS sensor object
     // Note: We are passing nullptr for the calibration handle here. 
-    // For production, you should generate an adc_cali_handle_t and pass it as the 3rd argument.
-    GravityTDS tdsSensor(adc_handle, TDS_ADC_CHANNEL, nullptr);
+    // For production, an adc_cali_handle_t should be generated and passed as the 3rd argument.
+    TDS tdsSensor(adc_handle, TDS_ADC_CHANNEL, nullptr);
 
     ESP_LOGI(TAG, "TDS Sensor Initialized. Starting read loop...");
 
-    // 4. Main Read Loop
     while (true) {
-        // Optional: If you have a temperature sensor, update the temperature here
-        // to ensure accurate compensation. Default is 25.0C.
+        // Optional: update the temperature through temperature sensor
         float current_water_temp = 25.0f; 
         tdsSensor.setTemperature(current_water_temp);
 
@@ -57,7 +53,6 @@ extern "C" void app_main(void)
             ESP_LOGE(TAG, "Failed to read from TDS sensor!");
         }
 
-        // Delay for 1 second before the next reading
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
