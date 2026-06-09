@@ -6,18 +6,31 @@
 
 #include "TDS.hpp"
 #include "DS18B20.hpp"
+#include "BH1750.hpp"
+
+#include "config.hpp"
 
 static const char *TAG = "APP_MAIN";
 
-// TDS ADC unit and channel the sensor is connected to.
-#define TDS_ADC_UNIT    ADC_UNIT_1
-#define TDS_ADC_CHANNEL ADC_CHANNEL_0
+static esp_err_t i2c_master_init(void) {
+    i2c_config_t conf = {};
+    
+    conf.mode = I2C_MODE_MASTER;
+    conf.sda_io_num = I2C_MASTER_SDA_IO;
+    conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
+    conf.scl_io_num = I2C_MASTER_SCL_IO;
+    conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
+    conf.master.clk_speed = I2C_MASTER_FREQ_HZ;
 
-// DS18B20 GPIO pin
-#define DS18B20_DATA_PIN GPIO_NUM_32
+    esp_err_t err = i2c_param_config(I2C_MASTER_NUM, &conf);
+    if (err != ESP_OK) {
+        return err;
+    }
 
-extern "C" void app_main(void)
-{
+    return i2c_driver_install(I2C_MASTER_NUM, conf.mode, 0, 0, 0);
+}
+
+void setup() {
     ESP_LOGI(TAG, "Initializing ADC for TDS Sensor...");
 
     // Initialize the ADC Unit
@@ -47,33 +60,59 @@ extern "C" void app_main(void)
 
     DS18B20 tempSensor(DS18B20_DATA_PIN);
 
-    // 2. Initialize the hardware pin configuration
     if (tempSensor.init() != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize the DS18B20 pin. Halting task.");
         vTaskDelete(NULL);
     }
 
-    // 3. Set the sensor resolution
-    // 12-bit is the maximum resolution and takes up to 750ms to convert[cite: 7].
     tempSensor.setResolution(DS18B20::Resolution::RES_12_BIT);
 
-    ESP_LOGI(TAG, "Sensor initialized successfully. Starting continuous read loop.");
+    // Initializing BH1750 light sensor
+    ESP_LOGI(TAG, "Initializing BH1750 Light Sensor...");
+    if (i2c_master_init() != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize I2C master!");
+        return;
+    }
+    
+    BH1750 light_sensor(I2C_MASTER_NUM, BH1750::I2C_ADDRESS_LO);
 
+    light_sensor.power_on();
+    light_sensor.reset();
+
+    BH1750::Mode mode = BH1750::Mode::ONE_TIME_H_RES;
+    float lux = 0;
+
+    ESP_LOGI(TAG, "Sensors initialized successfully. Starting continuous read loop.");
+}
+
+extern "C" void app_main(void)
+{
+    setup();
 
     while (true) {
-        // Optional: update the temperature through temperature sensor
+        // Update system temperature
         float current_water_temp = tempSensor.readTemperatureC(); 
         tdsSensor.setTemperature(current_water_temp);
 
         // Read the ADC and calculate the TDS value
         esp_err_t err = tdsSensor.update();
+        
         if (err == ESP_OK) {
             float tds_value = tdsSensor.getTdsValue();
-            ESP_LOGI(TAG, "Water Temperature: %.1f°C | TDS Value: %.0f ppm", current_water_temp, tds_value);
+            ESP_LOGI(TAG, "Water Temp: %.1f°C | TDS: %.0f ppm", current_water_temp, tds_value);
         } else {
             ESP_LOGE(TAG, "Failed to read from TDS sensor!");
         }
 
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        // Read ambient light level
+        light_sensor.setup_mode(mode);
+
+        if (light_sensor.read_lux(mode, lux) == ESP_OK) {
+            ESP_LOGI(TAG, "Ambient Light: %.2f lx", lux);
+        } else {
+            ESP_LOGE(TAG, "Failed to read Light sensor!");
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(LOOP_DELAY_MS));
     }
 }
