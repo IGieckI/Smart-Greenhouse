@@ -1,4 +1,4 @@
-#include "Bh1750.hpp"
+#include "BH1750.hpp"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
