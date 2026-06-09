@@ -2,6 +2,7 @@
 
 #include "driver/gpio.h"
 #include "esp_err.h"
+#include "esp_rom_sys.h"
 
 class DS18B20 {
 public:

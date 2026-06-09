@@ -43,29 +43,27 @@ esp_err_t DS18B20::setResolution(Resolution res) {
 
 float DS18B20::readTemperatureC() {
     // 1. Reset bus and send SKIP ROM (if only one device on bus) [cite: 34]
-    // resetBus();
-    // writeByte(CMD_SKIP_ROM);
+    resetBus();
+    writeByte(CMD_SKIP_ROM);
     
     // 2. Send Convert Temperature command
-    // writeByte(CMD_CONVERT_T);
+    writeByte(CMD_CONVERT_T);
     
     // 3. Wait for conversion. Max 750ms for 12-bit[cite: 7].
     vTaskDelay(pdMS_TO_TICKS(750)); 
     
     // 4. Reset bus again, SKIP ROM, and Read Scratchpad
-    // resetBus();
-    // writeByte(CMD_SKIP_ROM);
-    // writeByte(CMD_READ_SCRATCH);
+    resetBus();
+    writeByte(CMD_SKIP_ROM);
+    writeByte(CMD_READ_SCRATCH);
     
     // 5. Read the 2 bytes of temperature data
-    // uint8_t lsb = readByte();
-    // uint8_t msb = readByte();
+    uint8_t lsb = readByte();
+    uint8_t msb = readByte();
     
     // Placeholder calculation
-    // int16_t raw_temp = (msb << 8) | lsb;
-    // float tempC = (float)raw_temp / 16.0;
-    
-    float tempC = 25.0; // Dummy return value
+    int16_t raw_temp = (msb << 8) | lsb;
+    float tempC = (float)raw_temp / 16.0;
     
     // Enforce hardware limits: -55°C to +125°C [cite: 8]
     if (tempC < -55.0 || tempC > 125.0) {
@@ -79,3 +77,72 @@ float DS18B20::readTemperatureC() {
 // 1-Wire Bit-Banging implementation details would go below
 // (Using ESP-IDF standard esp_rom_delay_us for timing)
 // --------------------------------------------------------
+void DS18B20::resetBus() {
+    // 1. Pull the bus low for 480 microseconds to send the reset pulse
+    gpio_set_level(_dataPin, 0);
+    esp_rom_delay_us(480);
+
+    // 2. Release the bus (let it float high) and wait 70us 
+    gpio_set_level(_dataPin, 1);
+    esp_rom_delay_us(70);
+
+    // Optional: At this point we could read the pin to check for a "presence pulse"
+    // (a 0 means a sensor is connected and responding), but we will assume it's there.
+    
+    // 3. Wait out the rest of the 480us time slot
+    esp_rom_delay_us(410);
+}
+
+void DS18B20::writeBit(uint8_t bit) {
+    if (bit & 1) {
+        // Write '1' bit
+        gpio_set_level(_dataPin, 0);
+        esp_rom_delay_us(6);   // Pull low for a very short time
+        gpio_set_level(_dataPin, 1);
+        esp_rom_delay_us(64);  // Let it float high for the rest of the slot
+    } else {
+        // Write '0' bit
+        gpio_set_level(_dataPin, 0);
+        esp_rom_delay_us(60);  // Pull low for almost the whole slot
+        gpio_set_level(_dataPin, 1);
+        esp_rom_delay_us(10);  // Brief recovery time
+    }
+}
+
+uint8_t DS18B20::readBit() {
+    uint8_t bit = 0;
+    
+    // Initiate the read time slot by pulling low for 6us
+    gpio_set_level(_dataPin, 0);
+    esp_rom_delay_us(6);
+    
+    // Release the bus and wait 9us to let the sensor pull it down if sending a 0
+    gpio_set_level(_dataPin, 1);
+    esp_rom_delay_us(9);
+    
+    // Sample the bus
+    bit = gpio_get_level(_dataPin);
+    
+    // Wait out the remainder of the time slot
+    esp_rom_delay_us(55);
+    
+    return bit;
+}
+
+void DS18B20::writeByte(uint8_t data) {
+    // 1-Wire transmits the Least Significant Bit (LSB) first
+    for (int i = 0; i < 8; i++) {
+        writeBit(data & 0x01);
+        data >>= 1;
+    }
+}
+
+uint8_t DS18B20::readByte() {
+    uint8_t data = 0;
+    for (int i = 0; i < 8; i++) {
+        if (readBit()) {
+            data |= (1 << i);
+        }
+    }
+    return data;
+}
