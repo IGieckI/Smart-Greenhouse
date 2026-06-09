@@ -7,6 +7,7 @@
 #include "TDS.hpp"
 #include "DS18B20.hpp"
 #include "BH1750.hpp"
+#include "aht20_bmp280.hpp"
 
 #include "config.hpp"
 
@@ -16,6 +17,7 @@ TDS tdsSensor;
 DS18B20 tempSensor(DS18B20_DATA_PIN);
 BH1750 light_sensor(I2C_MASTER_NUM, BH1750::I2C_ADDRESS_LO);
 BH1750::Mode mode = BH1750::Mode::ONE_TIME_H_RES;
+Aht20Bmp280 envSensor(I2C_MASTER_NUM, Aht20Bmp280::BMP280_I2C_ADDR_77);
 
 static esp_err_t i2c_master_init(void) {
     i2c_config_t conf = {};
@@ -70,15 +72,22 @@ void setup() {
 
     tempSensor.setResolution(DS18B20::Resolution::RES_12_BIT);
 
-    // Initializing BH1750 light sensor
-    ESP_LOGI(TAG, "Initializing BH1750 Light Sensor...");
+    // Initializing I2C Master (Required for BH1750 and AHT20/BMP280)
     if (i2c_master_init() != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize I2C master!");
         return;
     }
 
+    // Initializing BH1750 light sensor
+    ESP_LOGI(TAG, "Initializing BH1750 Light Sensor...");
     light_sensor.power_on();
     light_sensor.reset();
+
+    // Initializing AHT20+BMP280
+    ESP_LOGI(TAG, "Initializing AHT20 & BMP280 Sensors...");
+    if (envSensor.init() != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to initialize AHT20/BMP280. Continuing anyway...");
+    }
 
     ESP_LOGI(TAG, "Sensors initialized successfully. Starting continuous read loop.");
 }
@@ -111,6 +120,19 @@ extern "C" void app_main(void)
         } else {
             ESP_LOGE(TAG, "Failed to read Light sensor!");
         }
+
+        // AHT20+BMP280 read logic
+        Aht20Bmp280::SensorData env_data;
+        if (envSensor.read(env_data) == ESP_OK) {
+            ESP_LOGI(TAG, "Air Temp: %.2f°C | Humid: %.2f%% | Press: %.2f hPa", 
+                     env_data.aht_temperature, 
+                     env_data.aht_humidity, 
+                     env_data.bmp_pressure / 100.0f);
+        } else {
+            ESP_LOGE(TAG, "Failed to read AHT20/BMP280 sensor!");
+        }
+
+        printf("--------------------------------------------------\n"); // Added a divider for cleaner console output
 
         vTaskDelay(pdMS_TO_TICKS(LOOP_DELAY_MS));
     }
