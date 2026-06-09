@@ -4,6 +4,12 @@
 #include "driver/i2c.h"
 #include "hal/adc_types.h"
 
+// --- Soil Moisture Sensor Configuration ---
+#define SOIL_MOISTURE_ADC_UNIT    ADC_UNIT_2 
+#define SOIL_MOISTURE_ADC_CHANNEL ADC_CHANNEL_8
+#define SOIL_MOISTURE_DRY_VAL     4095
+#define SOIL_MOISTURE_WET_VAL     1500
+
 // --- TDS Sensor Configuration ---
 #define TDS_ADC_UNIT        ADC_UNIT_1
 #define TDS_ADC_CHANNEL     ADC_CHANNEL_0

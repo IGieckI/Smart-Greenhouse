@@ -8,6 +8,7 @@
 #include "DS18B20.hpp"
 #include "BH1750.hpp"
 #include "aht20_bmp280.hpp"
+#include "SoilMoistureSensor.hpp"
 
 #include "config.hpp"
 
@@ -18,6 +19,7 @@ DS18B20 tempSensor(DS18B20_DATA_PIN);
 BH1750 light_sensor(I2C_MASTER_NUM, BH1750::I2C_ADDRESS_LO);
 BH1750::Mode mode = BH1750::Mode::ONE_TIME_H_RES;
 Aht20Bmp280 envSensor(I2C_MASTER_NUM, Aht20Bmp280::BMP280_I2C_ADDR_77);
+SoilMoistureSensor soilSensor; 
 
 static esp_err_t i2c_master_init(void) {
     i2c_config_t conf = {};
@@ -40,7 +42,7 @@ static esp_err_t i2c_master_init(void) {
 void setup() {
     ESP_LOGI(TAG, "Initializing ADC for TDS Sensor...");
 
-    // Initialize the ADC Unit
+    // Initialize the ADC Unit for TDS
     adc_oneshot_unit_handle_t adc_handle;
     adc_oneshot_unit_init_cfg_t init_config = {
         .unit_id = TDS_ADC_UNIT,
@@ -60,7 +62,22 @@ void setup() {
     // For production, an adc_cali_handle_t should be generated and passed as the 3rd argument.
     tdsSensor = TDS(adc_handle, TDS_ADC_CHANNEL, nullptr);
 
-    ESP_LOGI(TAG, "TDS Sensor Initialized. Starting read loop...");
+    ESP_LOGI(TAG, "TDS Sensor Initialized.");
+
+    // Initializing Soil Moisture Sensor
+    ESP_LOGI(TAG, "Initializing Soil Moisture Sensor...");
+    SoilMoistureSensor::Config soil_config = {
+        .adc_unit = SOIL_MOISTURE_ADC_UNIT,
+        .adc_channel = SOIL_MOISTURE_ADC_CHANNEL,
+        .dry_value = SOIL_MOISTURE_DRY_VAL,
+        .wet_value = SOIL_MOISTURE_WET_VAL
+    };
+    
+    if (soilSensor.init(soil_config) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize Soil Moisture Sensor!");
+    } else {
+        ESP_LOGI(TAG, "Soil Moisture Sensor Initialized.");
+    }
 
     // Initializing DS18B20 temperature sensor
     ESP_LOGI(TAG, "Initializing DS18B20 Temperature Sensor...");
@@ -109,6 +126,14 @@ extern "C" void app_main(void)
             ESP_LOGI(TAG, "Water Temp: %.1f°C | TDS: %.0f ppm", current_water_temp, tds_value);
         } else {
             ESP_LOGE(TAG, "Failed to read from TDS sensor!");
+        }
+
+        // Read Soil Moisture
+        float moisture_percentage = 0.0f;
+        if (soilSensor.read_percentage(moisture_percentage) == ESP_OK) {
+            ESP_LOGI(TAG, "Soil Moisture: %.1f%%", moisture_percentage);
+        } else {
+            ESP_LOGE(TAG, "Failed to read Soil Moisture sensor!");
         }
 
         // Read ambient light level
