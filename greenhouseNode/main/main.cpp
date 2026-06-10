@@ -1,19 +1,46 @@
 #include <stdio.h>
+#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_wifi.h"
+#include "esp_now.h"
+#include "esp_netif.h"
+#include "nvs_flash.h"
 #include "esp_adc/adc_oneshot.h"
 
+// Your existing sensor includes
 #include "TDS.hpp"
 #include "DS18B20.hpp"
 #include "BH1750.hpp"
 #include "aht20_bmp280.hpp"
 #include "SoilMoistureSensor.hpp"
-
 #include "config.hpp"
+#include "TelemetryPacket.h"
 
-static const char *TAG = "APP_MAIN";
+static const char *TAG = "PERIPHERAL_NODE_" XSTR(NODE_ID);
 
+// Network stuff
+telemetry_packet_t myData;
+esp_now_peer_info_t peerInfo;
+
+// Callback when data is sent
+void OnDataSent(const esp_now_send_info_t *info, esp_now_send_status_t status) {
+    ESP_LOGI(TAG, "Last Packet Send Status: %s", status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
+}
+
+// Initialize Wi-Fi in Station Mode
+static void wifi_init() {
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_start());
+}
+
+// Sensors stuff
 TDS tdsSensor;
 DS18B20 tempSensor(DS18B20_DATA_PIN);
 BH1750 light_sensor(I2C_MASTER_NUM, BH1750::I2C_ADDRESS_LO);
@@ -113,51 +140,53 @@ extern "C" void app_main(void)
 {
     setup();
 
+    myData.node_id = NODE_ID;
+
     while (true) {
-        // Update system temperature
+        // Read Sensors
         float current_water_temp = tempSensor.readTemperatureC(); 
         tdsSensor.setTemperature(current_water_temp);
-
-        // Read the ADC and calculate the TDS value
-        esp_err_t err = tdsSensor.update();
+        tdsSensor.update();
         
-        if (err == ESP_OK) {
-            float tds_value = tdsSensor.getTdsValue();
-            ESP_LOGI(TAG, "Water Temp: %.1f°C | TDS: %.0f ppm", current_water_temp, tds_value);
-        } else {
-            ESP_LOGE(TAG, "Failed to read from TDS sensor!");
-        }
-
-        // Read Soil Moisture
         float moisture_percentage = 0.0f;
-        if (soilSensor.read_percentage(moisture_percentage) == ESP_OK) {
-            ESP_LOGI(TAG, "Soil Moisture: %.1f%%", moisture_percentage);
-        } else {
-            ESP_LOGE(TAG, "Failed to read Soil Moisture sensor!");
-        }
-
-        // Read ambient light level
-        light_sensor.setup_mode(mode);
+        soilSensor.read_percentage(moisture_percentage);
+        
         float lux = 0;
-
-        if (light_sensor.read_lux(mode, lux) == ESP_OK) {
-            ESP_LOGI(TAG, "Ambient Light: %.2f lx", lux);
-        } else {
-            ESP_LOGE(TAG, "Failed to read Light sensor!");
-        }
-
-        // AHT20+BMP280 read logic
+        light_sensor.setup_mode(mode);
+        light_sensor.read_lux(mode, lux);
+        
         Aht20Bmp280::SensorData env_data;
-        if (envSensor.read(env_data) == ESP_OK) {
-            ESP_LOGI(TAG, "Air Temp: %.2f°C | Humid: %.2f%% | Press: %.2f hPa", 
-                     env_data.aht_temperature, 
-                     env_data.aht_humidity, 
-                     env_data.bmp_pressure / 100.0f);
-        } else {
-            ESP_LOGE(TAG, "Failed to read AHT20/BMP280 sensor!");
-        }
+        envSensor.read(env_data);
 
-        printf("--------------------------------------------------\n"); // Added a divider for cleaner console output
+        // Populate Payload
+        myData.water_temp = current_water_temp;
+        myData.tds_value = tdsSensor.getTdsValue();
+        myData.soil_moisture = moisture_percentage;
+        myData.light_lux = lux;
+        myData.air_temp = env_data.aht_temperature;
+        myData.humidity = env_data.aht_humidity;
+        myData.pressure = env_data.bmp_pressure;
+
+        printf("{\"node_id\":%d, \"water_temp\":%.2f, \"tds\":%.0f, \"soil_moisture\":%.1f, \"light_lux\":%.2f, \"air_temp\":%.2f, \"humidity\":%.2f, \"pressure\":%.2f}\n",
+            myData.node_id,
+            myData.water_temp,
+            myData.tds_value,
+            myData.soil_moisture,
+            myData.light_lux,
+            myData.air_temp,
+            myData.humidity,
+            myData.pressure
+        );
+
+        // Send over ESP-NOW
+        esp_err_t result = esp_now_send(central_mac, (uint8_t *) &myData, sizeof(myData));
+        
+        // Print the data
+        if (result == ESP_OK) {
+            ESP_LOGI(TAG, "Sent data successfully");
+        } else {
+            ESP_LOGE(TAG, "Error sending the data");
+        }
 
         vTaskDelay(pdMS_TO_TICKS(LOOP_DELAY_MS));
     }

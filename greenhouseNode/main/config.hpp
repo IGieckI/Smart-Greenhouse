@@ -5,8 +5,8 @@
 #include "hal/adc_types.h"
 
 // --- Soil Moisture Sensor Configuration ---
-#define SOIL_MOISTURE_ADC_UNIT    ADC_UNIT_2 
-#define SOIL_MOISTURE_ADC_CHANNEL ADC_CHANNEL_8
+#define SOIL_MOISTURE_ADC_UNIT    ADC_UNIT_1
+#define SOIL_MOISTURE_ADC_CHANNEL ADC_CHANNEL_5
 #define SOIL_MOISTURE_DRY_VAL     4095
 #define SOIL_MOISTURE_WET_VAL     1500
 
@@ -25,3 +25,9 @@
 
 // --- Main Loop Configuration ---
 #define LOOP_DELAY_MS       1000
+
+// Network stuff
+#define NODE_ID 1
+#define XSTR(x) STR(x)
+#define STR(x) #x
+static uint8_t central_mac[6] = {0x3C, 0x0F, 0x02, 0xEB, 0x8A, 0x5C};
