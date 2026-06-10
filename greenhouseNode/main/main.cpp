@@ -50,51 +50,71 @@ SoilMoistureSensor soilSensor;
 
 static esp_err_t i2c_master_init(void) {
     i2c_config_t conf = {};
-    
     conf.mode = I2C_MODE_MASTER;
     conf.sda_io_num = I2C_MASTER_SDA_IO;
     conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
     conf.scl_io_num = I2C_MASTER_SCL_IO;
     conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
     conf.master.clk_speed = I2C_MASTER_FREQ_HZ;
-
     esp_err_t err = i2c_param_config(I2C_MASTER_NUM, &conf);
-    if (err != ESP_OK) {
-        return err;
-    }
-
+    if (err != ESP_OK) return err;
     return i2c_driver_install(I2C_MASTER_NUM, conf.mode, 0, 0, 0);
 }
 
-void setup() {
-    ESP_LOGI(TAG, "Initializing ADC for TDS Sensor...");
 
-    // Initialize the ADC Unit for TDS
-    adc_oneshot_unit_handle_t adc_handle;
+void setup() {
+    // Initialize NVS (required for Wi-Fi)
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+
+    // Initialize Wi-Fi and ESP-NOW
+    wifi_init();
+    if (esp_now_init() != ESP_OK) {
+        ESP_LOGE(TAG, "Error initializing ESP-NOW");
+        return;
+    }
+    
+    // Register callback and peer
+    esp_now_register_send_cb(OnDataSent);
+    memset(&peerInfo, 0, sizeof(peerInfo));
+    memcpy(peerInfo.peer_addr, central_mac, 6);
+    peerInfo.channel = 0;  
+    peerInfo.encrypt = false;
+
+    if (esp_now_add_peer(&peerInfo) != ESP_OK){
+        ESP_LOGE(TAG, "Failed to add peer");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Initializing Shared ADC Unit...");
+
+    // Initialize the ADC Unit
+    adc_oneshot_unit_handle_t shared_adc_handle;
     adc_oneshot_unit_init_cfg_t init_config = {
         .unit_id = TDS_ADC_UNIT,
         .clk_src = ADC_RTC_CLK_SRC_DEFAULT,
         .ulp_mode = ADC_ULP_MODE_DISABLE,
     };
-    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config, &adc_handle));
+    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config, &shared_adc_handle));
 
-    // Configure the ADC Channel
-    adc_oneshot_chan_cfg_t config = {
+    // Configure the ADC Channel for TDS
+    adc_oneshot_chan_cfg_t tds_config = {
         .atten = ADC_ATTEN_DB_12,       // 12dB attenuation allows reading voltages up to ~3.3V
         .bitwidth = ADC_BITWIDTH_DEFAULT,
     };
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc_handle, TDS_ADC_CHANNEL, &config));
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(shared_adc_handle, TDS_ADC_CHANNEL, &tds_config));
 
-    // Note: We are passing nullptr for the calibration handle here. 
-    // For production, an adc_cali_handle_t should be generated and passed as the 3rd argument.
-    tdsSensor = TDS(adc_handle, TDS_ADC_CHANNEL, nullptr);
-
+    tdsSensor = TDS(shared_adc_handle, TDS_ADC_CHANNEL, nullptr);
     ESP_LOGI(TAG, "TDS Sensor Initialized.");
 
-    // Initializing Soil Moisture Sensor
+    // Configure Soil Moisture using the same shared handle
     ESP_LOGI(TAG, "Initializing Soil Moisture Sensor...");
     SoilMoistureSensor::Config soil_config = {
-        .adc_unit = SOIL_MOISTURE_ADC_UNIT,
+        .adc_handle = shared_adc_handle,
         .adc_channel = SOIL_MOISTURE_ADC_CHANNEL,
         .dry_value = SOIL_MOISTURE_DRY_VAL,
         .wet_value = SOIL_MOISTURE_WET_VAL

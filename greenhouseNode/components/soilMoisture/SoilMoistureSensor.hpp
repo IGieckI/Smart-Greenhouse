@@ -7,7 +7,7 @@ class SoilMoistureSensor {
 public:
     // Configuration structure mapped directly inside the class
     struct Config {
-        adc_unit_t adc_unit;
+        adc_oneshot_unit_handle_t adc_handle;
         adc_channel_t adc_channel;
         int dry_value;              // ADC raw value when completely dry (air)
         int wet_value;              // ADC raw value when completely wet (water)
