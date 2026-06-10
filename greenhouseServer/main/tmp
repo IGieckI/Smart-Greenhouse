@@ -1,0 +1,160 @@
+// #include <stdio.h>
+// #include <string.h>
+// #include "esp_wifi.h"
+// #include "esp_event.h"
+// #include "esp_mac.h"
+// #include "esp_log.h"
+// #include "nvs_flash.h"
+// #include "esp_netif.h"
+// #include "freertos/FreeRTOS.h"
+// #include "freertos/task.h"
+// #include "freertos/queue.h"
+// #include "coap3/coap.h"
+
+// // Includi RadioLib per la gestione LoRa/LoRaWAN
+// #include <RadioLib.h>
+
+// #define AP_SSID       "IoT_net"
+// #define AP_PASS       "1qaz2wsx"
+// #define MAX_STA_CONN  4
+
+// static const char *TAG = "HELTEC_GATEWAY";
+
+// // --- DEFINIZIONE CODA PER I DATI ---
+// typedef struct {
+//     uint8_t payload[256];
+//     size_t length;
+// } lora_msg_t;
+
+// QueueHandle_t lora_queue;
+
+// // --- HANDLER CoAP (Ricezione Dati) ---
+// static void coap_post_handler(coap_resource_t *resource,
+//                               coap_session_t *session,
+//                               const coap_pdu_t *request,
+//                               const coap_string_t *query,
+//                               coap_pdu_t *response) {
+//     size_t size;
+//     const uint8_t *data;
+    
+//     if (coap_get_data(request, &size, &data)) {
+//         ESP_LOGI(TAG, ">>> Ricevuto pacchetto CoAP. Preparazione per invio LoRa...");
+        
+//         // Crea il messaggio e lo copia in modo sicuro
+//         lora_msg_t msg;
+//         msg.length = (size < sizeof(msg.payload)) ? size : (sizeof(msg.payload) - 1);
+//         memcpy(msg.payload, data, msg.length);
+//         msg.payload[msg.length] = '\0'; // Terminatore per sicurezza
+
+//         // Invia il messaggio alla coda (non blocca il server CoAP)
+//         if (xQueueSend(lora_queue, &msg, pdMS_TO_TICKS(100)) != pdPASS) {
+//             ESP_LOGE(TAG, "Coda LoRa piena! Messaggio scartato.");
+//         }
+//     }
+
+//     coap_pdu_set_code(response, COAP_RESPONSE_CODE_CREATED);
+// }
+
+// // --- TASK: LORA END NODE ---
+// static void lora_tx_task(void *p) {
+//     ESP_LOGI(TAG, "Inizializzazione modulo LoRa...");
+
+//     // NOTA: I pin SPI dipendono dalla versione della tua Heltec (V2 o V3).
+//     // Esempio generico per inizializzare l'istanza radio (da configurare coi pin corretti)
+//     // SX1262 radio = new Module(NSS, DIO1, NRST, BUSY); 
+    
+//     // Esempio configurazione LoRaWAN (OTAA)
+//     // uint64_t joinEUI = 0x0000000000000000;
+//     // uint64_t devEUI  = 0x0000000000000000;
+//     // uint8_t appKey[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+//     // LoRaWANNode node(&radio, &EU868);
+//     // node.beginOTAA(joinEUI, devEUI, appKey);
+
+//     lora_msg_t msg;
+
+//     while (1) {
+//         // Attende all'infinito un messaggio dalla coda
+//         if (xQueueReceive(lora_queue, &msg, portMAX_DELAY) == pdPASS) {
+//             ESP_LOGI(TAG, "Trasmissione LoRa in corso: %.*s", (int)msg.length, msg.payload);
+            
+//             // Invia i dati tramite LoRaWAN
+//             // int16_t state = node.sendReceive(msg.payload, msg.length);
+//             // se 'state' == RADIOLIB_ERR_NONE -> Successo!
+            
+//             // Simula il tempo di trasmissione e duty cycle
+//             vTaskDelay(pdMS_TO_TICKS(2000));
+//         }
+//     }
+// }
+
+// // --- TASK: SERVER CoAP ---
+// static void coap_server_task(void *p) {
+//     coap_context_t *ctx = NULL;
+//     coap_address_t serv_addr;
+//     coap_resource_t *resource = NULL;
+
+//     coap_startup();
+//     coap_address_init(&serv_addr);
+//     serv_addr.addr.sin.sin_family = AF_INET;
+//     serv_addr.addr.sin.sin_addr.s_addr = INADDR_ANY;
+//     serv_addr.addr.sin.sin_port = htons(5683); 
+
+//     ctx = coap_new_context(NULL);
+//     coap_new_endpoint(ctx, &serv_addr, COAP_PROTO_UDP);
+    
+//     resource = coap_resource_init(coap_make_str_const("dati"), 0);
+//     coap_register_handler(resource, COAP_REQUEST_POST, coap_post_handler);
+//     coap_add_resource(ctx, resource);
+
+//     ESP_LOGI(TAG, "Gateway CoAP in ascolto...");
+
+//     while (1) {
+//         coap_io_process(ctx, 1000); 
+//     }
+// }
+
+// // --- EVENT HANDLER WI-FI ---
+// static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
+//     if (event_id == WIFI_EVENT_AP_STACONNECTED) {
+//         wifi_event_ap_staconnected_t* event = (wifi_event_ap_staconnected_t*) event_data;
+//         ESP_LOGI(TAG, "Dispositivo connesso! MAC: " MACSTR, MAC2STR(event->mac));
+//     }
+// }
+
+// // --- ENTRY POINT ---
+// extern "C" void app_main(void) {
+//     esp_err_t ret = nvs_flash_init();
+//     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+//       ESP_ERROR_CHECK(nvs_flash_erase());
+//       nvs_flash_init();
+//     }
+
+//     // Crea la coda per passare messaggi da CoAP a LoRa (max 10 messaggi in coda)
+//     lora_queue = xQueueCreate(10, sizeof(lora_msg_t));
+
+//     ESP_ERROR_CHECK(esp_netif_init());
+//     ESP_ERROR_CHECK(esp_event_loop_create_default());
+//     esp_netif_create_default_wifi_ap();
+
+//     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+//     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+//     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL));
+
+//     wifi_config_t wifi_config = {}; 
+//     memcpy(wifi_config.ap.ssid, AP_SSID, strlen(AP_SSID));
+//     memcpy(wifi_config.ap.password, AP_PASS, strlen(AP_PASS));
+//     wifi_config.ap.ssid_len = strlen(AP_SSID);
+//     wifi_config.ap.channel = 1;
+//     wifi_config.ap.authmode = WIFI_AUTH_WPA2_PSK;
+//     wifi_config.ap.max_connection = MAX_STA_CONN;
+
+//     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+//     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
+//     ESP_ERROR_CHECK(esp_wifi_start());
+
+//     ESP_LOGI(TAG, "Access Point IoT_net avviato!");
+
+//     // Avvia i task in parallelo
+//     xTaskCreate(coap_server_task, "coap_server_task", 8192, NULL, 5, NULL);
+//     xTaskCreate(lora_tx_task, "lora_tx_task", 8192, NULL, 5, NULL);
+// }
