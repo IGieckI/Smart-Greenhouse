@@ -1,0 +1,28 @@
+dependencies:
+  idf:
+    source:
+      type: idf
+    version: 5.5.3
+  u8g2:
+    component_hash: 6c87cb5433dc44da6a97d9083601de2ce879d8caa5226d9a44d9c153031bf6e9
+    dependencies: []
+    source:
+      git: https://github.com/olikraus/u8g2.git
+      path: .
+      type: git
+    version: cbceaa1cab22ad63e41c2df684e173cd5433766e
+  u8g2_hal:
+    component_hash: 924949331c8a98ba949485522ae6f10ac8af4e44ca24948b23c6630a1321ac9a
+    dependencies: []
+    source:
+      git: https://github.com/mkfrey/u8g2-hal-esp-idf.git
+      path: .
+      type: git
+    version: 4ddd714deabdb45885174724306637f2274d4f6b
+direct_dependencies:
+- idf
+- u8g2
+- u8g2_hal
+manifest_hash: e74ccf487157e3a300cfee1f69c715e28410fcc42f44ce0fd706857c2fab3350
+target: esp32s3
+version: 2.0.0
