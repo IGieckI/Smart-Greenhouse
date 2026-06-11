@@ -8,7 +8,7 @@
 #define SOIL_MOISTURE_ADC_UNIT    ADC_UNIT_1
 #define SOIL_MOISTURE_ADC_CHANNEL ADC_CHANNEL_5
 #define SOIL_MOISTURE_DRY_VAL     4095
-#define SOIL_MOISTURE_WET_VAL     1500
+#define SOIL_MOISTURE_WET_VAL     960
 
 // --- TDS Sensor Configuration ---
 #define TDS_ADC_UNIT        ADC_UNIT_1
