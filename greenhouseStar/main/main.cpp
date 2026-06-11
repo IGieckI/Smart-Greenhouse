@@ -132,13 +132,13 @@ extern "C" void app_main(void)
 
             // Format and draw the text lines. 
             // Y coordinates are spaced by 12 pixels for readability
-            sprintf(buffer, "Node ID: %d", displayData.node_id);
+            sprintf(buffer, "Pres: %.1f Pa", displayData.pressure);
             u8g2_DrawStr(&u8g2, 0, 10, buffer);
 
             sprintf(buffer, "Water Temp: %.1f C", displayData.water_temp);
             u8g2_DrawStr(&u8g2, 0, 22, buffer);
 
-            sprintf(buffer, "TDS: %.0f ppm", displayData.tds_value);
+            sprintf(buffer, "Lux: %.1f TDS: %.0f ppm", displayData.light_lux, displayData.tds_value);
             u8g2_DrawStr(&u8g2, 0, 34, buffer);
 
             sprintf(buffer, "Soil Moist: %.1f%%", displayData.soil_moisture);
