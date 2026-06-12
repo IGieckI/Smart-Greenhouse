@@ -1,5 +1,4 @@
 #pragma once
-
 #include "driver/gpio.h"
 #include "driver/i2c.h"
 #include "hal/adc_types.h"
@@ -24,7 +23,7 @@
 #define I2C_MASTER_FREQ_HZ  400000
 
 // --- Main Loop Configuration ---
-#define LOOP_DELAY_MS       1000
+#define LOOP_DELAY_MS       300000
 
 // Network stuff
 #define NODE_ID 1
