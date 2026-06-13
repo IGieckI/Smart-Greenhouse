@@ -1,0 +1,146 @@
+# version: '3.8'
+
+services:
+  # -----------------------------------
+  # DATABASE & DASHBOARD
+  # -----------------------------------
+  influxdb:
+    image: influxdb:2.7
+    container_name: influxdb
+    ports:
+      - "8086:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=adminadmin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=adminadmin
+      - DOCKER_INFLUXDB_INIT_ORG=iot_org
+      - DOCKER_INFLUXDB_INIT_BUCKET=sensor_data
+      # Questo è il momento in cui fissi il tuo token fittizio
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=TokenFittizio
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3030:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - influxdb
+    restart: unless-stopped
+
+  # -----------------------------------
+  # IL CUORE DEL SISTEMA
+  # -----------------------------------
+  controller:
+    build: ./controller
+    container_name: controller
+    ports:
+      - "3001:3001"
+    volumes:
+      # Monta tutto il codice sorgente dal PC al container
+      - ./controller:/app
+      # Protegge la cartella node_modules creata durante la build
+      # evitando che il tuo PC host la sovrascriva cancellandola
+      - /app/node_modules 
+    environment:
+      - INFLUX_URL=http://influxdb:8086
+      - INFLUX_TOKEN=${INFLUX_TOKEN}
+      - INFLUX_ORG=iot_org
+      - INFLUX_BUCKET=sensor_data
+      - LEAF_TEMP_LABEL=leaf_temp
+    depends_on:
+      - influxdb
+
+  # -----------------------------------
+  # CLIENTS (Ingestione Dati)
+  # -----------------------------------
+  # lw-client:
+  #   build: ./lw-client
+  #   container_name: lw-client
+  #   environment:
+  #     - CONTROLLER_URL=http://controller:3001/api/data
+  #     - MQTT_BROKER=indirizzo_del_tuo_broker_lorawan
+  #     - MQTT_PORT=1883
+  #   depends_on:
+  #     - controller
+  lw-client:
+    build: ./lw-client
+    container_name: lw-client
+    volumes:
+      - ./lw-client:/app # Monta il codice
+    command: python client_mqtt.py
+    environment:
+      - CONTROLLER_URL=http://controller:3001/api/data
+      - MQTT_BROKER=localhost
+      - MQTT_PORT=1883
+      - MQTT_TOPIC=v3/+/devices/+/up
+    depends_on:
+      - controller
+
+  cw-client:
+    build: ./cw-client
+    container_name: cw-client
+    ports:
+      - "5683:5683/udp"
+    volumes:
+      - ./cw-client:/app # Monta il codice
+    command: python server_coap.py
+    environment:
+      - CONTROLLER_URL=http://controller:3001/api/data
+    depends_on:
+      - controller
+
+  # -----------------------------------
+  # MACHINE LEARNING & BOT
+  # -----------------------------------
+  ml-trainer:
+    build: ./ml_workspace/trainer_data
+    container_name: ml-trainer
+    volumes:
+      - ./ml_workspace/trainer_data:/app # Monta il codice del trainer
+      - ./ml_workspace/shared_models:/app/models # Monta la cartella pesi ML condivisa
+    command: python train.py
+    environment:
+      - INFLUX_URL=http://influxdb:8086
+      - INFLUX_TOKEN=${INFLUX_TOKEN}
+      - INFLUX_ORG=iot_org
+    depends_on:
+      - influxdb
+
+  ml-inference:
+    build: ./ml_workspace/inference_data
+    container_name: ml-inference
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./ml_workspace/inference_data:/app # Monta il codice dell'API
+      - ./ml_workspace/shared_models:/app/models # Monta la cartella pesi ML condivisa
+    # Il comando è già nel suo Dockerfile con Uvicorn
+    depends_on:
+      - ml-trainer
+
+  # -----------------------------------
+  # BOT TELEGRAM
+  # -----------------------------------
+  tg-bot:
+    build: ./tg-bot
+    container_name: tg-bot
+    volumes:
+      - ./tg-bot:/app # Monta il codice
+    command: python bot.py
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_TOKEN}
+      - INFERENCE_URL=http://ml-inference:8000/predict
+    depends_on:
+      - ml-inference
+
+# -----------------------------------
+# VOLUMI DOCKER GESTITI
+# -----------------------------------
+volumes:
+  influxdb-data:
+  grafana-data:

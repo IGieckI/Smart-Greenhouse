@@ -4,10 +4,10 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
-#include "esp_now.h"
-#include "esp_netif.h"
+#include "esp_event.h"
 #include "nvs_flash.h"
 #include "esp_adc/adc_oneshot.h"
+#include "lwip/sockets.h"
 
 // Your existing sensor includes
 #include "TDS.hpp"
@@ -18,27 +18,67 @@
 #include "config.hpp"
 #include "TelemetryPacket.h"
 
+#define WIFI_SSID      "IoT_net"
+#define WIFI_PASS      "GJiot2026"
+#define STAR_IP        "192.168.4.1" // Default AP IP in ESP32
+#define UDP_PORT       1234
+
 static const char *TAG = "PERIPHERAL_NODE_" XSTR(NODE_ID);
 
 // Network stuff
 telemetry_packet_t myData;
-esp_now_peer_info_t peerInfo;
+// esp_now_peer_info_t peerInfo;
+bool wifi_connected = false;
 
-// Callback when data is sent
-void OnDataSent(const esp_now_send_info_t *info, esp_now_send_status_t status) {
-    ESP_LOGI(TAG, "Last Packet Send Status: %s", status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
+// Wi-Fi Event Handler
+static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        esp_wifi_connect();
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_connected = false;
+        ESP_LOGI(TAG, "Disconnected from Wi-Fi. Reconnecting...");
+        esp_wifi_connect();
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        wifi_connected = true;
+        ESP_LOGI(TAG, "Got IP. Ready to send data.");
+    }
 }
 
-// Initialize Wi-Fi in Station Mode
-static void wifi_init() {
+static void wifi_init_sta() {
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+    esp_netif_create_default_wifi_sta();
+
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+
+    esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL);
+    esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL);
+
+    wifi_config_t wifi_config = {};
+    strcpy((char*)wifi_config.sta.ssid, WIFI_SSID);
+    strcpy((char*)wifi_config.sta.password, WIFI_PASS);
+
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 }
+
+// // Callback when data is sent
+// void OnDataSent(const esp_now_send_info_t *info, esp_now_send_status_t status) {
+//     ESP_LOGI(TAG, "Last Packet Send Status: %s", status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
+// }
+
+// // Initialize Wi-Fi in Station Mode
+// static void wifi_init() {
+//     ESP_ERROR_CHECK(esp_netif_init());
+//     ESP_ERROR_CHECK(esp_event_loop_create_default());
+//     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+//     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+//     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+//     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+//     ESP_ERROR_CHECK(esp_wifi_start());
+// }
 
 // Sensors stuff
 TDS tdsSensor;
@@ -63,7 +103,6 @@ static esp_err_t i2c_master_init(void) {
 
 
 void setup() {
-    // Initialize NVS (required for Wi-Fi)
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -71,24 +110,36 @@ void setup() {
     }
     ESP_ERROR_CHECK(ret);
 
-    // Initialize Wi-Fi and ESP-NOW
-    wifi_init();
-    if (esp_now_init() != ESP_OK) {
-        ESP_LOGE(TAG, "Error initializing ESP-NOW");
-        return;
-    }
-    
-    // Register callback and peer
-    esp_now_register_send_cb(OnDataSent);
-    memset(&peerInfo, 0, sizeof(peerInfo));
-    memcpy(peerInfo.peer_addr, central_mac, 6);
-    peerInfo.channel = 0;  
-    peerInfo.encrypt = false;
+    wifi_init_sta(); // Init Wi-Fi Station
 
-    if (esp_now_add_peer(&peerInfo) != ESP_OK){
-        ESP_LOGE(TAG, "Failed to add peer");
-        return;
-    }
+    ESP_LOGI(TAG, "Initializing Sensors...");
+
+    // // Initialize NVS (required for Wi-Fi)
+    // esp_err_t ret = nvs_flash_init();
+    // if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    //     ESP_ERROR_CHECK(nvs_flash_erase());
+    //     ret = nvs_flash_init();
+    // }
+    // ESP_ERROR_CHECK(ret);
+
+    // // // Initialize Wi-Fi and ESP-NOW
+    // // wifi_init();
+    // if (esp_now_init() != ESP_OK) {
+    //     ESP_LOGE(TAG, "Error initializing ESP-NOW");
+    //     return;
+    // }
+    
+    // // Register callback and peer
+    // esp_now_register_send_cb(OnDataSent);
+    // memset(&peerInfo, 0, sizeof(peerInfo));
+    // memcpy(peerInfo.peer_addr, central_mac, 6);
+    // peerInfo.channel = 0;  
+    // peerInfo.encrypt = false;
+
+    // if (esp_now_add_peer(&peerInfo) != ESP_OK){
+    //     ESP_LOGE(TAG, "Failed to add peer");
+    //     return;
+    // }
 
     ESP_LOGI(TAG, "Initializing Shared ADC Unit...");
 
@@ -162,6 +213,12 @@ extern "C" void app_main(void)
 
     myData.node_id = NODE_ID;
 
+    // Configurazione Socket UDP
+    struct sockaddr_in dest_addr;
+    dest_addr.sin_addr.s_addr = inet_addr(STAR_IP);
+    dest_addr.sin_family = AF_INET;
+    dest_addr.sin_port = htons(UDP_PORT);
+
     while (true) {
         // Read Sensors
         float current_water_temp = tempSensor.readTemperatureC(); 
@@ -198,16 +255,34 @@ extern "C" void app_main(void)
             myData.pressure
         );
 
-        // Send over ESP-NOW
-        esp_err_t result = esp_now_send(central_mac, (uint8_t *) &myData, sizeof(myData));
-        
-        // Print the data
-        if (result == ESP_OK) {
-            ESP_LOGI(TAG, "Sent data successfully");
+        if (wifi_connected) {
+            int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+            if (sock >= 0) {
+                int err = sendto(sock, &myData, sizeof(myData), 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
+                if (err < 0) {
+                    ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
+                } else {
+                    ESP_LOGI(TAG, "Sent data over UDP successfully");
+                }
+                close(sock);
+            }
         } else {
-            ESP_LOGE(TAG, "Error sending the data");
+            ESP_LOGW(TAG, "Wi-Fi not connected. Skipping transmission.");
         }
 
         vTaskDelay(pdMS_TO_TICKS(LOOP_DELAY_MS));
+
+
+        // // Send over ESP-NOW
+        // esp_err_t result = esp_now_send(central_mac, (uint8_t *) &myData, sizeof(myData));
+        
+        // // Print the data
+        // if (result == ESP_OK) {
+        //     ESP_LOGI(TAG, "Sent data successfully");
+        // } else {
+        //     ESP_LOGE(TAG, "Error sending the data");
+        // }
+
+        // vTaskDelay(pdMS_TO_TICKS(LOOP_DELAY_MS));
     }
 }

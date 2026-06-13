@@ -1,0 +1,105 @@
+const express = require('express');
+const fs = require('fs');
+const { InfluxDB, Point } = require('@influxdata/influxdb-client');
+
+const app = express();
+app.use(express.json());
+
+const url = process.env.INFLUX_URL || 'http://localhost:8086';
+const token = process.env.INFLUX_TOKEN;
+const org = process.env.INFLUX_ORG;
+const bucket = process.env.INFLUX_BUCKET;
+const influxDB = new InfluxDB({ url, token });
+const writeApi = influxDB.getWriteApi(org, bucket);
+
+const LEAF_TEMP_LABEL = process.env.LEAF_TEMP_LABEL || 'leaf_temperature';
+const FALLBACK_FILE_PATH = './data/leaf_temp.txt';
+
+// Variabili globali per tracciare l'utilizzo degli ID
+let fallbackUsageCount = {};
+let currentFallbackId = null;
+
+
+
+
+app.post('/api/data', async (req, res) => {
+    let data = req.body;
+
+    console.log(data)
+    
+    if (!data.id_board) {
+        return res.status(400).send({ error: "id_board mancante" });
+    }
+
+    // Gestione File TXT per Temperatura Fogliare
+    if (data[LEAF_TEMP_LABEL] === undefined) {
+        try {
+            if (fs.existsSync(FALLBACK_FILE_PATH)) {
+                // Legge il file e rimuove spazi vuoti o a capo
+                const fileContent = fs.readFileSync(FALLBACK_FILE_PATH, 'utf8').trim(); 
+                const parts = fileContent.split('/');
+                
+                if (parts.length === 2) {
+                    // Sostituisce l'eventuale virgola italiana con il punto decimale
+                    let tempVal = parseFloat(parts[1].replace(',', '.'));
+                    let tempId = parts[0];
+
+                    // // Se l'ID nel file cambia, resettiamo il focus sul nuovo ID
+                    // if (currentFallbackId !== tempId) {
+                    //     currentFallbackId = tempId;
+                    //     if (fallbackUsageCount[tempId] === undefined) {
+                    //         fallbackUsageCount[tempId] = 0;
+                    //     }
+                    // }
+                    if (currentFallbackId !== tempId) {
+                        currentFallbackId = tempId;
+                        // Azzera SEMPRE il contatore quando viene rilevato un nuovo cambio nel file
+                        fallbackUsageCount[tempId] = 0; 
+                    }
+
+                    // Controllo utilizzi
+                    if (fallbackUsageCount[tempId] < 3) {
+                        data[LEAF_TEMP_LABEL] = tempVal;
+                        fallbackUsageCount[tempId]++;
+                        console.log(`[Controller] Temp fogliare letta: ${tempVal}°C (ID: ${tempId}, Utilizzo: ${fallbackUsageCount[tempId]}/3)`);
+                    } else {
+                        console.log(`[Controller] ATTENZIONE: L'ID '${tempId}' è stato usato 3 volte. Dato fogliare SCARTATO. Aggiorna il file txt!`);
+                    }
+                } else {
+                    console.error("[Controller] Formato txt errato. Usa il formato: A/21.5");
+                }
+            }
+        } catch (error) {
+            console.error(`[Controller] Errore lettura file fallback: ${error.message}`);
+        }
+    }
+
+    // Salvataggio dinamico su InfluxDB
+    try {
+        const point = new Point('sensor_measurements')
+            .tag('id_board', String(data.id_board));
+            
+        // Aggiunge dinamicamente tutti i valori numerici presenti nel payload
+        // const numericFields = ['air_temp', 'air_hum', 'air_press', 'soil_temp', 'soil_hum', 'tds', 'irradiation', ];
+        const numericFields = ["air_temp", "humidity", "pressure", 'water_temp', "soil_moisture", "tds", "light_lux", LEAF_TEMP_LABEL]
+
+        for (const field of numericFields) {
+            if (data[field] !== undefined && !isNaN(data[field])) {
+                point.floatField(field, Number(data[field]));
+            }
+        }
+
+        writeApi.writePoint(point);
+        await writeApi.flush(); // <-- Aggiungi await
+        console.log(`[Controller] Dati scritti su Influx per la board: ${data.id_board}`);
+        res.status(200).send({ status: "success" });
+    } catch (error) {
+        console.error("[Controller] Errore scrittura Influx:", error);
+        res.status(500).send({ error: "Errore database" });
+    }
+});
+
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => {
+    console.log(`Controller in ascolto sulla porta ${PORT}`);
+});
