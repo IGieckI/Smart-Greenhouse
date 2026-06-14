@@ -6,7 +6,7 @@
 static const char *TAG = "AHT20_BMP280_CLASS";
 
 Aht20Bmp280::Aht20Bmp280(i2c_port_t port, uint8_t bmp280_addr) 
-    : _port(port), _bmp_addr(bmp280_addr), _calib({0}), _t_fine(0) {}
+    : _port(port), _bmp_addr(bmp280_addr), _calib({}), _t_fine(0) {}
 
 esp_err_t Aht20Bmp280::write_reg(uint8_t addr, uint8_t reg, uint8_t data) {
     uint8_t write_buf[2] = {reg, data};
