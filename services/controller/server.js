@@ -20,6 +20,43 @@ let fallbackUsageCount = {};
 let currentFallbackId = null;
 
 
+const { exec } = require('child_process');
+const path = require('path');
+
+// Assicurati che il file audio sia nella cartella montata dal volume
+const AUDIO_FILE = path.join(__dirname, 'ringtone.mp3'); 
+
+
+// --- NUOVA FUNZIONE PER I SUONI ---
+// Emette N bip distanziati di 400ms l'uno dall'altro
+const playBeeps = async (times) => {
+    // for (let i = 0; i < times; i++) {
+    //     process.stdout.write('\x07'); 
+    //     await new Promise(resolve => setTimeout(resolve, 400)); 
+    // }
+
+    for (let i = 0; i < times; i++) {
+    // for (let j = 0; j < (i * 3) + 1; j ++){
+        // console.log(`Riproduzione suono ${i + 1} di ${times}...`);
+    
+        await new Promise((resolve, reject) => {
+            // Se usi un .mp3 usa 'mpg123'. Se usi un .wav usa 'aplay'
+            exec(`mpg123 ${AUDIO_FILE}`, (error, stdout, stderr) => {
+                if (error) {
+                    console.error(`Errore durante la riproduzione: ${error.message}`);
+                    resolve(); // Risolviamo comunque per non bloccare il loop
+                    return;
+                }
+                resolve();
+            });
+        });
+        
+        // Pausa opzionale tra una riproduzione e l'altra (es. 400ms)
+        await new Promise(resolve => setTimeout(resolve, 400)); 
+    // }
+    }
+};
+
 
 
 app.post('/api/data', async (req, res) => {
@@ -41,8 +78,8 @@ app.post('/api/data', async (req, res) => {
                 
                 if (parts.length === 2) {
                     // Sostituisce l'eventuale virgola italiana con il punto decimale
-                    let tempVal = parseFloat(parts[1].replace(',', '.'));
-                    let tempId = parts[0];
+                    let tempVal = parseFloat(parts[0].replace(',', '.'));
+                    let tempId = parts[1];
 
                     // // Se l'ID nel file cambia, resettiamo il focus sul nuovo ID
                     // if (currentFallbackId !== tempId) {
@@ -61,12 +98,21 @@ app.post('/api/data', async (req, res) => {
                     if (fallbackUsageCount[tempId] < 3) {
                         data[LEAF_TEMP_LABEL] = tempVal;
                         fallbackUsageCount[tempId]++;
-                        console.log(`[Controller] Temp fogliare letta: ${tempVal}°C (ID: ${tempId}, Utilizzo: ${fallbackUsageCount[tempId]}/3)`);
+                        
+                        let currentCount = fallbackUsageCount[tempId];
+                        console.log(`[Controller] Temp fogliare letta: ${tempVal}°C (ID: ${tempId}, Utilizzo: ${currentCount}/3)`);
+                        
+                        // SUONO: Suona tante volte quanto è il counter (1 bip, 2 bip, o 3 bip)
+                        playBeeps(currentCount);
+
                     } else {
                         console.log(`[Controller] ATTENZIONE: L'ID '${tempId}' è stato usato 3 volte. Dato fogliare SCARTATO. Aggiorna il file txt!`);
+                        
+                        // SUONO DI EMERGENZA MASSIMA: 5 bip per indicare che il dato viene ormai scartato
+                        playBeeps(5);
                     }
                 } else {
-                    console.error("[Controller] Formato txt errato. Usa il formato: A/21.5");
+                    console.error("[Controller] Formato txt errato. Usa il formato: 21.5/A");
                 }
             }
         } catch (error) {
