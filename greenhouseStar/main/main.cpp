@@ -4,14 +4,15 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/ringbuf.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
+#include "esp_now.h"
 #include "esp_netif.h"
+#include "esp_mac.h"
 #include "nvs_flash.h"
-#include "esp_spiffs.h"
-#include "lwip/sockets.h"
-
+#include "esp_heap_caps.h"
 #include "TelemetryPacket.h"
 #include "config.hpp"
 
@@ -20,150 +21,32 @@ extern "C" {
     #include "u8g2_esp32_hal.h"
 }
 
-static const char *TAG = "CENTRAL_NODE";
-#define DATA_FILE "/spiffs/telemetry.jsonl"
+static const char *TAG = "GREENHOUSE_STAR";
 
-#define WIFI_SSID      "IoT_net"
-#define WIFI_PASS      "GJiot2026"
-#define UDP_PORT       1234
-
-#define PC_COAP_SERVER_IP "192.168.4.2" // The IP your PC will get from ESP_star
-#define COAP_PORT 5683
-
-
-// FreeRTOS Queue
+RingbufHandle_t telemetry_ringbuf = NULL;
 QueueHandle_t telemetry_queue;
-
-// Global display object
 u8g2_t u8g2;
 
-// Funzione custom per inviare un pacchetto CoAP leggero e raw via UDP
-void send_coap_post(const char* json_payload) {
-    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
-    if (sock < 0) return;
 
-    struct sockaddr_in dest_addr = {};
-    dest_addr.sin_family = AF_INET;
-    dest_addr.sin_port = htons(COAP_PORT);
-    inet_pton(AF_INET, PC_COAP_SERVER_IP, &dest_addr.sin_addr);
-
-    uint8_t packet[512];
-    int idx = 0;
-    
-    // Header CoAP: NON (0x50), POST (0x02), Message ID
-    packet[idx++] = 0x50; 
-    packet[idx++] = 0x02; 
-    static uint16_t msg_id = 1;
-    packet[idx++] = (msg_id >> 8) & 0xFF;
-    packet[idx++] = msg_id & 0xFF;
-    msg_id++;
-
-    // Opzioni CoAP: Uri-Path "sensors" (Delta=11, Length=7)
-    packet[idx++] = 0xB7;
-    memcpy(&packet[idx], "sensors", 7);
-    idx += 7;
-
-    // Marker Payload CoAP
-    packet[idx++] = 0xFF;
-
-    // Payload JSON
-    int payload_len = strlen(json_payload);
-    memcpy(&packet[idx], json_payload, payload_len);
-    idx += payload_len;
-
-    // Invia al Server Python
-    sendto(sock, packet, idx, 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
-    close(sock);
-    ESP_LOGI(TAG, "Forwarded to CoAP server -> %s", json_payload);
-}
-
-// Task in background che riceve i dati dai Nodi
-void udp_server_task(void *pvParameters) {
-    struct sockaddr_in dest_addr = {};
-    dest_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    dest_addr.sin_family = AF_INET;
-    dest_addr.sin_port = htons(UDP_PORT);//UDP_LISTEN_PORT);
-
-    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
-    bind(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
-
-    telemetry_packet_t incomingData;
-    struct sockaddr_storage source_addr;
-    socklen_t socklen = sizeof(source_addr);
-
-    while (1) {
-        int len = recvfrom(sock, &incomingData, sizeof(incomingData), 0, (struct sockaddr *)&source_addr, &socklen);
-        if (len == sizeof(telemetry_packet_t)) {
-            xQueueSend(telemetry_queue, &incomingData, 0);
-        }
-    }
-}
-
-static void wifi_init_ap() {
+static void wifi_init() {
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_ap();
-
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-
-    wifi_config_t wifi_config = {};
-    strcpy((char*)wifi_config.ap.ssid, WIFI_SSID);
-    wifi_config.ap.ssid_len = strlen(WIFI_SSID);
-    strcpy((char*)wifi_config.ap.password, WIFI_PASS);
-    wifi_config.ap.max_connection = 10;
-    wifi_config.ap.authmode = WIFI_AUTH_WPA2_PSK;
-
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_LOGI(TAG, "AP Started. SSID: %s", WIFI_SSID);
 }
-
-// // Callback function executed when data is received
-// void OnDataRecv(const esp_now_recv_info_t *esp_now_info, const uint8_t *incomingData, int len) {
-//     telemetry_packet_t myData;
-//     if (len == sizeof(myData)) {
-//         memcpy(&myData, incomingData, sizeof(myData));
-//         xQueueSend(telemetry_queue, &myData, 0);
-//     } else {
-//         ESP_LOGW(TAG, "Received packet of unexpected size: %d bytes", len);
-//     }
-// }
-
-static void spiffs_init() {
-    ESP_LOGI(TAG, "Initializing SPIFFS");
-    esp_vfs_spiffs_conf_t conf = {
-      .base_path = "/spiffs",
-      .partition_label = NULL,
-      .max_files = 5,
-      .format_if_mount_failed = true
-    };
-    esp_err_t ret = esp_vfs_spiffs_register(&conf);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to mount or format SPIFFS");
-    }
-}
-
-// static void wifi_init() {
-//     ESP_ERROR_CHECK(esp_netif_init());
-//     ESP_ERROR_CHECK(esp_event_loop_create_default());
-//     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-//     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-//     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
-//     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-//     ESP_ERROR_CHECK(esp_wifi_start());
-// }
 
 static void display_init() {
-    gpio_set_direction(VEXT_PIN, GPIO_MODE_OUTPUT);
-    gpio_set_level(VEXT_PIN, 0); 
+    gpio_set_direction((gpio_num_t)VEXT_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)VEXT_PIN, 0); 
     vTaskDelay(pdMS_TO_TICKS(50));
 
     u8g2_esp32_hal_t u8g2_esp32_hal = U8G2_ESP32_HAL_DEFAULT;
-    u8g2_esp32_hal.bus.i2c.sda = OLED_SDA;
-    u8g2_esp32_hal.bus.i2c.scl = OLED_SCL;
-    u8g2_esp32_hal.reset = OLED_RST;
+    u8g2_esp32_hal.bus.i2c.sda = (gpio_num_t)OLED_SDA;
+    u8g2_esp32_hal.bus.i2c.scl = (gpio_num_t)OLED_SCL;
+    u8g2_esp32_hal.reset = (gpio_num_t)OLED_RST;
     u8g2_esp32_hal_init(u8g2_esp32_hal);
 
     u8g2_Setup_ssd1306_i2c_128x64_noname_f(
@@ -177,104 +60,132 @@ static void display_init() {
     u8g2_SendBuffer(&u8g2);
 }
 
+
+// ESP-NOW Callback
+void OnDataRecv(const esp_now_recv_info_t *esp_now_info, const uint8_t *incomingData, int len) {
+    telemetry_packet_t myData;
+    if (len == sizeof(myData)) {
+        memcpy(&myData, incomingData, sizeof(myData));
+        // Push to queue; non-blocking with 0 ticks to safely execute inside the ISR context
+        xQueueSendFromISR(telemetry_queue, &myData, NULL);
+    } else {
+        ESP_LOGW(TAG, "Received packet of unexpected size: %d bytes", len);
+    }
+}
+
+
+// Task 1: Data Reception & Buffer Management
+void reception_task(void *pvParameters) {
+    telemetry_packet_t incomingData;
+    ESP_LOGI(TAG, "Reception Task Started.");
+
+    while (true) {
+        // Block indefinitely until data arrives from the ESP-NOW callback
+        if (xQueueReceive(telemetry_queue, &incomingData, portMAX_DELAY)) {
+            
+            // Attempt to write to Ring Buffer
+            UBaseType_t res = xRingbufferSend(telemetry_ringbuf, &incomingData, sizeof(telemetry_packet_t), 0);
+            
+            if (res != pdTRUE) {
+                // Buffer is full. Manually pop the oldest item to make room.
+                size_t dummy_size;
+                void *old_item = xRingbufferReceive(telemetry_ringbuf, &dummy_size, 0);
+                if (old_item) {
+                    vRingbufferReturnItem(telemetry_ringbuf, old_item); 
+                    // Retry sending the new data
+                    xRingbufferSend(telemetry_ringbuf, &incomingData, sizeof(telemetry_packet_t), 0);
+                }
+            }
+        }
+    }
+}
+
+
+// Task 2: Data Processing & Display Management
+void data_manager_task(void *pvParameters) {
+    size_t item_size;
+    char buffer[32];
+    ESP_LOGI(TAG, "Data Manager Task Started.");
+
+    while (true) {
+        // Wait indefinitely until data is available in the ring buffer
+        telemetry_packet_t *item = (telemetry_packet_t *)xRingbufferReceive(telemetry_ringbuf, &item_size, portMAX_DELAY);
+        
+        if (item != NULL) {
+            // Update OLED Display
+            u8g2_ClearBuffer(&u8g2);
+            sprintf(buffer, "Pres: %.1f Pa", item->pressure);
+            u8g2_DrawStr(&u8g2, 0, 10, buffer);
+            sprintf(buffer, "Water Temp: %.1f C", item->water_temp);
+            u8g2_DrawStr(&u8g2, 0, 22, buffer);
+            sprintf(buffer, "Lux: %.1f TDS: %.0f ppm", item->light_lux, item->tds_value);
+            u8g2_DrawStr(&u8g2, 0, 34, buffer);
+            sprintf(buffer, "Soil Moist: %.1f%%", item->soil_moisture);
+            u8g2_DrawStr(&u8g2, 0, 46, buffer);
+            sprintf(buffer, "Air: %.1fC / %.1f%%", item->air_temp, item->humidity);
+            u8g2_DrawStr(&u8g2, 0, 58, buffer);
+            u8g2_SendBuffer(&u8g2);
+
+            // BACKGROUND WORK (LoRa etc)
+
+            vRingbufferReturnItem(telemetry_ringbuf, (void *)item);
+        }
+    }
+}
+
 extern "C" void app_main(void)
 {
+    // Initialize NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         nvs_flash_init();
     }
 
-    spiffs_init();
-    telemetry_queue = xQueueCreate(10, sizeof(telemetry_packet_t));
-    display_init();
-    wifi_init_ap();
+    // Allocate Ring Buffer in INTERNAL SRAM
+    ESP_LOGI(TAG, "Allocating 16KB Ring Buffer in Internal SRAM...");
+    uint8_t *ringbuf_storage = (uint8_t *)heap_caps_malloc(INTERNAL_BUFFER_SIZE, MALLOC_CAP_INTERNAL);
+    StaticRingbuffer_t *ringbuf_struct = (StaticRingbuffer_t *)heap_caps_malloc(sizeof(StaticRingbuffer_t), MALLOC_CAP_8BIT);
 
-    // Avvia l'ascolto dei nodi periferici
-    xTaskCreate(udp_server_task, "udp_server", 4096, NULL, 5, NULL);
-
-    telemetry_packet_t displayData;
-    char displayBuffer[32];
-    char jsonBuffer[256];
-
-    while (true) {
-        if (xQueueReceive(telemetry_queue, &displayData, pdMS_TO_TICKS(100))) {
-            
-            // 1. Formatta il JSON (Ho aggiunto id_board per accontentare il tuo script Python)
-            sprintf(jsonBuffer, "{\"id_board\":%d, \"water_temp\":%.2f, \"tds\":%.0f, \"soil_moisture\":%.1f, \"light_lux\":%.2f, \"air_temp\":%.2f, \"humidity\":%.2f, \"pressure\":%.2f}",
-                    displayData.node_id, displayData.water_temp, displayData.tds_value,
-                    displayData.soil_moisture, displayData.light_lux, displayData.air_temp,
-                    displayData.humidity, displayData.pressure);
-
-            // 2. Scrivi su SPIFFS
-            FILE* f = fopen(DATA_FILE, "a");
-            if (f != NULL) {
-                fprintf(f, "%s\n", jsonBuffer);
-                fclose(f);
-            }
-
-            // 3. Inoltra al server CoAP in Python!
-            send_coap_post(jsonBuffer);
-
-            // 4. Aggiorna OLED
-            u8g2_ClearBuffer(&u8g2);
-            sprintf(displayBuffer, "Pres: %.1f Pa", displayData.pressure);
-            u8g2_DrawStr(&u8g2, 0, 10, displayBuffer);
-            sprintf(displayBuffer, "Water Temp: %.1f C", displayData.water_temp);
-            u8g2_DrawStr(&u8g2, 0, 22, displayBuffer);
-            sprintf(displayBuffer, "Lux: %.1f TDS: %.0f", displayData.light_lux, displayData.tds_value);
-            u8g2_DrawStr(&u8g2, 0, 34, displayBuffer);
-            sprintf(displayBuffer, "Soil: %.1f%%", displayData.soil_moisture);
-            u8g2_DrawStr(&u8g2, 0, 46, displayBuffer);
-            sprintf(displayBuffer, "Air: %.1fC / %.1f%%", displayData.air_temp, displayData.humidity);
-            u8g2_DrawStr(&u8g2, 0, 58, displayBuffer);
-            u8g2_SendBuffer(&u8g2);
-        }
+    if (ringbuf_storage == NULL || ringbuf_struct == NULL) {
+        ESP_LOGE(TAG, "CRITICAL: Failed to allocate Ring Buffer in Internal SRAM!");
+        return; 
     }
+
+    telemetry_ringbuf = xRingbufferCreateStatic(INTERNAL_BUFFER_SIZE, RINGBUF_TYPE_NOSPLIT, ringbuf_storage, ringbuf_struct);
+    telemetry_queue = xQueueCreate(20, sizeof(telemetry_packet_t));
+
+    // Initialize Subsystems
+    display_init();
+    wifi_init();
+
+    if (esp_now_init() != ESP_OK) {
+        ESP_LOGE(TAG, "Error initializing ESP-NOW");
+        return;
+    }
+    esp_now_register_recv_cb(OnDataRecv);
+
+    ESP_LOGI(TAG, "Central Node Initialized. Spawning tasks...");
+
+    xTaskCreatePinnedToCore(
+        reception_task,
+        "Telemetry_Reception",
+        4096,
+        NULL,
+        5,
+        NULL,
+        0
+    );
+
+    xTaskCreatePinnedToCore(
+        data_manager_task,
+        "Telemetry_Manager",
+        4096,
+        NULL,
+        4,
+        NULL,
+        1
+    );
+
+    vTaskDelete(NULL);
 }
-//     spiffs_init();
-//     telemetry_queue = xQueueCreate(10, sizeof(telemetry_packet_t));
-//     display_init();
-//     wifi_init();
-
-//     if (esp_now_init() != ESP_OK) {
-//         ESP_LOGE(TAG, "Error initializing ESP-NOW");
-//         return;
-//     }
-//     esp_now_register_recv_cb(OnDataRecv);
-
-//     telemetry_packet_t displayData;
-//     char buffer[32];
-
-//     while (true) {
-//         // Wait for data, but unblock every 100ms to check the timer
-//         if (xQueueReceive(telemetry_queue, &displayData, pdMS_TO_TICKS(100))) {
-            
-//             // Write Data to SPIFFS File (JSONL)
-//             FILE* f = fopen(DATA_FILE, "a");
-//             if (f != NULL) {
-//                 fprintf(f, "{\"node_id\":%d, \"water_temp\":%.2f, \"tds\":%.0f, \"soil_moisture\":%.1f, \"light_lux\":%.2f, \"air_temp\":%.2f, \"humidity\":%.2f, \"pressure\":%.2f}\n",
-//                     displayData.node_id, displayData.water_temp, displayData.tds_value,
-//                     displayData.soil_moisture, displayData.light_lux, displayData.air_temp,
-//                     displayData.humidity, displayData.pressure);
-//                 fclose(f);
-//             }
-
-//             // Update OLED
-//             u8g2_ClearBuffer(&u8g2);
-//             sprintf(buffer, "Pres: %.1f Pa", displayData.pressure);
-//             u8g2_DrawStr(&u8g2, 0, 10, buffer);
-//             sprintf(buffer, "Water Temp: %.1f C", displayData.water_temp);
-//             u8g2_DrawStr(&u8g2, 0, 22, buffer);
-//             sprintf(buffer, "Lux: %.1f TDS: %.0f ppm", displayData.light_lux, displayData.tds_value);
-//             u8g2_DrawStr(&u8g2, 0, 34, buffer);
-//             sprintf(buffer, "Soil Moist: %.1f%%", displayData.soil_moisture);
-//             u8g2_DrawStr(&u8g2, 0, 46, buffer);
-//             sprintf(buffer, "Air: %.1fC / %.1f%%", displayData.air_temp, displayData.humidity);
-//             u8g2_DrawStr(&u8g2, 0, 58, buffer);
-//             u8g2_SendBuffer(&u8g2);
-            
-//             printf("ESP32: Packet Received.\n");
-//         }
-//     }
-// }
