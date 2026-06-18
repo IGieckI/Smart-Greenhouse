@@ -248,7 +248,7 @@ extern "C" void app_main(void)
     myData.pressure = get_median(pressures, NUM_SAMPLES);
     myData.leaf_temp = get_median(leaf_temps, NUM_SAMPLES);
 
-    printf("{\"node_id\":%u, \"water_temp\":%.2f, \"tds\":%.0f, \"soil_moisture\":%.1f, \"light_lux\":%.2f, \"air_temp\":%.2f, \"humidity\":%.2f, \"pressure\":%.2f, \"leaf_temp\":%.2f}\n",
+    printf("{\"node_id\":%lu, \"water_temp\":%.2f, \"tds\":%.0f, \"soil_moisture\":%.1f, \"light_lux\":%.2f, \"air_temp\":%.2f, \"humidity\":%.2f, \"pressure\":%.2f, \"leaf_temp\":%.2f}\n",
         myData.node_id,
         myData.water_temp,
         myData.tds_value,
