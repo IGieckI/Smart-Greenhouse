@@ -79,3 +79,5 @@ Desktop.ini
 
 .vscode/
 .devcontainer/
+
+/greenhouseNode/main/personal_config.hpp
