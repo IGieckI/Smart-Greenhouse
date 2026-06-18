@@ -9,4 +9,5 @@ typedef struct {
     float air_temp;
     float humidity;
     float pressure;
+    float leaf_temp;
 } telemetry_packet_t;

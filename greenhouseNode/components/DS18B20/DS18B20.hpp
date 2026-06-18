@@ -3,6 +3,8 @@
 #include "driver/gpio.h"
 #include "esp_err.h"
 #include "esp_rom_sys.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 class DS18B20 {
 public:
@@ -46,6 +48,9 @@ public:
 private:
     gpio_num_t _dataPin;
     Resolution _currentResolution;
+
+    // Define a spinlock for the critical section
+    static portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
     
     // Internal helpers for 1-Wire protocol would go here
     void resetBus();
