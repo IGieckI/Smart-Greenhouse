@@ -50,7 +50,7 @@ private:
     Resolution _currentResolution;
 
     // Define a spinlock for the critical section
-    static portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+    portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
     
     // Internal helpers for 1-Wire protocol would go here
     void resetBus();
