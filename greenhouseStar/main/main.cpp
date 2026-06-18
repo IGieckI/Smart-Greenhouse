@@ -13,9 +13,11 @@
 #include "esp_mac.h"
 #include "nvs_flash.h"
 #include "esp_heap_caps.h"
-#include "esp_http_server.h" // <--- NEW: HTTP Server
+#include "esp_http_server.h"
 #include "TelemetryPacket.h"
 #include "config.hpp"
+#include <sys/time.h>
+#include <time.h>
 
 #include "u8g2.h"
 extern "C" {
@@ -58,9 +60,8 @@ esp_err_t download_data_handler(httpd_req_t *req) {
         // Format single item as JSON
         // Format single item as JSON (Updated to include node_id and leaf_temp)
         snprintf(json_buf, sizeof(json_buf), 
-                 "{\"node_id\":%lu,\"pressure\":%.2f,\"water_temp\":%.2f,\"light_lux\":%.2f,\"tds_value\":%.2f,\"soil_moisture\":%.2f,\"air_temp\":%.2f,\"humidity\":%.2f,\"leaf_temp\":%.2f}",
-                 (unsigned long)item->node_id, item->pressure, item->water_temp, item->light_lux, item->tds_value, item->soil_moisture, item->air_temp, item->humidity, item->leaf_temp);
-        
+                 "{\"timestamp\":%lu,\"node_id\":%lu,\"pressure\":%.2f,\"water_temp\":%.2f,\"light_lux\":%.2f,\"tds_value\":%.2f,\"soil_moisture\":%.2f,\"air_temp\":%.2f,\"humidity\":%.2f,\"leaf_temp\":%.2f}",
+                 (unsigned long)item->timestamp, (unsigned long)item->node_id, item->pressure, item->water_temp, item->light_lux, item->tds_value, item->soil_moisture, item->air_temp, item->humidity, item->leaf_temp);        
         // Send chunk to PC
         httpd_resp_sendstr_chunk(req, json_buf);
         
@@ -73,6 +74,37 @@ esp_err_t download_data_handler(httpd_req_t *req) {
     httpd_resp_sendstr_chunk(req, NULL); // End the HTTP response
     
     ESP_LOGI(TAG, "Successfully transmitted %d records to operator.", items_dumped);
+    return ESP_OK;
+}
+
+// --- HTTP Server: Set Time Handler ---
+esp_err_t set_time_handler(httpd_req_t *req) {
+    char buf[32];
+    int ret, remaining = req->content_len;
+
+    if (remaining >= sizeof(buf)) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    ret = httpd_req_recv(req, buf, remaining);
+    if (ret <= 0) {
+        return ESP_FAIL;
+    }
+    buf[ret] = '\0';
+
+    // Parse the incoming Unix epoch timestamp
+    long int epoch = atol(buf);
+    if (epoch > 0) {
+        struct timeval tv;
+        tv.tv_sec = epoch;
+        tv.tv_usec = 0;
+        settimeofday(&tv, NULL);
+        ESP_LOGI(TAG, "System time synced to epoch: %ld", epoch);
+        httpd_resp_sendstr(req, "Time synced");
+    } else {
+        httpd_resp_send_500(req);
+    }
     return ESP_OK;
 }
 
@@ -89,7 +121,16 @@ static void start_webserver() {
             .user_ctx = NULL
         };
         httpd_register_uri_handler(server, &uri_dump);
-        ESP_LOGI(TAG, "Web server started. Endpoint: http://192.168.4.1/dump");
+
+        httpd_uri_t uri_time = {
+            .uri      = "/set_time",
+            .method   = HTTP_POST,
+            .handler  = set_time_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server, &uri_time);
+        
+        ESP_LOGI(TAG, "Web server started on http://192.168.4.1. Endpoints: /dump, /set_time");
     } else {
         ESP_LOGE(TAG, "Failed to start web server!");
     }
@@ -160,6 +201,11 @@ void reception_task(void *pvParameters) {
     
     while (true) {
         if (xQueueReceive(telemetry_queue, &incomingData, portMAX_DELAY)) {
+            // Apply timestamp
+            time_t now;
+            time(&now);
+            incomingData.timestamp = (uint32_t)now;
+
             // Push to Ring Buffer for Operator Dump
             UBaseType_t res = xRingbufferSend(telemetry_ringbuf, &incomingData, sizeof(telemetry_packet_t), 0);
             if (res != pdTRUE) {

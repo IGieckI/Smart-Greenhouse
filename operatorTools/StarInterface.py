@@ -34,6 +34,9 @@ class GreenhouseDashboard(tk.Tk):
         self.btn_download = ttk.Button(control_frame, text="📥 Sync & Download Data", command=self.start_download_thread)
         self.btn_download.pack(side=tk.LEFT, padx=5)
 
+        self.btn_sync_time = ttk.Button(control_frame, text="⏱ Sync Device Time", command=self.start_sync_time_thread)
+        self.btn_sync_time.pack(side=tk.LEFT, padx=5)
+
         self.btn_export = ttk.Button(control_frame, text="💾 Export to CSV", command=self.export_csv, state=tk.DISABLED)
         self.btn_export.pack(side=tk.LEFT, padx=5)
 
@@ -112,6 +115,10 @@ class GreenhouseDashboard(tk.Tk):
         if not data:
             self.log_message("Connected, but the ESP32 ring buffer is currently empty.")
             return
+        
+        for row in data:
+            if 'timestamp' in row:
+                row['timestamp'] = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(row['timestamp']))
 
         self.downloaded_data = data
         self.log_message(f"Successfully downloaded {len(data)} telemetry records.")
@@ -156,6 +163,29 @@ class GreenhouseDashboard(tk.Tk):
             except Exception as e:
                 self.log_message(f"ERROR saving CSV: {e}")
                 messagebox.showerror("Export Failed", str(e))
+
+    def start_sync_time_thread(self):
+        self.btn_sync_time.config(state=tk.DISABLED)
+        self.log_message("Pushing current system time to Star Node...")
+        thread = threading.Thread(target=self.sync_time)
+        thread.daemon = True
+        thread.start()
+
+    def sync_time(self):
+        # Swap '/dump' for '/set_time'
+        base_url = self.url_entry.get().strip().rsplit('/', 1)[0]
+        url = f"{base_url}/set_time"
+        
+        current_epoch = str(int(time.time()))
+        
+        try:
+            response = requests.post(url, data=current_epoch, timeout=5)
+            response.raise_for_status()
+            self.after(0, self.log_message, "SUCCESS: Star Node RTC synced.")
+        except Exception as e:
+            self.after(0, self.log_message, f"ERROR syncing time: {e}")
+        finally:
+            self.after(0, lambda: self.btn_sync_time.config(state=tk.NORMAL))
 
 if __name__ == "__main__":
     app = GreenhouseDashboard()

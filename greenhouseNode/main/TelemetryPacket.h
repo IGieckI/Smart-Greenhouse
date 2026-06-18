@@ -1,6 +1,7 @@
 #include <cstdint>
 
 typedef struct {
+    uint32_t timestamp;
     uint8_t node_id;
     float water_temp;
     float tds_value;
