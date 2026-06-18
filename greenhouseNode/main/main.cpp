@@ -157,7 +157,7 @@ void setup() {
     // Set Node ID using MAC Address (last 4 bytes of the MAC address are used)
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
-    uint32_t mac_id = (mac[2] << 24) | (mac[3] << 16) | (mac[4] << 8) | mac[5];
+    uint32_t mac_id = ((uint32_t)mac[2] << 24) | ((uint32_t)mac[3] << 16) | ((uint32_t)mac[4] << 8) | (uint32_t)mac[5];
     myData.node_id = mac_id;
     ESP_LOGI(TAG, "Device Node ID set to: %u", mac_id);
 
@@ -230,8 +230,11 @@ extern "C" void app_main(void)
         humidities[i] = env_data.aht_humidity;
         pressures[i] = env_data.bmp_pressure;
 
+#ifdef ADS1115_ADDR
         leaf_temps[i] = get_leaf_temp(env_data.aht_temperature);
-        
+#else
+        leaf_temps[i] = 0;
+#endif
         // Short wait before taking the next sample
         vTaskDelay(pdMS_TO_TICKS(SAMPLE_DELAY_MS));
     }

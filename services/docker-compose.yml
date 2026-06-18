@@ -41,11 +41,9 @@ services:
     ports:
       - "3001:3001"
     volumes:
-      # Monta tutto il codice sorgente dal PC al container
       - ./controller:/app
-      # Protegge la cartella node_modules creata durante la build
-      # evitando che il tuo PC host la sovrascriva cancellandola
       - /app/node_modules 
+      # Monta la cartella dove tieni il tuo file audio (es. una cartella 'assets' nel controller)
     environment:
       - INFLUX_URL=http://influxdb:8086
       - INFLUX_TOKEN=${INFLUX_TOKEN}
@@ -54,6 +52,11 @@ services:
       - LEAF_TEMP_LABEL=leaf_temp
     depends_on:
       - influxdb
+    # --- NUOVE RIGHE PER L'AUDIO ---
+    devices:
+      - "/dev/snd:/dev/snd"
+    group_add:
+      - audio
 
   # -----------------------------------
   # CLIENTS (Ingestione Dati)
