@@ -29,4 +29,4 @@
 #define DEEP_SLEEP_MS      1000 // 300000
 
 // Network stuff
-static uint8_t central_mac[6] = {0x3C, 0x0F, 0x02, 0xEB, 0x8A, 0x5C};
+// Star node MAC defined in personal_config.hpp
