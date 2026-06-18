@@ -146,7 +146,7 @@ void setup() {
     esp_now_register_send_cb(OnDataSent);
     memset(&peerInfo, 0, sizeof(peerInfo));
     memcpy(peerInfo.peer_addr, central_mac, 6);
-    peerInfo.channel = 0;  
+    peerInfo.channel = 1;
     peerInfo.encrypt = false;
 
     if (esp_now_add_peer(&peerInfo) != ESP_OK){
@@ -267,7 +267,7 @@ extern "C" void app_main(void)
     vTaskDelay(pdMS_TO_TICKS(500));
 
     // Enter deep sleep
-    ESP_LOGI(TAG, "Entering deep sleep for %d seconds...", DEEP_SLEEP_MS);
+    ESP_LOGI(TAG, "Entering deep sleep for %d milliseconds...", DEEP_SLEEP_MS);
     esp_sleep_enable_timer_wakeup(DEEP_SLEEP_MS * 1000ULL);
     esp_deep_sleep_start();
 }
