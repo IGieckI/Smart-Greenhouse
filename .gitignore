@@ -81,3 +81,11 @@ Desktop.ini
 .devcontainer/
 
 /greenhouseNode/main/personal_config.hpp
+
+
+
+
+#Other ignore, mainly referred to "services"
+/services/ml_workspace/*/best_model
+/services/ml_workspace/*/models
+/services/ml_workspace/*/models_archive

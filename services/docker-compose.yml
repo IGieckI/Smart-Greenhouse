@@ -127,6 +127,9 @@ services:
       - ./ml_workspace/inference_data:/app/inference   # Codice dell'API FastAPI
       - ./ml_workspace/shared_core:/app/shared_core    # Codice di preprocessing e modelli (.pkl)
     environment:
+      - INFLUX_URL=http://influxdb:8086
+      - INFLUX_TOKEN=${INFLUX_TOKEN}
+      - INFLUX_ORG=iot_org
       - PYTHONPATH=/app # Permette a Python di importare shared_core.preprocessing
     depends_on:
       - ml-trainer
