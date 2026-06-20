@@ -1,0 +1,21 @@
+{
+    "model_name": "V1_instant_model",
+    "metrics": {
+        "MAE_Celsius": 4.56,
+        "RMSE_Celsius": 4.997,
+        "R_squared": -3.33
+    },
+    "performance": {
+        "training_time_seconds": 0.0837,
+        "inference_time_seconds": 0.0026
+    },
+    "feature_importance": {
+        "air_temp": 0.4953837574492106,
+        "humidity": 0.2688994048376827,
+        "pressure": 0.19752856277513564,
+        "tds": 0.02114963664860925,
+        "water_temp": 0.009965303440375767,
+        "light_lux": 0.003845925827831737,
+        "soil_moisture": 0.003227409021154199
+    }
+}

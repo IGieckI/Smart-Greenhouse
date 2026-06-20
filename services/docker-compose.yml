@@ -98,19 +98,23 @@ services:
       - controller
 
   # -----------------------------------
-  # MACHINE LEARNING & BOT
+  # MACHINE LEARNING & VIRTUAL SENSOR
   # -----------------------------------
   ml-trainer:
     build: ./ml_workspace/trainer_data
     container_name: ml-trainer
     volumes:
-      - ./ml_workspace/trainer_data:/app # Monta il codice del trainer
-      - ./ml_workspace/shared_models:/app/models # Monta la cartella pesi ML condivisa
-    command: python train.py
+      - ./ml_workspace/trainer_data:/app/trainer       # Codice specifico del training
+      - ./ml_workspace/shared_core:/app/shared_core    # Codice di preprocessing e modelli (.pkl)
+    
+    # MODIFICA QUI: Esegue in sequenza cleaner e train
+    command: /bin/bash -c "python /app/trainer/cleaner.py && python /app/trainer/train.py"
+
     environment:
       - INFLUX_URL=http://influxdb:8086
       - INFLUX_TOKEN=${INFLUX_TOKEN}
       - INFLUX_ORG=iot_org
+      - PYTHONPATH=/app # Permette a Python di importare shared_core.preprocessing
     depends_on:
       - influxdb
 
@@ -120,9 +124,10 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./ml_workspace/inference_data:/app # Monta il codice dell'API
-      - ./ml_workspace/shared_models:/app/models # Monta la cartella pesi ML condivisa
-    # Il comando è già nel suo Dockerfile con Uvicorn
+      - ./ml_workspace/inference_data:/app/inference   # Codice dell'API FastAPI
+      - ./ml_workspace/shared_core:/app/shared_core    # Codice di preprocessing e modelli (.pkl)
+    environment:
+      - PYTHONPATH=/app # Permette a Python di importare shared_core.preprocessing
     depends_on:
       - ml-trainer
 
