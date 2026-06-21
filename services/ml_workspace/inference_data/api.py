@@ -7,12 +7,23 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Body
 from pydantic import BaseModel
 from typing import Optional, List
-
 from influxdb_client import InfluxDBClient
+from statsmodels.tsa.arima.model import ARIMA
+
+from shared_core.data_sync import sync_clean_bucket
+from shared_core.tasks import TASKS
 
 # Import condiviso
 sys.path.append('/app')
-from shared_core.preprocessing import create_lagged_features
+from shared_core.preprocessing import (
+    create_lagged_features, 
+    identify_leaf_steps, 
+    gaussian_weighted_interpolation, 
+    clean_anomalies
+)
+
+app = FastAPI(title="Multi-Task IoT Inference API (Recursive Forecasting)")
+
 
 app = FastAPI(title="Multi-Task IoT Inference API (Recursive Forecasting)")
 
@@ -21,27 +32,15 @@ INFLUX_URL = os.getenv("INFLUX_URL", "http://influxdb:8086")
 INFLUX_TOKEN = os.getenv("INFLUX_TOKEN")
 INFLUX_ORG = os.getenv("INFLUX_ORG", "iot_org")
 BUCKET_CLEAN = "sensor_data_clean"
-
 BASE_MODEL_DIR = "/app/shared_core/models"
-
-# Definizione Task con indicazione degli step di bacheca/orizzonte temporale
-TASKS = {
-    "v1": {
-        "target": "leaf_temp",
-        "features": ['air_temp', 'humidity', 'pressure', 'water_temp', 'tds', 'soil_moisture', 'light_lux'],
-        "steps": 1
-    },
-    "v2": {
-        "target": "leaf_temp", 
-        "features": ['air_temp', 'humidity', 'pressure', 'water_temp', 'tds', 'soil_moisture', 'light_lux'],
-        "steps": 6
-    }
-}
 
 # Dizionari globali per mantenere i modelli in memoria
 loaded_models = {}
 loaded_scalers = {}
 loaded_info = {}
+env_arima_orders = {}
+
+
 
 @app.on_event("startup")
 def load_assets():
@@ -61,6 +60,14 @@ def load_assets():
             print(f"[{task.upper()}] Modello e Scaler caricati con successo in RAM!")
         else:
             print(f"[{task.upper()}] ATTENZIONE: Artefatti non trovati. Esegui prima il training.")
+    
+    # Caricamento ordini ARIMA Ambientali
+    env_path = os.path.join(BASE_MODEL_DIR, "env_forecasters", "env_arima_orders.json")
+    if os.path.exists(env_path):
+        global env_arima_orders
+        with open(env_path, "r") as f:
+            env_arima_orders = json.load(f)
+        print("[ENV] Configurazioni ARIMA ambientali caricate!")
 
 
 class SensorData(BaseModel):
@@ -74,8 +81,14 @@ class SensorData(BaseModel):
     leaf_temp: Optional[float] = None
 
 
+
 def fetch_historical_data(board_id: str, limit: int) -> pd.DataFrame:
-    """Recupera le ultime 'limit' righe di dati da InfluxDB per la board specificata."""
+    """Sincronizza il DB, poi recupera dal DB pulito."""
+    try:
+        sync_clean_bucket(INFLUX_URL, INFLUX_TOKEN, INFLUX_ORG)
+    except Exception as e:
+        print(f"[API] Errore durante la sincronizzazione JIT: {e}")
+
     client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
     query = f'''
         from(bucket: "{BUCKET_CLEAN}")
@@ -160,21 +173,117 @@ def prepare_and_predict_recursive(task: str, df_history: pd.DataFrame) -> tuple[
             
     return predictions, model_name
 
+def prepare_and_predict(task: str, df_history: pd.DataFrame) -> tuple[List[float], str]:
+    config = TASKS[task]
+    target = config["target"]
+    features = config["features"]
+    steps = config["steps"]
+    use_lags = config.get("use_lags", False)
+    lag_target = config.get("lag_target", True)
+    
+    scaler = loaded_scalers[task]
+    model = loaded_models[task]
+    model_name = loaded_info.get(task, {}).get("best_model", "Unknown")
+    model_features = [col for col in scaler.feature_names_in_]
+    predictions = []
+    
+    # === CASO T1: Puntuale ===
+    if not use_lags:
+        X_current = df_history[features].iloc[-1:]
+        X_scaled = scaler.transform(X_current)
+        
+        pred_raw = model.predict(X_scaled)
+        pred_val = float(pred_raw[0])
+        predictions.append(round(pred_val, 3))
+        
+        return predictions, model_name
+
+    # === CASO T2 & T3: Orizzonte Temporale ===
+    env_forecasts = {}
+    for feat in features:
+        order = env_arima_orders.get(feat, (1, 1, 1))
+        series = df_history[feat].ffill().bfill().values
+        arima_model = ARIMA(series, order=order).fit()
+        # FIX: Converto in lista per evitare problemi di indicizzazione (KeyError) con Pandas
+        env_forecasts[feat] = arima_model.forecast(steps=steps).tolist()
+
+    df_working = df_history.copy()
+
+    for i in range(steps):
+        df_lagged = create_lagged_features(df_working, target, features, lags=6, lag_target=lag_target)
+        df_lagged.dropna(inplace=True)
+        
+        if df_lagged.empty:
+            raise HTTPException(status_code=400, detail=f"Errore generazione lag allo step {i+1}.")
+            
+        X_current = df_lagged[model_features].iloc[-1:]
+        X_scaled = scaler.transform(X_current)
+        
+        if "ARIMA" in model_name.upper():
+            pred_raw = model.predict(n_periods=1, X=X_scaled)
+            pred_val = float(pred_raw.iloc[0] if hasattr(pred_raw, "iloc") else pred_raw[0])
+        else:
+            pred_val = float(model.predict(X_scaled)[0])
+            
+        predictions.append(round(pred_val, 3))
+        
+        if i < steps - 1:
+            target_idx = df_working.columns.get_loc(target)
+            df_working.iloc[-1, target_idx] = pred_val
+            
+            next_idx = df_working.index[-1] + pd.Timedelta(minutes=6)
+            next_row = df_working.iloc[-1:].copy()
+            next_row.index = [next_idx]
+            
+            for feat in features:
+                next_row[feat] = env_forecasts[feat][i]
+                
+            next_row[target] = np.nan
+            df_working = pd.concat([df_working, next_row])
+            
+    return predictions, model_name
+    
+    # for i in range(steps):
+    #     df_lagged = create_lagged_features(df_working, target, features, lags=6)
+    #     df_lagged.dropna(inplace=True)
+        
+    #     if df_lagged.empty:
+    #         raise HTTPException(status_code=400, detail=f"Impossibile generare i lag allo step {i+1}.")
+            
+    #     X_current = df_lagged[model_features].iloc[-1:]
+    #     X_scaled = scaler.transform(X_current)
+        
+    #     if "ARIMA" in model_name.upper():
+    #         pred_raw = model.predict(n_periods=1, X=X_scaled)
+    #         pred_val = float(pred_raw.iloc[0] if hasattr(pred_raw, "iloc") else pred_raw[0])
+    #     else:
+    #         pred_raw = model.predict(X_scaled)
+    #         pred_val = float(pred_raw[0])
+            
+    #     predictions.append(round(pred_val, 3))
+        
+    #     if i < steps - 1:
+    #         target_idx = df_working.columns.get_loc(target)
+    #         df_working.iloc[-1, target_idx] = pred_val
+            
+    #         next_idx = df_working.index[-1] + pd.Timedelta(minutes=5)
+    #         next_row = df_working.iloc[-1:].copy()
+    #         next_row.index = [next_idx]
+    #         next_row[target] = np.nan
+    #         df_working = pd.concat([df_working, next_row])
+            
+    # return predictions, model_name
 
 @app.get("/predict/{task}/latest")
 def predict_latest(task: str, board_id: str = "9"):
-    """
-    MODALITÀ AUTOMATICA: Recupera la history da InfluxDB, genera i lag iniziali 
-    e calcola una sequenza ricorsiva di predizioni (1 per v1, 6 per v2).
-    """
     if task not in TASKS or task not in loaded_models:
         raise HTTPException(status_code=404, detail=f"Task {task} non configurato o modello assente.")
         
-    df_history = fetch_historical_data(board_id, limit=7)
+    df_history = fetch_historical_data(board_id, limit=60)
     if len(df_history) < 7:
-        raise HTTPException(status_code=400, detail=f"Trovati solo {len(df_history)} record per la board {board_id}. Ne servono almeno 7 per inizializzare i lags.")
+        raise HTTPException(status_code=400, detail=f"Trovati solo {len(df_history)} record per la board {board_id}. Ne servono almeno 7.")
         
-    pred_list, model_name = prepare_and_predict_recursive(task, df_history)
+    pred_list, model_name = prepare_and_predict(task, df_history)
     
     return {
         "task": task,
@@ -188,26 +297,19 @@ def predict_latest(task: str, board_id: str = "9"):
 
 @app.post("/predict/{task}/manual")
 def predict_manual(task: str, data: SensorData, board_id: str = "9"):
-    """
-    MODALITÀ MANUALE: L'utente passa le letture attuali nel body. L'API recupera i 6 record 
-    passati da InfluxDB, appende l'input dell'utente ed esegue la proiezione nel futuro.
-    """
     if task not in TASKS or task not in loaded_models:
         raise HTTPException(status_code=404, detail=f"Task {task} non configurato o modello assente.")
         
-    df_history = fetch_historical_data(board_id, limit=6)
+    df_history = fetch_historical_data(board_id, limit=59)
     if len(df_history) < 6:
         raise HTTPException(status_code=400, detail="Storico su Influx insufficiente per agganciare i dati manuali e generare i lag.")
         
-    # Costruzione del record manuale utente
     new_idx = pd.Timestamp.utcnow()
     new_data_dict = data.dict(exclude_unset=True)
     df_new = pd.DataFrame([new_data_dict], index=[new_idx])
     
-    # Allineamento colonne e concatenazione
     df_combined = pd.concat([df_history, df_new])
-    
-    pred_list, model_name = prepare_and_predict_recursive(task, df_combined)
+    pred_list, model_name = prepare_and_predict(task, df_combined)
     
     return {
         "task": task,
@@ -221,7 +323,6 @@ def predict_manual(task: str, data: SensorData, board_id: str = "9"):
 
 @app.get("/info/{task}")
 def get_task_info(task: str):
-    """Endpoint per leggere le metriche e le informazioni del miglior modello di un dato task."""
     if task not in loaded_info:
         raise HTTPException(status_code=404, detail=f"Metriche non trovate per {task}.")
     return loaded_info[task]

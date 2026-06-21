@@ -38,17 +38,7 @@ TRAIN_BOARDS = ["3750866944"]
 TEST_BOARDS = ["9"]
 
 # Definizione Dinamica dei Task (Personalizza il target e le features del v2 come preferisci)
-TASKS = {
-    "v1": {
-        "target": "leaf_temp",
-        "features": ['air_temp', 'humidity', 'pressure', 'water_temp', 'tds', 'soil_moisture', 'light_lux']
-    },
-    "v2": {
-        "target": "leaf_temp",  # ESEMPIO: Sostituisci con il vero target del task v2
-        "features": ['air_temp', 'humidity', 'pressure', 'water_temp', 'tds', 'soil_moisture', 'light_lux']
-    }
-}
-
+from shared_core.tasks import TASKS
 
 def fetch_clean_data():
     client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
@@ -132,11 +122,36 @@ def log_and_evaluate(y_test, y_pred, features_names, model, model_name, training
     return report, mae
 
 
+def train_environmental_arimas(df_clean, features, output_dir):
+    """Calcola e salva il miglior ordine (p,d,q) per ogni feature ambientale."""
+    print(f"\n{'='*60}\n[Trainer] ADDESTRAMENTO ARIMA AMBIENTALI INDIPENDENTI\n{'='*60}")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    df_train = df_clean[df_clean['id_board'].isin(TRAIN_BOARDS)].copy()
+    env_orders = {}
+    
+    for feat in features:
+        print(f"Ricerca ordine ottimale (p,d,q) per: {feat}...")
+        # Addestriamo su un campione rappresentativo (es. ultime 2 settimane) per non far esplodere i tempi
+        y = df_train[feat].dropna().tail(3360) # ~2 settimane a 6 min
+        
+        best_model = pm.auto_arima(y, seasonal=False, stepwise=True, suppress_warnings=True)
+        env_orders[feat] = best_model.order
+        print(f"-> Ottimale per {feat}: {best_model.order}")
+        
+    with open(os.path.join(output_dir, "env_arima_orders.json"), "w") as f:
+        json.dump(env_orders, f, indent=4)
+    print("Modelli ambientali salvati con successo.")
+
+
+
 def run_pipeline_for_task(task_name, config, df_clean):
     print(f"\n{'='*60}\n[Trainer] AVVIO PIPELINE PER IL TASK: {task_name.upper()}\n{'='*60}")
     
     target_col = config["target"]
     features_list = config["features"]
+    use_lags = config.get("use_lags", False)
+    lag_target = config.get("lag_target", True) # Legge il flag specifico per t2/t3
     
     # Setup Cartelle Dinamiche per il task
     task_dir = os.path.join(BASE_MODEL_DIR, task_name)
@@ -157,24 +172,57 @@ def run_pipeline_for_task(task_name, config, df_clean):
     df_board_1 = df_clean[df_clean['id_board'].isin(TRAIN_BOARDS)].copy()
     df_test_raw = df_clean[df_clean['id_board'].isin(TEST_BOARDS)].copy()
 
-    print(f"[{task_name}] Creazione feature ritardate (lags=6) per target {target_col}...")
-    df_train_lagged = create_lagged_features(df_board_1, target_col, features_list, lags=6)
-    df_test_lagged = create_lagged_features(df_test_raw, target_col, features_list, lags=6)
+    # DIFFERENZIAZIONE LOGICA t1 vs t3
+    # if use_lags:
+    #     print(f"[{task_name}] Creazione feature ritardate (lags=6, target_lagged={lag_target})...")
+    #     df_train_model = create_lagged_features(df_board_1, target_col, features_list, lags=6, lag_target=lag_target)
+    #     df_test_model = create_lagged_features(df_test_raw, target_col, features_list, lags=6, lag_target=lag_target)
+        
+    #     train_sets = create_virtual_datasets(df_train_model, target_freq_min=30, orig_freq_min=6)
+    #     df_train_final = pd.concat(train_sets, ignore_index=True)
+        
+    #     # Le features del modello cambiano dinamicamente se escludiamo il target
+    #     model_features = [col for col in df_train_model.columns if ('lag' in col and (lag_target or target_col not in col)) or col in features_list]
+    if use_lags:
+        print(f"[{task_name}] Creazione feature ritardate (lags=6, target_lagged={lag_target})...")
+        df_train_final = create_lagged_features(df_board_1, target_col, features_list, lags=6, lag_target=lag_target)
+        df_test_model = create_lagged_features(df_test_raw, target_col, features_list, lags=6, lag_target=lag_target)
+        
+        # NESSUN RESAMPLE! Usiamo i dati direttamente a 6 minuti.
+        model_features = [col for col in df_train_final.columns if ('lag' in col and (lag_target or target_col not in col)) or col in features_list]
+    else:
+        print(f"[{task_name}] Training puntuale (senza lag)...")
+        df_train_final = df_board_1.copy()
+        df_test_model = df_test_raw.copy()
+        model_features = features_list  # Usa solo le feature dirette
 
-    # Augmentation
-    train_sets = create_virtual_datasets(df_train_lagged, target_freq_min=30, orig_freq_min=5)
-    lagged_features = [col for col in df_train_lagged.columns if 'lag' in col or col in features_list]
+    # # print(f"[{task_name}] Creazione feature ritardate (lags=6) per target {target_col}...")
+    # # df_train_lagged = create_lagged_features(df_board_1, target_col, features_list, lags=6)
+    # # df_test_lagged = create_lagged_features(df_test_raw, target_col, features_list, lags=6)
+
+    # # Augmentation
+    # train_sets = create_virtual_datasets(df_train_lagged, target_freq_min=30, orig_freq_min=5)
+    # lagged_features = [col for col in df_train_lagged.columns if 'lag' in col or col in features_list]
     
-    df_train_final = pd.concat(train_sets, ignore_index=True)
-    df_train_final.dropna(inplace=True)
-    df_test_lagged.dropna(inplace=True)
+    # df_train_final = pd.concat(train_sets, ignore_index=True)
+    # df_train_final.dropna(inplace=True)
+    # df_test_lagged.dropna(inplace=True)
 
-    if df_train_final.empty or df_test_lagged.empty:
+    # if df_train_final.empty or df_test_lagged.empty:
+    #     print(f"[{task_name}] Errore: I dataset sono vuoti dopo il preprocessing.")
+    #     return
+
+    # X_train, y_train = df_train_final[lagged_features], df_train_final[target_col]
+    # X_test, y_test = df_test_lagged[lagged_features], df_test_lagged[target_col]
+    df_train_final.dropna(subset=model_features + [target_col], inplace=True)
+    df_test_model.dropna(subset=model_features + [target_col], inplace=True)
+
+    if df_train_final.empty or df_test_model.empty:
         print(f"[{task_name}] Errore: I dataset sono vuoti dopo il preprocessing.")
         return
 
-    X_train, y_train = df_train_final[lagged_features], df_train_final[target_col]
-    X_test, y_test = df_test_lagged[lagged_features], df_test_lagged[target_col]
+    X_train, y_train = df_train_final[model_features], df_train_final[target_col]
+    X_test, y_test = df_test_model[model_features], df_test_model[target_col]
 
     print(f"[{task_name}] Standardizzazione dei dati...")
     scaler = MinMaxScaler()
@@ -182,12 +230,36 @@ def run_pipeline_for_task(task_name, config, df_clean):
     X_test_scaled = scaler.transform(X_test)
 
     models_grids = {
-        "Ridge": {"model": Ridge(), "params": {"alpha": [0.1, 1.0, 10.0]}},
-        "RandomForest": {"model": RandomForestRegressor(random_state=42), "params": {"n_estimators": [50, 100], "max_depth": [5, 10, None]}},
-        "LightGBM": {"model": LGBMRegressor(random_state=42, verbose=-1), "params": {"n_estimators": [50, 150], "learning_rate": [0.05, 0.1]}},
-        "CatBoost": {"model": CatBoostRegressor(random_state=42, verbose=0), "params": {"iterations": [100, 200], "depth": [4, 6]}},
-        "SVR": {"model": SVR(), "params": {"C": [0.1, 1.0, 10.0], "kernel": ["rbf", "linear"]}},
-        "AutoARIMA": None  # Gestito a parte
+        "Ridge": {"model": Ridge(), 
+                  "params": {
+                      "alpha": [0.01, 0.1, 1.0, 10.0, 100.0]}
+                    },
+        "RandomForest": {"model": RandomForestRegressor(random_state=42, n_jobs=1), 
+                  "params": {
+                      "n_estimators": [100, 300, 500], 
+                      "max_depth": [10, 20, None], 
+                      "min_samples_split": [2, 5, 10]}
+                    },
+        "LightGBM": {"model": LGBMRegressor(random_state=42, verbose=-1, n_jobs=1), 
+                  "params": {
+                      "n_estimators": [100, 300, 500],
+                      "learning_rate": [0.01, 0.05, 0.1],
+                      "num_leaves": [31, 63, 127]}
+                    },
+        "CatBoost": {"model": CatBoostRegressor(random_state=42, verbose=0, thread_count=1),
+                  "params": {
+                      "iterations": [200, 500, 1000], 
+                      "depth": [4, 6, 8], 
+                      "learning_rate": [0.01, 0.05, 0.1]}
+                    },
+        "SVR": {"model": SVR(), 
+                  "params": {
+                      "C": [0.1, 1.0, 10.0, 100.0], 
+                      "gamma": ["scale", "auto", 0.1, 0.01], 
+                      "kernel": ["linear", "rbf"],
+                      "epsilon": [0.000001, 0.0001, 0.01, 1]}
+                    },
+        # "AutoARIMA": None
     }
 
     tscv = TimeSeriesSplit(n_splits=3)
@@ -223,7 +295,8 @@ def run_pipeline_for_task(task_name, config, df_clean):
                 param_grid=config["params"],
                 cv=tscv,
                 scoring='neg_mean_absolute_error',
-                n_jobs=-1
+                n_jobs=-1,
+                verbose=2  # <--- AGGIUNGI QUESTO
             )
             
             start_time = time.time()
@@ -241,7 +314,7 @@ def run_pipeline_for_task(task_name, config, df_clean):
 
         # Logging, Plotting e Valutazione unificati
         report, mae = log_and_evaluate(
-            y_test=y_test, y_pred=y_pred, features_names=lagged_features,
+            y_test=y_test, y_pred=y_pred, features_names=model_features,
             model=best_model, model_name=name,
             training_time=training_time, inf_time=inf_time,
             best_params=best_params, archive_dir=archive_dir, plots_dir=plots_dir
@@ -275,8 +348,12 @@ def main():
     if df_clean.empty:
         print("[Trainer] Dati insufficienti. Esegui prima cleaner.py.")
         return
-        
-    # Ciclo su tutti i Task definiti nel dizionario TASKS
+    
+    # 1. Addestra prima i modelli ambientali generali (indipendenti dal task ML)
+    all_env_features = TASKS["t1"]["features"]
+    train_environmental_arimas(df_clean, all_env_features, os.path.join(BASE_MODEL_DIR, "env_forecasters"))
+    
+    # 2. Ciclo sui Task ML specifici (t1, t2, t3)
     for task_name, config in TASKS.items():
         run_pipeline_for_task(task_name, config, df_clean)
         

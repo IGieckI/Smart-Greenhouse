@@ -2,22 +2,17 @@ import pandas as pd
 import numpy as np
 
 
-def create_lagged_features(df: pd.DataFrame, target_col: str, feature_cols: list, lags: int = 6) -> pd.DataFrame:
-    """
-    Crea le feature ritardate (t-1, t-2, ... t-lags) per il modello Autoregressivo (V2).
-    In Pandas, usare .shift(i) sposta i dati in avanti, allineando i valori passati alla riga attuale.
-    """
+def create_lagged_features(df: pd.DataFrame, target_col: str, feature_cols: list, lags: int = 6, lag_target: bool = True) -> pd.DataFrame:
     df_lagged = df.copy()
     
-    # Colonne da 'ritardare' (tutti i sensori ambientali + la leaf_temp passata)
-    cols_to_lag = feature_cols + [target_col]
+    cols_to_lag = feature_cols.copy()
+    if lag_target:
+        cols_to_lag.append(target_col)
     
     for col in cols_to_lag:
         for i in range(1, lags + 1):
-            # Crea nuove colonne tipo: 'air_temp_lag_1', 'leaf_temp_lag_3' ecc.
             df_lagged[f'{col}_lag_{i}'] = df_lagged[col].shift(i)
             
-    # Rimuoviamo le prime righe che avranno inevitabilmente dei NaN a causa dello shift
     df_lagged.dropna(inplace=True)
     return df_lagged
 
@@ -98,23 +93,21 @@ def clean_anomalies(df: pd.DataFrame) -> pd.DataFrame:
     if 'tds' in df.columns:
         rolling_median = df['tds'].rolling(window=10, center=True, min_periods=1).median()
         # Se il valore eccede il 30% della mediana locale, è uno spike
-        is_spike = df['tds'] > (rolling_median * 1.3)
+        is_spike = df['tds'] > (rolling_median * 1.3) 
         df.loc[is_spike, 'tds'] = np.nan
         df = gaussian_weighted_interpolation(df, 'tds', win_before=5, win_after=2)
         
     return df
 
-def create_virtual_datasets(df: pd.DataFrame, target_freq_min: int = 30, orig_freq_min: int = 5) -> list[pd.DataFrame]:
+def create_virtual_datasets(df: pd.DataFrame, target_freq_min: int = 30, orig_freq_min: int = 6) -> list[pd.DataFrame]:
     virtual_datasets = []
     num_shifts = target_freq_min // orig_freq_min
 
     for i in range(num_shifts):
-        # Shiftiamo l'indice in avanti di i * orig_freq_min
         shifted_df = df.copy()
         shift_delta = pd.Timedelta(minutes=i * orig_freq_min)
         shifted_df.index = shifted_df.index + shift_delta
         
-        # Ora facciamo il resample pulito sulla mezz'ora spaccata
         df_resampled = shifted_df.resample(f'{target_freq_min}min').first().dropna(subset=['leaf_temp'])
         df_resampled['virtual_id'] = i
         virtual_datasets.append(df_resampled)

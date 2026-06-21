@@ -103,6 +103,9 @@ services:
   ml-trainer:
     build: ./ml_workspace/trainer_data
     container_name: ml-trainer
+
+    shm_size: '2gb'  # <--- AGGIUNGI QUESTA RIGA
+
     volumes:
       - ./ml_workspace/trainer_data:/app/trainer       # Codice specifico del training
       - ./ml_workspace/shared_core:/app/shared_core    # Codice di preprocessing e modelli (.pkl)
@@ -115,6 +118,8 @@ services:
       - INFLUX_TOKEN=${INFLUX_TOKEN}
       - INFLUX_ORG=iot_org
       - PYTHONPATH=/app # Permette a Python di importare shared_core.preprocessing
+      
+      - PYTHONUNBUFFERED=1
     depends_on:
       - influxdb
 
@@ -140,12 +145,18 @@ services:
   tg-bot:
     build: ./tg-bot
     container_name: tg-bot
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     volumes:
-      - ./tg-bot:/app # Monta il codice
+      - ./tg-bot:/app
     command: python bot.py
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_TOKEN}
-      - INFERENCE_URL=http://ml-inference:8000/predict
+      - INFERENCE_URL=http://ml-inference:8000
+      - INFLUX_URL=http://influxdb:8086          # <-- AGGIUNTO
+      - INFLUX_TOKEN=${INFLUX_TOKEN}             # <-- AGGIUNTO
+      - INFLUX_ORG=iot_org                       # <-- AGGIUNTO
     depends_on:
       - ml-inference
 

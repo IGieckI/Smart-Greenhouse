@@ -89,3 +89,9 @@ Desktop.ini
 /services/ml_workspace/*/best_model
 /services/ml_workspace/*/models
 /services/ml_workspace/*/models_archive
+
+
+/zzz_*
+/rubbish
+
+.clangd
