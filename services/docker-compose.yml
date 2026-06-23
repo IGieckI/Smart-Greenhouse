@@ -91,7 +91,7 @@ services:
       - "5683:5683/udp"
     volumes:
       - ./cw-client:/app # Monta il codice
-    command: python server_coap.py
+    command: python client_coap.py
     environment:
       - CONTROLLER_URL=http://controller:3001/api/data
     depends_on:

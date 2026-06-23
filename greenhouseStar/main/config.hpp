@@ -6,3 +6,7 @@
 
 // SRAM Ring Buffer (16KB ~ 36h )
 #define INTERNAL_BUFFER_SIZE (16 * 1024) 
+
+
+
+//#define IS_HELTEC

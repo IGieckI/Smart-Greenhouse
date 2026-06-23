@@ -20,6 +20,12 @@ let fallbackUsageCount = {};
 let currentFallbackId = null;
 
 
+const sampling_freq_min = 6
+const assumption_equals = 2
+const tollerance = 2 
+const FALLBACK_THR = (sampling_freq_min * assumption_equals + tollerance)
+
+
 const { exec } = require('child_process');
 const path = require('path');
 
@@ -64,12 +70,12 @@ app.post('/api/data', async (req, res) => {
 
     console.log(data)
     
-    if (!data.id_board) {
-        return res.status(400).send({ error: "id_board mancante" });
+    if (!data.node_id) {
+        return res.status(400).send({ error: "node_id mancante" });
     }
 
     // Gestione File TXT per Temperatura Fogliare
-    if (data[LEAF_TEMP_LABEL] === undefined) {
+    if ((data[LEAF_TEMP_LABEL] === undefined) || (data[LEAF_TEMP_LABEL] < 5.0)) {
         try {
             if (fs.existsSync(FALLBACK_FILE_PATH)) {
                 // Legge il file e rimuove spazi vuoti o a capo
@@ -80,6 +86,9 @@ app.post('/api/data', async (req, res) => {
                     // Sostituisce l'eventuale virgola italiana con il punto decimale
                     let tempVal = parseFloat(parts[0].replace(',', '.'));
                     let tempId = parts[1];
+
+
+                    data[LEAF_TEMP_LABEL] = tempVal;
 
                     // // Se l'ID nel file cambia, resettiamo il focus sul nuovo ID
                     // if (currentFallbackId !== tempId) {
@@ -95,18 +104,23 @@ app.post('/api/data', async (req, res) => {
                     }
 
                     // Controllo utilizzi
-                    if (fallbackUsageCount[tempId] < 3) {
+                    if (fallbackUsageCount[tempId] < FALLBACK_THR) {
                         data[LEAF_TEMP_LABEL] = tempVal;
-                        fallbackUsageCount[tempId]++;
+
+                        let currentCount = fallbackUsageCount[tempId]; // Salvi il valore ATTUALE (es. 0, 6, 12)
+                        fallbackUsageCount[tempId]++; // Incrementi per il prossimo giro
                         
-                        let currentCount = fallbackUsageCount[tempId];
-                        console.log(`[Controller] Temp fogliare letta: ${tempVal}°C (ID: ${tempId}, Utilizzo: ${currentCount}/3)`);
+                        console.log(`[Controller] Temp fogliare letta: ${tempVal}°C (ID: ${tempId}, Utilizzo: ${currentCount + 1}/${FALLBACK_THR})`);
                         
-                        // SUONO: Suona tante volte quanto è il counter (1 bip, 2 bip, o 3 bip)
-                        playBeeps(currentCount);
+                        if (currentCount % sampling_freq_min === 0){
+                            let numBeeps = (currentCount / sampling_freq_min) + 1;
+                            // SUONO: Suona tante volte quanto è il counter (1 bip, 2 bip, o ${FALLBACK_THR} bip)
+                            playBeeps(numBeeps);
+                        }
+                        
 
                     } else {
-                        console.log(`[Controller] ATTENZIONE: L'ID '${tempId}' è stato usato 3 volte. Dato fogliare SCARTATO. Aggiorna il file txt!`);
+                        console.log(`[Controller] ATTENZIONE: L'ID '${tempId}' è stato usato ${FALLBACK_THR} volte. Dato fogliare SCARTATO. Aggiorna il file txt!`);
                         
                         // SUONO DI EMERGENZA MASSIMA: 5 bip per indicare che il dato viene ormai scartato
                         playBeeps(5);
@@ -123,7 +137,7 @@ app.post('/api/data', async (req, res) => {
     // Salvataggio dinamico su InfluxDB
     try {
         const point = new Point('sensor_measurements')
-            .tag('id_board', String(data.id_board));
+            .tag('id_board', String(data.node_id));
             
         // Aggiunge dinamicamente tutti i valori numerici presenti nel payload
         // const numericFields = ['air_temp', 'air_hum', 'air_press', 'soil_temp', 'soil_hum', 'tds', 'irradiation', ];
@@ -135,9 +149,12 @@ app.post('/api/data', async (req, res) => {
             }
         }
 
+        console.log(point)
+
         writeApi.writePoint(point);
         await writeApi.flush(); // <-- Aggiungi await
-        console.log(`[Controller] Dati scritti su Influx per la board: ${data.id_board}`);
+
+        console.log(`[Controller] Dati scritti su Influx per la board: ${data.node_id}`);
         res.status(200).send({ status: "success" });
     } catch (error) {
         console.error("[Controller] Errore scrittura Influx:", error);

@@ -2,7 +2,7 @@
 dependencies:
   ## Required IDF version
   idf:
-    version: ">=4.1.0"
+    version: '>=4.1.0'
   u8g2:
     git: https://github.com/olikraus/u8g2.git
   u8g2_hal:
@@ -18,3 +18,4 @@ dependencies:
   #   # `public` flag doesn't have an effect dependencies of the `main` component.
   #   # All dependencies of `main` are public by default.
   #   public: true
+  espressif/coap: '*'

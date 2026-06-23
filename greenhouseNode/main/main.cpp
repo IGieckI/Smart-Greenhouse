@@ -12,6 +12,8 @@
 #include "nvs_flash.h"
 #include "esp_adc/adc_oneshot.h"
 
+#include "esp_timer.h"
+
 #include "TDS.hpp"
 #include "DS18B20.hpp"
 #include "BH1750.hpp"
@@ -86,8 +88,10 @@ float get_median(float* data, int size) {
     return temp[size / 2];
 }
 
+#ifdef ADS1115_ADDR
 // ADC leaf temperature conversion reading
 static int16_t read_ads1115(uint16_t config_flags) {
+
     uint8_t write_buf[3];
     write_buf[0] = ADS_POINTER_CONFIG;
     write_buf[1] = (config_flags >> 8) & 0xFF; 
@@ -116,10 +120,15 @@ static int16_t read_ads1115(uint16_t config_flags) {
 
     return (int16_t)((read_buf[0] << 8) | read_buf[1]);
 }
+#endif
 
 float get_leaf_temp(float ambient_temp) {
     uint16_t config_tc = 0x8F83; 
+    #ifdef ADS1115_ADDR
     int16_t raw_tc = read_ads1115(config_tc);
+    #else
+    int16_t raw_tc = 0;
+    #endif
 
     float tc_voltage_mv = raw_tc * 0.0078125;
     float delta_temp = tc_voltage_mv / 0.041276;
@@ -266,8 +275,27 @@ extern "C" void app_main(void)
     // Give ESP-NOW some time to actually transmit the packet before going to sleep
     vTaskDelay(pdMS_TO_TICKS(500));
 
-    // Enter deep sleep
-    ESP_LOGI(TAG, "Entering deep sleep for %d milliseconds...", DEEP_SLEEP_MS);
-    esp_sleep_enable_timer_wakeup(DEEP_SLEEP_MS * 1000ULL);
+
+    // Ottieni i millisecondi totali trascorsi dall'accensione (boot)
+    int64_t awake_time_ms = esp_timer_get_time() / 1000; 
+    
+    // Calcola quanto tempo manca per completare l'intervallo esatto
+    int64_t sleep_time_ms = DEEP_SLEEP_MS - awake_time_ms;
+
+    // Controllo di sicurezza: se per qualche motivo (es. ritardi di rete) 
+    // l'esecuzione ha richiesto più tempo del tuo DEEP_SLEEP_MS, evita numeri negativi
+    if (sleep_time_ms < 0) {
+        sleep_time_ms = 0; 
+    }
+
+    ESP_LOGI(TAG, "Awake time: %lld ms, entering deep sleep mode for %lld ms...", awake_time_ms, sleep_time_ms);
+    
+    // Converti in microsecondi per la funzione di deep sleep
+    esp_sleep_enable_timer_wakeup((uint64_t)sleep_time_ms * 1000ULL);
     esp_deep_sleep_start();
+
+    // // // // Enter deep sleep
+    // // // ESP_LOGI(TAG, "Entering deep sleep for %d milliseconds...", DEEP_SLEEP_MS);
+    // // // esp_sleep_enable_timer_wakeup(DEEP_SLEEP_MS * 1000ULL);
+    // // // esp_deep_sleep_start();
 }

@@ -34,8 +34,8 @@ BUCKET_CLEAN = "sensor_data_clean"
 BASE_MODEL_DIR = "/app/shared_core/models"
 
 # Configurazione Dati
-TRAIN_BOARDS = ["3750866944"]
-TEST_BOARDS = ["9"]
+TRAIN_BOARDS = ["9"]
+TEST_BOARDS = ["3750866944"]
 
 # Definizione Dinamica dei Task (Personalizza il target e le features del v2 come preferisci)
 from shared_core.tasks import TASKS

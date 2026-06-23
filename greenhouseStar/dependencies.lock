@@ -1,10 +1,20 @@
 dependencies:
+  espressif/coap:
+    component_hash: fa573d92bc097700b35b593dfd2530205b90453d41e6f07f834252ab16120628
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 4.3.5~6
   idf:
     source:
       type: idf
     version: 5.5.4
   u8g2:
-    component_hash: 6c87cb5433dc44da6a97d9083601de2ce879d8caa5226d9a44d9c153031bf6e9
+    component_hash: aabc773fef9e31a3ab8c68b939e1de15969a9db7622eea3083448170ed8fe278
     dependencies: []
     source:
       git: https://github.com/olikraus/u8g2.git
@@ -20,9 +30,10 @@ dependencies:
       type: git
     version: 4ddd714deabdb45885174724306637f2274d4f6b
 direct_dependencies:
+- espressif/coap
 - idf
 - u8g2
 - u8g2_hal
-manifest_hash: e74ccf487157e3a300cfee1f69c715e28410fcc42f44ce0fd706857c2fab3350
-target: esp32s3
+manifest_hash: cfd4dee71bcefe054e4467e35d1562627d44f5edf3fb03e783958db428af9e0c
+target: esp32
 version: 2.0.0

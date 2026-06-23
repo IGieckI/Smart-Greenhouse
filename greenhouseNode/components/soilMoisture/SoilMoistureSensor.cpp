@@ -61,7 +61,7 @@ esp_err_t SoilMoistureSensor::read_percentage(float& percentage) {
 
     int raw_val = 0;
     esp_err_t ret = adc_oneshot_read(_adc_handle, _adc_channel, &raw_val);
-    ESP_LOGI("MAIN", "Raw Moisture Value: %d", raw_val);
+    // ESP_LOGI("MAIN", "Raw Moisture Value: %d", raw_val);
     if (ret != ESP_OK) return ret;
 
     // Map the raw value to a 0-100% scale
