@@ -12,9 +12,19 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 5.5.4
+    version: 5.5.3
+  jgromes/radiolib:
+    component_hash: 024269f750d7eb181d07bd57ccec5e5e4e276dbb262d681a6501c8e2244e80f0
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.1'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 7.7.1
   u8g2:
-    component_hash: aabc773fef9e31a3ab8c68b939e1de15969a9db7622eea3083448170ed8fe278
+    component_hash: 6c87cb5433dc44da6a97d9083601de2ce879d8caa5226d9a44d9c153031bf6e9
     dependencies: []
     source:
       git: https://github.com/olikraus/u8g2.git
@@ -32,8 +42,9 @@ dependencies:
 direct_dependencies:
 - espressif/coap
 - idf
+- jgromes/radiolib
 - u8g2
 - u8g2_hal
-manifest_hash: cfd4dee71bcefe054e4467e35d1562627d44f5edf3fb03e783958db428af9e0c
-target: esp32
+manifest_hash: e8e37850d05d0456c8261647582a2dfa1e4b51eafb0061d17659d8d7844fcec1
+target: esp32s3
 version: 2.0.0
