@@ -2,38 +2,66 @@ import paho.mqtt.client as mqtt
 import requests
 import json
 import os
+import logging
 
-BROKER = os.getenv("MQTT_BROKER", "localhost")
+BROKER = os.getenv("MQTT_BROKER", "mosquitto")
 PORT = int(os.getenv("MQTT_PORT", 1883))
-TOPIC = os.getenv("MQTT_TOPIC", "v3/+/devices/+/up") # Esempio topic TTN
+TOPIC = os.getenv("MQTT_TOPIC", "greenhouse/telemetry/live")
 CONTROLLER_URL = os.getenv("CONTROLLER_URL", "http://controller:3001/api/data")
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# The Star serializes LoRa payloads with abbreviated keys to fit the packet.
+# Map them to the full names expected by the controller (matching cw-client output).
+_KEY_MAP = {
+    "ts":  "timestamp",
+    "id":  "node_id",
+    "p":   "pressure",
+    "wt":  "water_temp",
+    "lux": "light_lux",
+    "tds": "tds",
+    "sm":  "soil_moisture",
+    "at":  "air_temp",
+    "h":   "humidity",
+    "lt":  "leaf_temp",
+}
+
+def _normalize(raw: dict) -> dict:
+    return {_KEY_MAP.get(k, k): v for k, v in raw.items()}
+
+
 def on_connect(client, userdata, flags, rc):
-    print(f"[LW-Client] Connesso al broker MQTT con codice {rc}")
-    client.subscribe(TOPIC)
+    if rc == 0:
+        logger.info(f"Connected to MQTT broker at {BROKER}, subscribing to '{TOPIC}'")
+        client.subscribe(TOPIC)
+    else:
+        logger.error(f"MQTT connection refused, rc={rc}")
+
+def on_disconnect(client, userdata, rc):
+    if rc != 0:
+        logger.warning(f"Unexpected disconnect (rc={rc}), will auto-reconnect")
 
 def on_message(client, userdata, msg):
-    print(f"[LW-Client] Messaggio ricevuto su {msg.topic}")
+    logger.info(f"Message on '{msg.topic}'")
     try:
-        # Assumiamo che il payload sia nel formato JSON standard del Network Server
-        payload = json.loads(msg.payload.decode())
-        
-        # Estrai i dati utili. (Adatta questa parte in base al JSON del tuo LNS)
-        decoded_payload = payload.get("uplink_message", {}).get("decoded_payload", payload)
-        
-        # Aggiungi un id fittizio se non presente per il PoC
-        if "id_board" not in decoded_payload:
-            decoded_payload["id_board"] = "heltec_lora_01"
-
-        # Inoltra al controller
-        response = requests.post(CONTROLLER_URL, json=decoded_payload)
-        print(f"[LW-Client] Inoltrato al controller. Status: {response.status_code}")
+        raw = json.loads(msg.payload.decode())
+        payload = _normalize(raw)
+        response = requests.post(CONTROLLER_URL, json=payload, timeout=5)
+        logger.info(f"Forwarded to controller, status={response.status_code}")
+    except json.JSONDecodeError:
+        logger.error(f"Invalid JSON payload: {msg.payload!r}")
+    except requests.RequestException as e:
+        logger.error(f"Controller unreachable: {e}")
     except Exception as e:
-        print(f"[LW-Client] Errore nel processamento del messaggio: {e}")
+        logger.error(f"Unexpected error: {e}")
+
 
 client = mqtt.Client()
 client.on_connect = on_connect
+client.on_disconnect = on_disconnect
 client.on_message = on_message
+client.reconnect_delay_set(min_delay=1, max_delay=30)
 
-client.connect(BROKER, PORT, 60)
+client.connect(BROKER, PORT, keepalive=60)
 client.loop_forever()

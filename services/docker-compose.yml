@@ -1,9 +1,6 @@
-# version: '3.8'
-
 services:
-  # -----------------------------------
-  # DATABASE & DASHBOARD
-  # -----------------------------------
+
+  # Database and Dashboard
   influxdb:
     image: influxdb:2.7
     container_name: influxdb
@@ -15,7 +12,6 @@ services:
       - DOCKER_INFLUXDB_INIT_PASSWORD=adminadmin
       - DOCKER_INFLUXDB_INIT_ORG=iot_org
       - DOCKER_INFLUXDB_INIT_BUCKET=sensor_data
-      # Questo è il momento in cui fissi il tuo token fittizio
       - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=TokenFittizio
     volumes:
       - influxdb-data:/var/lib/influxdb2
@@ -32,9 +28,7 @@ services:
       - influxdb
     restart: unless-stopped
 
-  # -----------------------------------
-  # IL CUORE DEL SISTEMA
-  # -----------------------------------
+  # Core Controller
   controller:
     build: ./controller
     container_name: controller
@@ -42,8 +36,7 @@ services:
       - "3001:3001"
     volumes:
       - ./controller:/app
-      - /app/node_modules 
-      # Monta la cartella dove tieni il tuo file audio (es. una cartella 'assets' nel controller)
+      - /app/node_modules
     environment:
       - INFLUX_URL=http://influxdb:8086
       - INFLUX_TOKEN=${INFLUX_TOKEN}
@@ -52,73 +45,73 @@ services:
       - LEAF_TEMP_LABEL=leaf_temp
     depends_on:
       - influxdb
-    # --- NUOVE RIGHE PER L'AUDIO ---
     devices:
       - "/dev/snd:/dev/snd"
     group_add:
       - audio
 
-  # -----------------------------------
-  # CLIENTS (Ingestione Dati)
-  # -----------------------------------
-  # lw-client:
-  #   build: ./lw-client
-  #   container_name: lw-client
-  #   environment:
-  #     - CONTROLLER_URL=http://controller:3001/api/data
-  #     - MQTT_BROKER=indirizzo_del_tuo_broker_lorawan
-  #     - MQTT_PORT=1883
-  #   depends_on:
-  #     - controller
+  # Local MQTT Broker
+  # Note: To use this in the system it is needed to set USE_LOCAL_BROKER in 
+  # loraWANGateway/main/config.hpp and point to this machine's LAN IP 
+  # so the gateway can reach it.
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mosquitto
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    restart: unless-stopped
+
+  # Data Ingestion Clients
+
+  # lw-client: receives LoRa data forwarded by the gateway via MQTT
   lw-client:
     build: ./lw-client
     container_name: lw-client
     volumes:
-      - ./lw-client:/app # Monta il codice
+      - ./lw-client:/app
     command: python client_mqtt.py
     environment:
       - CONTROLLER_URL=http://controller:3001/api/data
-      - MQTT_BROKER=localhost
+      - MQTT_BROKER=mosquitto
       - MQTT_PORT=1883
-      - MQTT_TOPIC=v3/+/devices/+/up
+      - MQTT_TOPIC=greenhouse/telemetry/live
     depends_on:
       - controller
+      - mosquitto
+    restart: unless-stopped
 
+  # cw-client: receives data from a nearby Star via CoAP Observe.
+  # The host machine must be connected to the GREENHOUSE_STAR WiFi AP
+  # (192.168.4.1) for this container to reach the Star.
   cw-client:
     build: ./cw-client
     container_name: cw-client
-    ports:
-      - "5683:5683/udp"
     volumes:
-      - ./cw-client:/app # Monta il codice
+      - ./cw-client:/app
     command: python client_coap.py
     environment:
       - CONTROLLER_URL=http://controller:3001/api/data
+      - STAR_COAP_URI=coap://192.168.4.1/telemetry
     depends_on:
       - controller
+    restart: unless-stopped
 
-  # -----------------------------------
-  # MACHINE LEARNING & VIRTUAL SENSOR
-  # -----------------------------------
+  # Machine Learning
   ml-trainer:
     build: ./ml_workspace/trainer_data
     container_name: ml-trainer
-
-    shm_size: '2gb'  # <--- AGGIUNGI QUESTA RIGA
-
+    shm_size: '2gb'
     volumes:
-      - ./ml_workspace/trainer_data:/app/trainer       # Codice specifico del training
-      - ./ml_workspace/shared_core:/app/shared_core    # Codice di preprocessing e modelli (.pkl)
-    
-    # MODIFICA QUI: Esegue in sequenza cleaner e train
+      - ./ml_workspace/trainer_data:/app/trainer
+      - ./ml_workspace/shared_core:/app/shared_core
     command: /bin/bash -c "python /app/trainer/cleaner.py && python /app/trainer/train.py"
-
     environment:
       - INFLUX_URL=http://influxdb:8086
       - INFLUX_TOKEN=${INFLUX_TOKEN}
       - INFLUX_ORG=iot_org
-      - PYTHONPATH=/app # Permette a Python di importare shared_core.preprocessing
-      
+      - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
     depends_on:
       - influxdb
@@ -129,19 +122,17 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./ml_workspace/inference_data:/app/inference   # Codice dell'API FastAPI
-      - ./ml_workspace/shared_core:/app/shared_core    # Codice di preprocessing e modelli (.pkl)
+      - ./ml_workspace/inference_data:/app/inference
+      - ./ml_workspace/shared_core:/app/shared_core
     environment:
       - INFLUX_URL=http://influxdb:8086
       - INFLUX_TOKEN=${INFLUX_TOKEN}
       - INFLUX_ORG=iot_org
-      - PYTHONPATH=/app # Permette a Python di importare shared_core.preprocessing
+      - PYTHONPATH=/app
     depends_on:
       - ml-trainer
 
-  # -----------------------------------
-  # BOT TELEGRAM
-  # -----------------------------------
+  # Telegram Bot
   tg-bot:
     build: ./tg-bot
     container_name: tg-bot
@@ -154,15 +145,12 @@ services:
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_TOKEN}
       - INFERENCE_URL=http://ml-inference:8000
-      - INFLUX_URL=http://influxdb:8086          # <-- AGGIUNTO
-      - INFLUX_TOKEN=${INFLUX_TOKEN}             # <-- AGGIUNTO
-      - INFLUX_ORG=iot_org                       # <-- AGGIUNTO
+      - INFLUX_URL=http://influxdb:8086
+      - INFLUX_TOKEN=${INFLUX_TOKEN}
+      - INFLUX_ORG=iot_org
     depends_on:
       - ml-inference
 
-# -----------------------------------
-# VOLUMI DOCKER GESTITI
-# -----------------------------------
 volumes:
   influxdb-data:
   grafana-data:
