@@ -1,4 +1,0 @@
-dependencies:
-  idf: ">=5.0"
-  espressif/coap: "*"
-  jgromes/RadioLib: ">=7.1.0"
