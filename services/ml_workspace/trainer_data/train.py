@@ -118,13 +118,27 @@ def log_and_evaluate(y_test, y_pred, features_names, model, model_name, training
     # 1. Estrai il modello finale dalla Pipeline (se presente)
     final_estimator = model.named_steps['regressor'] if hasattr(model, 'named_steps') else model
 
-    # 2. Estrai Importanza (Alberi) o Coefficienti (Modelli Lineari)
+    # # 2. Estrai Importanza (Alberi) o Coefficienti (Modelli Lineari)
+    # if hasattr(final_estimator, 'feature_importances_'):
+    #     importances = final_estimator.feature_importances_
+    #     importance_dict = {feat: float(imp) for feat, imp in zip(features_names, importances)}
+    #     importance_dict = dict(sorted(importance_dict.items(), key=lambda item: item[1], reverse=True))
+    # elif hasattr(final_estimator, 'coef_'):
+    #     importances = final_estimator.coef_
+    #     importance_dict = {feat: float(imp) for feat, imp in zip(features_names, importances)}
+    #     # Usiamo il valore assoluto per capire "l'impatto" dei coefficienti lineari
+    #     importance_dict = dict(sorted(importance_dict.items(), key=lambda item: np.abs(item[1]), reverse=True))
+
     if hasattr(final_estimator, 'feature_importances_'):
         importances = final_estimator.feature_importances_
         importance_dict = {feat: float(imp) for feat, imp in zip(features_names, importances)}
         importance_dict = dict(sorted(importance_dict.items(), key=lambda item: item[1], reverse=True))
+        
     elif hasattr(final_estimator, 'coef_'):
-        importances = final_estimator.coef_
+        # IL FIX È QUI: Usiamo np.ravel() per forzare l'array a essere 1D
+        # così gestiamo correttamente SVR (che restituisce matrici 2D) e Ridge (1D)
+        importances = np.ravel(final_estimator.coef_)
+        
         importance_dict = {feat: float(imp) for feat, imp in zip(features_names, importances)}
         # Usiamo il valore assoluto per capire "l'impatto" dei coefficienti lineari
         importance_dict = dict(sorted(importance_dict.items(), key=lambda item: np.abs(item[1]), reverse=True))
