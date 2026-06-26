@@ -107,6 +107,7 @@ services:
       - ./ml_workspace/trainer_data:/app/trainer
       - ./ml_workspace/shared_core:/app/shared_core
     command: /bin/bash -c "python /app/trainer/cleaner.py && python /app/trainer/train.py"
+    # command: /bin/bash -c "python /app/trainer/cleaner.py"
     environment:
       - INFLUX_URL=http://influxdb:8086
       - INFLUX_TOKEN=${INFLUX_TOKEN}
