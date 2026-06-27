@@ -164,7 +164,8 @@ def predict_manual(task: str, data: SensorData, board_id: str = "9"):
         raise HTTPException(status_code=404, detail=f"Task {task} non configurato o modello assente.")
         
     df_history = fetch_historical_data(board_id, limit=FETCH_LIMIT_MANUAL)
-    if len(df_history) < DEFAULT_LAGS:
+    # if len(df_history) < DEFAULT_LAGS:
+    if len(df_history) < MIN_HISTORY_RECORDS:
         raise HTTPException(status_code=400, detail="Storico Influx insufficiente per generare i lag.")
         
     new_idx = pd.Timestamp.utcnow()

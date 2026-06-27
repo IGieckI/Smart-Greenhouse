@@ -10,7 +10,6 @@ from shared_core.config import *
 # 3. CORE UTILITIES (Gauss & Lags)
 # ==========================================
 def gaussian_weighted_interpolation(df: pd.DataFrame, target_col: str, weight_col: str = None) -> pd.DataFrame:
-    """Media pesata gaussiana per riempire i NaN. Se il buco è enorme (sigma_minutes), il peso va a 0 e il NaN resta."""
     df_out = df.copy()
     nan_indices = df_out[df_out[target_col].isna()].index
 
@@ -37,37 +36,31 @@ def gaussian_weighted_interpolation(df: pd.DataFrame, target_col: str, weight_co
     return df_out
 
 
-def create_lagged_features(df: pd.DataFrame, target_col: str, feature_cols: list, 
-                           lags: int = DEFAULT_LAGS, lag_target: bool = True) -> pd.DataFrame:
+def create_lagged_features(df: pd.DataFrame, target_col: str, feature_cols: list, lags: int = DEFAULT_LAGS, lag_target: bool = True) -> pd.DataFrame:
     df_lagged = df.copy()
     cols_to_lag = feature_cols.copy()
     if lag_target: cols_to_lag.append(target_col)
     
     for col in cols_to_lag:
         for i in range(1, lags + 1):
-            df_lagged[f'{col}_lag_{i}'] = df_lagged[col].shift(i)
+            # IL SALTO LOGICO: 1 tick = VIRTUAL_RATIO (es. 5 step indietro)
+            df_lagged[f'{col}_lag_{i}'] = df_lagged[col].shift(i * VIRTUAL_RATIO)
             
     df_lagged.dropna(inplace=True)
     return df_lagged
 
 
-
 def get_extended_features_list(base_features: list, use_lags: bool) -> list:
-    """Restituisce la lista aggiornata delle feature dopo l'arricchimento."""
     ext = base_features.copy()
     ext.extend(['time_sin', 'time_cos'])
     if use_lags:
-        # Aggiungiamo i nomi delle derivate solo per le feature ambientali base
         ext.extend([f"{col}_diff" for col in base_features])
     return ext
 
 
-
 def build_advanced_features(df: pd.DataFrame, base_features: list, use_lags: bool) -> pd.DataFrame:
-    """Applica Feature Engineering: Time of Day (ciclico) e Derivate (Momentum)."""
     df_out = df.copy()
     
-    # Sicurezza: Assicuriamoci che l'indice sia datetime
     if not isinstance(df_out.index, pd.DatetimeIndex):
         try:
             df_out.index = pd.to_datetime(df_out.index)
@@ -75,21 +68,18 @@ def build_advanced_features(df: pd.DataFrame, base_features: list, use_lags: boo
             print(f"Errore nella conversione dell'indice in datetime: {e}")
             return df_out
 
-    # 1. Feature Temporali (Cicliche)
     minutes = df_out.index.hour * 60 + df_out.index.minute
     df_out['time_sin'] = np.sin(2 * np.pi * minutes / 1440)
     df_out['time_cos'] = np.cos(2 * np.pi * minutes / 1440)
     
-    # 2. Derivate Prime (Tassi di variazione temporale)
     if use_lags:
         for col in base_features:
             if col in df_out.columns:
-                # Usa ffill() temporaneo per garantire che il diff() calcoli su dati continui
                 temp_series = df_out[col].ffill()
-                df_out[f'{col}_diff'] = temp_series.diff()
+                # DERIVATA SUL MACRO-TREND: Calcoliamo la differenza rispetto a 30 minuti fa (o X minuti fa in base al ratio)
+                df_out[f'{col}_diff'] = temp_series.diff(VIRTUAL_RATIO)
                 
     return df_out
-
 
 
 
