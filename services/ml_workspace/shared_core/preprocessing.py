@@ -2,6 +2,101 @@ import pandas as pd
 import numpy as np
 from shared_core.config import *
 
+
+
+
+
+# ==========================================
+# 3. CORE UTILITIES (Gauss & Lags)
+# ==========================================
+def gaussian_weighted_interpolation(df: pd.DataFrame, target_col: str, weight_col: str = None) -> pd.DataFrame:
+    """Media pesata gaussiana per riempire i NaN. Se il buco è enorme (sigma_minutes), il peso va a 0 e il NaN resta."""
+    df_out = df.copy()
+    nan_indices = df_out[df_out[target_col].isna()].index
+
+    for idx in nan_indices:
+        valid_data = df_out.dropna(subset=[target_col])
+        before = valid_data.loc[:idx].iloc[-INTERPOLATION_WIN_BEFORE:] if not valid_data.loc[:idx].empty else pd.DataFrame()
+        after = valid_data.loc[idx:].iloc[:INTERPOLATION_WIN_AFTER] if not valid_data.loc[idx:].empty else pd.DataFrame()
+        
+        neighbors = pd.concat([before, after])
+        if neighbors.empty: continue
+
+        time_diffs = np.abs((neighbors.index - idx).total_seconds() / 60.0)
+        gauss_weights = np.exp(-(time_diffs**2) / (2 * INTERPOLATION_SIGMA_MIN**2))
+        
+        if weight_col and weight_col in neighbors.columns:
+            custom_weights = neighbors[weight_col].values
+            final_weights = gauss_weights * custom_weights
+        else:
+            final_weights = gauss_weights
+
+        if np.sum(final_weights) > 0.01:
+            df_out.at[idx, target_col] = np.average(neighbors[target_col], weights=final_weights)
+
+    return df_out
+
+
+def create_lagged_features(df: pd.DataFrame, target_col: str, feature_cols: list, 
+                           lags: int = DEFAULT_LAGS, lag_target: bool = True) -> pd.DataFrame:
+    df_lagged = df.copy()
+    cols_to_lag = feature_cols.copy()
+    if lag_target: cols_to_lag.append(target_col)
+    
+    for col in cols_to_lag:
+        for i in range(1, lags + 1):
+            df_lagged[f'{col}_lag_{i}'] = df_lagged[col].shift(i)
+            
+    df_lagged.dropna(inplace=True)
+    return df_lagged
+
+
+
+def get_extended_features_list(base_features: list, use_lags: bool) -> list:
+    """Restituisce la lista aggiornata delle feature dopo l'arricchimento."""
+    ext = base_features.copy()
+    ext.extend(['time_sin', 'time_cos'])
+    if use_lags:
+        # Aggiungiamo i nomi delle derivate solo per le feature ambientali base
+        ext.extend([f"{col}_diff" for col in base_features])
+    return ext
+
+
+
+def build_advanced_features(df: pd.DataFrame, base_features: list, use_lags: bool) -> pd.DataFrame:
+    """Applica Feature Engineering: Time of Day (ciclico) e Derivate (Momentum)."""
+    df_out = df.copy()
+    
+    # Sicurezza: Assicuriamoci che l'indice sia datetime
+    if not isinstance(df_out.index, pd.DatetimeIndex):
+        try:
+            df_out.index = pd.to_datetime(df_out.index)
+        except Exception as e:
+            print(f"Errore nella conversione dell'indice in datetime: {e}")
+            return df_out
+
+    # 1. Feature Temporali (Cicliche)
+    minutes = df_out.index.hour * 60 + df_out.index.minute
+    df_out['time_sin'] = np.sin(2 * np.pi * minutes / 1440)
+    df_out['time_cos'] = np.cos(2 * np.pi * minutes / 1440)
+    
+    # 2. Derivate Prime (Tassi di variazione temporale)
+    if use_lags:
+        for col in base_features:
+            if col in df_out.columns:
+                # Usa ffill() temporaneo per garantire che il diff() calcoli su dati continui
+                temp_series = df_out[col].ffill()
+                df_out[f'{col}_diff'] = temp_series.diff()
+                
+    return df_out
+
+
+
+
+
+
+
+
 # ==========================================
 # 1. FUNZIONI DI PULIZIA SPECIFICHE
 # ==========================================
@@ -81,45 +176,3 @@ def apply_board_pipeline(df: pd.DataFrame, board_id: str) -> pd.DataFrame:
         df_processed = step_function(df_processed)
         
     return df_processed
-
-# ==========================================
-# 3. CORE UTILITIES (Gauss & Lags)
-# ==========================================
-def gaussian_weighted_interpolation(df: pd.DataFrame, target_col: str, weight_col: str = None) -> pd.DataFrame:
-    """Media pesata gaussiana per riempire i NaN. Se il buco è enorme (sigma_minutes), il peso va a 0 e il NaN resta."""
-    df_out = df.copy()
-    nan_indices = df_out[df_out[target_col].isna()].index
-
-    for idx in nan_indices:
-        valid_data = df_out.dropna(subset=[target_col])
-        before = valid_data.loc[:idx].iloc[-INTERPOLATION_WIN_BEFORE:] if not valid_data.loc[:idx].empty else pd.DataFrame()
-        after = valid_data.loc[idx:].iloc[:INTERPOLATION_WIN_AFTER] if not valid_data.loc[idx:].empty else pd.DataFrame()
-        
-        neighbors = pd.concat([before, after])
-        if neighbors.empty: continue
-
-        time_diffs = np.abs((neighbors.index - idx).total_seconds() / 60.0)
-        gauss_weights = np.exp(-(time_diffs**2) / (2 * INTERPOLATION_SIGMA_MIN**2))
-        
-        if weight_col and weight_col in neighbors.columns:
-            custom_weights = neighbors[weight_col].values
-            final_weights = gauss_weights * custom_weights
-        else:
-            final_weights = gauss_weights
-
-        if np.sum(final_weights) > 0.01:
-            df_out.at[idx, target_col] = np.average(neighbors[target_col], weights=final_weights)
-
-    return df_out
-
-def create_lagged_features(df: pd.DataFrame, target_col: str, feature_cols: list, lags: int = DEFAULT_LAGS, lag_target: bool = True) -> pd.DataFrame:
-    df_lagged = df.copy()
-    cols_to_lag = feature_cols.copy()
-    if lag_target: cols_to_lag.append(target_col)
-    
-    for col in cols_to_lag:
-        for i in range(1, lags + 1):
-            df_lagged[f'{col}_lag_{i}'] = df_lagged[col].shift(i)
-            
-    df_lagged.dropna(inplace=True)
-    return df_lagged

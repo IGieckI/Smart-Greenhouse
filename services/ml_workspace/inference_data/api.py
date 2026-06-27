@@ -3,6 +3,8 @@ import sys
 import json
 import joblib
 import copy
+import time
+import threading # <-- IMPORTANTE
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -12,7 +14,6 @@ from shared_core.data_sync import sync_clean_bucket
 from shared_core.tasks import TASKS
 from shared_core.config import *
 
-# Assicurati di NON eliminare questo file!
 sys.path.append('/app')
 from shared_core.predictor import recursive_multistep_inference
 
@@ -22,6 +23,14 @@ app = FastAPI(title="Multi-Task IoT Inference API (Recursive Forecasting)")
 loaded_models = {}
 loaded_info = {}
 loaded_env_arimas = {}
+
+
+# ==========================================
+# GESTIONE CONCORRENZA JIT SYNC
+# ==========================================
+sync_lock = threading.Lock()
+LAST_SYNC_TIME = 0.0
+SYNC_COOLDOWN_SECONDS = 30.0  # Evita sync multipli se richieste vicinissime
 
 @app.on_event("startup")
 def load_assets():
@@ -63,13 +72,21 @@ class SensorData(BaseModel):
 
 
 def fetch_historical_data(board_id: str, limit: int) -> pd.DataFrame:
-    """Sincronizza il DB, poi recupera dal DB pulito."""
+    """Sincronizza il DB in modo Thread-Safe, poi recupera dal DB pulito."""
     from influxdb_client import InfluxDBClient
-    try:
-        sync_clean_bucket(INFLUX_URL, INFLUX_TOKEN, INFLUX_ORG)
-    except Exception as e:
-        print(f"[API] Errore durante la sincronizzazione JIT: {e}")
+    global LAST_SYNC_TIME
+    
+    # 1. BLOCCO MUTEX CON COOLDOWN
+    with sync_lock:
+        current_time = time.time()
+        if current_time - LAST_SYNC_TIME > SYNC_COOLDOWN_SECONDS:
+            try:
+                sync_clean_bucket(INFLUX_URL, INFLUX_TOKEN, INFLUX_ORG)
+                LAST_SYNC_TIME = time.time()
+            except Exception as e:
+                print(f"[API] Errore durante la sincronizzazione JIT: {e}")
 
+    # 2. QUERY AL DATABASE PULITO
     client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
     query = f'''
         from(bucket: "{BUCKET_CLEAN}")
@@ -102,22 +119,33 @@ def predict_latest(task: str, board_id: str = "9"):
     if len(df_history) < DEFAULT_LAGS + 1:
         raise HTTPException(status_code=400, detail=f"Dati insufficienti su InfluxDB per la board {board_id}.")
 
-    # Preparazione ARIMA locali (Deepcopy per evitare collisioni tra richieste API simultanee)
+    # ==========================================
+    # CIRCUIT BREAKER: CONTROLLO DEI BUCHI NERI
+    # ==========================================
+    time_span = df_history.index[-1] - df_history.index[0]
+    expected_span = pd.Timedelta(minutes=NOMINAL_FREQ_MINUTES * (len(df_history) - 1))
+    
+    if abs(time_span - expected_span) > pd.Timedelta(minutes=20):
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Integrità temporale compromessa. Rilevato un buco nei dati nei recenti log della board {board_id}. Impossibile garantire un forecasting affidabile."
+        )
+
+    # Preparazione ARIMA locali
     local_arimas = {}
     for feat, arima_model in loaded_env_arimas.items():
         if feat in df_history.columns:
             obs = df_history[feat].dropna().values
             local_model = copy.deepcopy(arima_model)
-            local_model.update(obs)  # Allinea lo stato all'istante T corrente
+            local_model.update(obs)  
             local_arimas[feat] = local_model
 
-    # Chiamata pulita al motore in predictor.py
     pred_list = recursive_multistep_inference(
         T_current_data=df_history,
         arima_models=local_arimas,
         ml_model_pipeline=loaded_models[task],
         task_config=TASKS[task],
-        steps=TASKS[task]["steps"]
+        steps=TASKS[task]["steps"] 
     )
     
     return {
