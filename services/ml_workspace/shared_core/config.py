@@ -24,7 +24,7 @@ TRAIN_SPLIT_PERCENTAGE = 0.80
 # ==========================================
 # DATA FREQUENCY & TIME HORIZONS
 # ==========================================
-TARGET_FREQ_MINUTES = 30 # Il macro-trend target rimane a 30 minuti
+TARGET_FREQ_MINUTES = 6# 30 # Il macro-trend target rimane a 30 minuti
 SYNC_LOOKBACK_DAYS = "-30d"
 INFERENCE_LOOKBACK_DAYS = "-7d"
 
@@ -47,7 +47,8 @@ MIN_VALID_WATER_TEMP = 10.0
 TDS_ROLLING_WINDOW = 10
 TDS_SPIKE_THRESHOLD = 1.3
 
-DEFAULT_FREQS = [6, 2]
+# DEFAULT_FREQS = [6, 2]
+DEFAULT_FREQS = [6]
 
 # ==========================================
 # FUNZIONI HELPER DINAMICHE

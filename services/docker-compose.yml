@@ -103,11 +103,13 @@ services:
     build: ./ml_workspace/trainer_data
     container_name: ml-trainer
     shm_size: '2gb'
+    ports:
+      - "8001:8001" 
     volumes:
       - ./ml_workspace/trainer_data:/app/trainer
       - ./ml_workspace/shared_core:/app/shared_core
-    command: /bin/bash -c "python /app/trainer/cleaner.py && python /app/trainer/train.py"
-    # command: /bin/bash -c "python /app/trainer/cleaner.py"
+    # MODIFICA QUI: Entriamo in /app/trainer prima di lanciare uvicorn
+    command: /bin/bash -c "cd /app/trainer && uvicorn trainer_api:app --host 0.0.0.0 --port 8001"
     environment:
       - INFLUX_URL=http://influxdb:8086
       - INFLUX_TOKEN=${INFLUX_TOKEN}
@@ -116,7 +118,7 @@ services:
       - PYTHONUNBUFFERED=1
     depends_on:
       - influxdb
-
+    
   ml-inference:
     build: ./ml_workspace/inference_data
     container_name: ml-inference

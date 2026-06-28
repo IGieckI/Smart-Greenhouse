@@ -116,14 +116,22 @@ def train_environmental_arimas(df_clean, features, output_dir, freq_minutes):
     os.makedirs(output_dir, exist_ok=True)
     df_train = df_clean[df_clean['id_board'].isin(ACTIVE_BOARDS)].copy()
     
-    # Calcolo dinamico della coda in base ai giorni desiderati
-    tail_samples = int((ENV_ARIMA_TRAIN_DAYS * 24 * 60) / freq_minutes)
+    # STRATEGIA DI ALLEGGERIMENTO:
+    # Se freq < 6 min, ARIMA impazzisce con troppi campioni. Riduciamo la finestra a 3 giorni.
+    effective_days = ENV_ARIMA_TRAIN_DAYS if freq_minutes >= 6 else 3
+    tail_samples = int((effective_days * 24 * 60) / freq_minutes)
     
     for feat in features:
-        print(f"Addestramento per: {feat} (ultimi {tail_samples} campioni)...")
+        print(f"Addestramento per: {feat} (ultimi {tail_samples} campioni = {effective_days} giorni)...")
         y = df_train[feat].dropna().tail(tail_samples) 
         
-        best_model = pm.auto_arima(y, seasonal=False, stepwise=True, suppress_warnings=True)
+        # Limitiamo il numero massimo di iterazioni per frequenze alte
+        max_p_q = 5 if freq_minutes >= 6 else 3 
+        
+        best_model = pm.auto_arima(
+            y, seasonal=False, stepwise=True, suppress_warnings=True,
+            max_p=max_p_q, max_q=max_p_q
+        )
         print(f"-> Ottimale per {feat}: {best_model.order}")
         joblib.dump(best_model, os.path.join(output_dir, f"arima_{feat}.joblib"))
         
@@ -197,44 +205,76 @@ def run_pipeline_for_task(task_name, config, df_clean, freq_minutes):
         remainder='passthrough'
     )
 
-    models_grids = {
-        "Ridge": {
-            "model": Pipeline([
-                ('poly_features', poly_transformer), # Polinomio selettivo
-                ('scaler', MinMaxScaler()), 
-                ('regressor', Ridge())
-            ]),
-            "params": {
-                "regressor__alpha": [0.01, 0.1, 1.0, 10.0, 100.0]
-            }
-        },
-        "RandomForest": {
-            "model": generate_pipeline(RandomForestRegressor(random_state=42, n_jobs=1)), 
-            "params": {
-                "regressor__n_estimators": [100, 300, 500], 
-                "regressor__max_depth": [10, 20, None], 
-                "regressor__min_samples_split": [2, 5, 10]
-            }
-        },
-        "LightGBM": {
-            "model": generate_pipeline(LGBMRegressor(random_state=42, verbose=-1, n_jobs=1)),
-            "params": {
-                      "regressor__n_estimators": [100, 300, 500],
-                      "regressor__learning_rate": [0.01, 0.05, 0.1],
-                      "regressor__num_leaves": [31, 63, 127]}
-                    },
-        "SVR": {
-            "model": generate_pipeline(SVR()), 
-            "params": {
-                "regressor__C": [0.1, 1.0, 10.0, 100.0], 
-                "regressor__gamma": ["scale", "auto", 0.1, 0.01], 
-                "regressor__kernel": ["linear", "rbf"],
-                "regressor__epsilon": [0.000001, 0.0001, 0.01, 1]}
+    # Configurazione di default
+    cv_splits = 3
+    
+    # STRATEGIA DI ALLEGGERIMENTO PER MODELLI ML
+    is_high_freq = freq_minutes < 6
+
+    models_grids = {}
+
+    if is_high_freq:
+        print(f"\n[{task_name}] Rilevata alta frequenza ({freq_minutes}m). Utilizzo GridSearch ridotta.")
+        cv_splits = 2 # Meno validazioni incrociate
+        models_grids = {
+            "Ridge": {
+                "model": Pipeline([
+                    ('poly_features', poly_transformer),
+                    ('scaler', MinMaxScaler()), 
+                    ('regressor', Ridge())
+                ]),
+                "params": {"regressor__alpha": [0.1, 1.0, 10.0]} # Ridotte opzioni
             },
-    }
+            "LightGBM": {
+                "model": generate_pipeline(LGBMRegressor(random_state=42, verbose=-1, n_jobs=1)),
+                "params": {
+                    "regressor__n_estimators": [100, 300], # Eliminato 500
+                    "regressor__learning_rate": [0.05, 0.1],
+                    "regressor__num_leaves": [31] # Ridotta complessità albero
+                }
+            }
+            # NOTA BENE: Rimosso SVR e RandomForest. SVM ci metterebbe ore, 
+            # RF occuperebbe troppa RAM su decine di migliaia di righe.
+        }
+    else:
+        models_grids = {
+            "Ridge": {
+                "model": Pipeline([
+                    ('poly_features', poly_transformer), # Polinomio selettivo
+                    ('scaler', MinMaxScaler()), 
+                    ('regressor', Ridge())
+                ]),
+                "params": {
+                    "regressor__alpha": [0.01, 0.1, 1.0, 10.0, 100.0]
+                }
+            },
+            "RandomForest": {
+                "model": generate_pipeline(RandomForestRegressor(random_state=42, n_jobs=1)), 
+                "params": {
+                    "regressor__n_estimators": [100, 300, 500], 
+                    "regressor__max_depth": [10, 20, None], 
+                    "regressor__min_samples_split": [2, 5, 10]
+                }
+            },
+            "LightGBM": {
+                "model": generate_pipeline(LGBMRegressor(random_state=42, verbose=-1, n_jobs=1)),
+                "params": {
+                        "regressor__n_estimators": [100, 300, 500],
+                        "regressor__learning_rate": [0.01, 0.05, 0.1],
+                        "regressor__num_leaves": [31, 63, 127]}
+                        },
+            "SVR": {
+                "model": generate_pipeline(SVR()), 
+                "params": {
+                    "regressor__C": [0.1, 1.0, 10.0, 100.0], 
+                    "regressor__gamma": ["scale", "auto", 0.1, 0.01], 
+                    "regressor__kernel": ["linear", "rbf"],
+                    "regressor__epsilon": [0.000001, 0.0001, 0.01, 1]}
+                },
+        }
 
 
-    tscv = TimeSeriesSplit(n_splits=3)
+    tscv = TimeSeriesSplit(n_splits=cv_splits)
     results = {}
     best_overall_model = None
     best_overall_mae = float('inf')
