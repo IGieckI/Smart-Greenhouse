@@ -1,234 +1,146 @@
-# import pandas as pd
-# import numpy as np
+import pandas as pd
+import numpy as np
+import sys
 
-# from shared_core.config import *
-# from shared_core.preprocessing import build_advanced_features, get_extended_features_list, create_lagged_features
+sys.path.append('/app')
+from shared_core.config import *
+from shared_core.preprocessing import build_advanced_features, get_extended_features_list, create_lagged_features
 
-# def recursive_multistep_inference(
-#     T_current_data: pd.DataFrame, 
-#     arima_models: dict, 
-#     ml_model_pipeline, 
-#     task_config: dict, 
-#     steps: int = 30
-# ) -> list:
-    
-#     features = task_config["features"]
-#     use_lags = task_config["use_lags"]
-#     lag_target = task_config["lag_target"]
-    
-#     # 1. Previsione Variabili Ambientali con ARIMA
-#     env_forecasts = {}
-#     for feat in features:
-#         env_forecasts[feat] = arima_models[feat].predict(n_periods=steps)
-    
-#     df_future_env = pd.DataFrame(env_forecasts)
-    
-#     # 2. Generazione indici temporali futuri
-#     last_time = T_current_data.index[-1]
-#     future_dates = [last_time + pd.Timedelta(minutes=NOMINAL_FREQ_MINUTES * (i + 1)) for i in range(steps)]
-#     df_future_env.index = future_dates
-    
-#     all_raw_predictions = []
-#     history = T_current_data.copy()
 
-#     # 3. Ciclo Ricorsivo
-#     for step_i in range(steps):
-#         current_env_row = df_future_env.iloc[[step_i]].copy()
-#         current_env_row['leaf_temp'] = np.nan 
+def recursive_multistep_inference(
+    T_current_data: pd.DataFrame, 
+    arima_models: dict, 
+    ml_model_pipeline, 
+    task_config: dict, 
+    freq_minutes: int
+) -> list:
+    
+    features = task_config["features"]
+    use_lags = task_config["use_lags"]
+    lag_target = task_config["lag_target"]
+    
+    virtual_ratio = get_virtual_ratio(freq_minutes)
+    horizon_minutes = task_config.get("horizon_minutes", 0)
+    steps = max(1, horizon_minutes // freq_minutes) if horizon_minutes > 0 else 1
+    
+    env_forecasts = {}
+    for feat in features:
+        env_forecasts[feat] = arima_models[feat].predict(n_periods=steps)
+    
+    df_future_env = pd.DataFrame(env_forecasts)
+    last_time = T_current_data.index[-1]
+    
+    future_dates = [last_time + pd.Timedelta(minutes=freq_minutes * (i + 1)) for i in range(steps)]
+    df_future_env.index = future_dates
+    
+    target_predictions = []
+    
+    # 1. Filtriamo i dati isolando solo quelli pertinenti al task
+    cols_to_keep = features + ['leaf_temp']
+    history = T_current_data[cols_to_keep].copy()
+
+    # ==========================================
+    # FIX: RICAVIAMO LA FIRMA ESATTA DEL MODELLO
+    # Estraiamo l'ordine millimetrico delle colonne salvato 
+    # nel modello durante l'addestramento.
+    # ==========================================
+    expected_features = list(ml_model_pipeline.feature_names_in_)
+
+    for step_i in range(steps):
+        current_env_row = df_future_env.iloc[[step_i]].copy()
         
-#         history_temp = pd.concat([history, current_env_row])
+        current_env_row['leaf_temp'] = 0.0 
+        history_temp = pd.concat([history, current_env_row])
         
-#         history_advanced = build_advanced_features(history_temp, features, use_lags)
-#         extended_features = get_extended_features_list(features, use_lags)
+        is_ml_step = ((step_i + 1) % virtual_ratio == 0) if use_lags else True
         
-#         if not use_lags:
-#             X_infer = history_advanced[extended_features].iloc[-1:]
-#             pred_leaf = ml_model_pipeline.predict(X_infer)[0]
-#         else:
-#             history_lagged = create_lagged_features(history_advanced, 'leaf_temp', extended_features, lags=DEFAULT_LAGS, lag_target=lag_target)
-#             model_features = [col for col in history_lagged.columns if ('lag' in col and (lag_target or 'leaf_temp' not in col)) or col in extended_features]
-#             X_infer = history_lagged[model_features].iloc[-1:]
-#             pred_leaf = ml_model_pipeline.predict(X_infer)[0]
-
-#         current_env_row['leaf_temp'] = pred_leaf
-#         history = pd.concat([history, current_env_row])
-#         history = history.tail(DEFAULT_LAGS + 2)
-
-#         all_raw_predictions.append({
-#             "timestamp": future_dates[step_i].isoformat(),
-#             "value": round(float(pred_leaf), 3)
-#         })
-
-#     return [p["value"] for p in all_raw_predictions]
-
-
-
-# # import pandas as pd
-# # import numpy as np
-
-# # from config import *
-
-
-# # import pandas as pd
-# # import numpy as np
-
-# # from shared_core.config import *
-# # # IMPORTANTISSIMO: Dobbiamo importare dal preprocessing le funzioni avanzate!
-# # from shared_core.preprocessing import build_advanced_features, get_extended_features_list, create_lagged_features
-
-# # def recursive_multistep_inference(
-# #     T_current_data: pd.DataFrame, 
-# #     arima_models: dict, 
-# #     ml_model_pipeline, 
-# #     task_config: dict, 
-# #     steps: int = 30
-# # ) -> list:
-    
-# #     features = task_config["features"]
-# #     use_lags = task_config["use_lags"]
-# #     lag_target = task_config["lag_target"]
-    
-# #     # 1. Previsione Variabili Ambientali con ARIMA
-# #     env_forecasts = {}
-# #     for feat in features:
-# #         env_forecasts[feat] = arima_models[feat].predict(n_periods=steps)
-    
-# #     df_future_env = pd.DataFrame(env_forecasts)
-    
-# #     # 2. Generazione degli indici temporali futuri (FONDAMENTALE per il tempo ciclico)
-# #     last_time = T_current_data.index[-1]
-# #     future_dates = [last_time + pd.Timedelta(minutes=NOMINAL_FREQ_MINUTES * (i + 1)) for i in range(steps)]
-# #     df_future_env.index = future_dates
-    
-# #     all_raw_predictions = []
-# #     history = T_current_data.copy()
-
-# #     # 3. Ciclo Ricorsivo
-# #     for step_i in range(steps):
-# #         current_env_row = df_future_env.iloc[[step_i]].copy()
-# #         current_env_row['leaf_temp'] = np.nan 
-        
-# #         history_temp = pd.concat([history, current_env_row])
-        
-# #         # Le nuove feature avanzate vengono applicate qui, a tutto il blocco storico+corrente
-# #         history_advanced = build_advanced_features(history_temp, features, use_lags)
-# #         extended_features = get_extended_features_list(features, use_lags)
-        
-# #         if not use_lags:
-# #             X_infer = history_advanced[extended_features].iloc[-1:]
-# #             pred_leaf = ml_model_pipeline.predict(X_infer)[0]
-# #         else:
-# #             history_lagged = create_lagged_features(history_advanced, 'leaf_temp', extended_features, lags=DEFAULT_LAGS, lag_target=lag_target)
-# #             model_features = [col for col in history_lagged.columns if ('lag' in col and (lag_target or 'leaf_temp' not in col)) or col in extended_features]
-# #             X_infer = history_lagged[model_features].iloc[-1:]
-# #             pred_leaf = ml_model_pipeline.predict(X_infer)[0]
-
-# #         current_env_row['leaf_temp'] = pred_leaf
-# #         history = pd.concat([history, current_env_row])
-# #         history = history.tail(DEFAULT_LAGS + 2)
-
-# #         # Salviamo la previsione con il suo timestamp (utile per il filtro successivo)
-# #         all_raw_predictions.append({
-# #             "timestamp": future_dates[step_i].isoformat(),
-# #             "value": round(float(pred_leaf), 3)
-# #         })
-
-# #     # ==========================================
-# #     # PREDISPOSIZIONE PER I PUNTI 3 E 4 (Sottocampionamento a 30 min)
-# #     # ==========================================
-# #     # Quando vorremo che l'API restituisca SOLO i dati ogni 30 minuti, 
-# #     # de-commenteremo il blocco sottostante:
-    
-# #     # step_interval = int(TARGET_FREQ_MINUTES / NOMINAL_FREQ_MINUTES)
-# #     # target_predictions = []
-# #     # for i in range(step_interval - 1, len(all_raw_predictions), step_interval):
-# #     #     target_predictions.append(all_raw_predictions[i])
-# #     # return target_predictions
-
-# #     # Per ora, restituiamo tutti i valori puntuali
-# #     return [p["value"] for p in all_raw_predictions]
-
-
-# # # def recursive_multistep_inference(
-# # #     T_current_data: pd.DataFrame, 
-# # #     arima_models: dict, 
-# # #     ml_model_pipeline, 
-# # #     task_config: dict, 
-# # #     steps: int = 30
-# # # ) -> list:
-# # #     """
-# # #     Esegue il forecasting a N step nel futuro.
-# # #     T_current_data: DataFrame con l'ultimo stato noto (almeno DEFAULT_LAGS righe).
-# # #     arima_models: Dizionario con i modelli pm.auto_arima già fittati per l'ambiente.
-# # #     """
-# # #     features = task_config["features"]
-# # #     use_lags = task_config["use_lags"]
-# # #     lag_target = task_config["lag_target"]
-    
-# # #     # 1. Previsione Variabili Ambientali con ARIMA (Srotoliamo il futuro)
-# # #     env_forecasts = {}
-# # #     for feat in features:
-# # #         # ARIMA predice i prossimi 'steps' campioni (es. 30 step)
-# # #         env_forecasts[feat] = arima_models[feat].predict(n_periods=steps)
-    
-# # #     df_future_env = pd.DataFrame(env_forecasts)
-    
-# # #     # Lista per salvare le previsioni della leaf_temp
-# # #     leaf_temp_predictions = []
-    
-# # #     # Copia di lavoro dello storico per poter fare lo "shift" iterativo
-# # #     # Deve contenere gli ultimi DEFAULT_LAGS campioni reali
-# # #     history = T_current_data.copy()
-
-# # #     # 2. Ciclo Ricorsivo Step-by-Step
-# # #     for step_i in range(steps):
-# # #         # Riga ambientale prevista per lo step corrente
-# # #         current_env_row = df_future_env.iloc[[step_i]].copy()
-        
-# # #         if not use_lags:
-# # #             # ==========================================
-# # #             # TASK t1 / t4: Stima Puntuale (Direct Mapping)
-# # #             # ==========================================
-# # #             # Usiamo semplicemente le predizioni ambientali dell'ARIMA 
-# # #             # e le passiamo al modello ML per ottenere la leaf_temp.
-# # #             pred_leaf = ml_model_pipeline.predict(current_env_row)[0]
+        if is_ml_step:
+            history_advanced = build_advanced_features(history_temp, features, use_lags, virtual_ratio)
             
-# # #         else:
-# # #             # ==========================================
-# # #             # TASK t2/t5 (Lag Env) e t3/t6 (Lag Env + Lag Target)
-# # #             # ==========================================
-# # #             # Costruiamo le feature ritardate dinamicamente
-# # #             features_row = {}
-            
-# # #             # Aggiungiamo i valori ambientali attuali (predetti da ARIMA)
-# # #             for feat in features:
-# # #                 features_row[feat] = current_env_row[feat].values[0]
+            if not use_lags:
+                # Applichiamo il filtro 'expected_features' per garantire il match perfetto
+                X_infer = history_advanced[expected_features].iloc[-1:]
+            else:
+                extended_features = get_extended_features_list(features, use_lags)
+                history_lagged = create_lagged_features(history_advanced, 'leaf_temp', extended_features, virtual_ratio, lags=DEFAULT_LAGS, lag_target=lag_target)
                 
-# # #                 # Aggiungiamo i lag ambientali
-# # #                 for l in range(1, DEFAULT_LAGS + 1):
-# # #                     features_row[f'{feat}_lag_{l}'] = history[feat].iloc[-l]
-            
-# # #             # Se il task è autoregressivo (t3, t6), aggiungiamo i lag della leaf_temp
-# # #             if lag_target:
-# # #                 for l in range(1, DEFAULT_LAGS + 1):
-# # #                     features_row[f'leaf_temp_lag_{l}'] = history['leaf_temp'].iloc[-l]
+                # Applichiamo il filtro 'expected_features' anche ai lag
+                X_infer = history_lagged[expected_features].iloc[-1:]
+                
+                if X_infer.empty:
+                    raise ValueError(f"Impossibile estrarre i lag al passo {step_i}. Il dataset si è svuotato.")
                     
-# # #             # Creiamo un DataFrame mono-riga per l'inferenza
-# # #             df_infer = pd.DataFrame([features_row])
-            
-# # #             # Predizione della leaf_temp per lo step i-esimo
-# # #             pred_leaf = ml_model_pipeline.predict(df_infer)[0]
-            
-# # #             # --- AGGIORNAMENTO STORICO PER IL PROSSIMO STEP ---
-# # #             # Aggiungiamo la riga appena predetta allo storico per poter 
-# # #             # calcolare i lag al giro successivo.
-# # #             new_history_row = current_env_row.copy()
-# # #             new_history_row['leaf_temp'] = pred_leaf
-            
-# # #             history = pd.concat([history, new_history_row], ignore_index=True)
-# # #             # Manteniamo solo la finestra necessaria per non saturare la memoria
-# # #             history = history.tail(DEFAULT_LAGS)
+            pred_leaf = ml_model_pipeline.predict(X_infer)[0]
 
-# # #         leaf_temp_predictions.append(pred_leaf)
+            current_env_row['leaf_temp'] = pred_leaf
+            
+            target_predictions.append({
+                "timestamp": future_dates[step_i].isoformat(),
+                "value": round(float(pred_leaf), 3)
+            })
+            
+        history = pd.concat([history, current_env_row])
+        max_history_needed = (DEFAULT_LAGS + 2) * virtual_ratio
+        history = history.tail(max_history_needed)
 
-# # #     return leaf_temp_predictions
+    return [p["value"] for p in target_predictions]
+
+
+def ensemble_multistep_inference(
+    T_current_data: pd.DataFrame,
+    arima_models: dict,
+    ml_models: dict, 
+    task_configs: dict, 
+    freq_minutes: int,
+    soft_mae: float,
+    mae_min: float = 0.3,
+    mae_max: float = 1.0
+) -> dict:
+    
+    w_auto = max(0.0, min(1.0, (mae_max - soft_mae) / (mae_max - mae_min)))
+    w_env = 1.0 - w_auto
+
+    df_patched = T_current_data.copy()
+    df_patched['leaf_temp'] = np.nan 
+    
+    soft_cfg = task_configs["soft"]
+    virtual_ratio = get_virtual_ratio(freq_minutes)
+    
+    history_adv = build_advanced_features(df_patched, soft_cfg["features"], soft_cfg["use_lags"], virtual_ratio)
+    ext_feat_soft = get_extended_features_list(soft_cfg["features"], soft_cfg["use_lags"])
+    
+    X_soft = history_adv[ext_feat_soft].dropna()
+    
+    generated_history = []
+    if not X_soft.empty:
+        # Anche qui per sicurezza, estraiamo l'ordine esatto per il soft sensor
+        soft_expected_features = list(ml_models["soft"].feature_names_in_)
+        X_soft = X_soft[soft_expected_features]
+        
+        generated_leaf = ml_models["soft"].predict(X_soft)
+        df_patched.loc[X_soft.index, 'leaf_temp'] = generated_leaf
+        
+        generated_history = [
+            {"timestamp": ts.isoformat(), "value": round(float(val), 3)} 
+            for ts, val in zip(X_soft.index, generated_leaf)
+        ]
+
+    df_patched['leaf_temp'] = df_patched['leaf_temp'].ffill().bfill()
+
+    preds_auto = recursive_multistep_inference(
+        df_patched, arima_models, ml_models["auto"], task_configs["auto"], freq_minutes
+    )
+
+    preds_env = recursive_multistep_inference(
+        T_current_data, arima_models, ml_models["env"], task_configs["env"], freq_minutes
+    )
+
+    blended = [round(float(w_auto * p_a + w_env * p_e), 3) for p_a, p_e in zip(preds_auto, preds_env)]
+
+    return {
+        "weights": {"autoregressive": round(w_auto, 3), "environmental": round(w_env, 3)},
+        "generated_history": generated_history,
+        "forecast_env": preds_env,
+        "forecast_auto": preds_auto,
+        "forecast_blended": blended
+    }

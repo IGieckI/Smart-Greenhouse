@@ -14,36 +14,36 @@ sys.path.append('/app')
 from shared_core.data_sync import sync_clean_bucket
 from shared_core.tasks import TASKS
 from shared_core.config import *
-from shared_core.predictor import recursive_multistep_inference
+
+# MODIFICA: Import dal file locale (stessa cartella) e non più da shared_core
+from .predictor import recursive_multistep_inference, ensemble_multistep_inference
+
+
 
 app = FastAPI(title="Multi-Freq IoT Inference API")
 
-# Strutture Dati Dinamiche: dict di dict in base alla frequenza (es. loaded_models['2']['t1'])
 loaded_models = {}
 loaded_info = {}
 loaded_env_arimas = {}
 
-# Gestione JIT separata per frequenza
 sync_lock = threading.Lock()
 LAST_SYNC_TIME = {} 
 SYNC_COOLDOWN_SECONDS = 30.0  
 
 @app.on_event("startup")
 def load_assets():
-    """Scansiona BASE_MODEL_DIR per caricare i modelli di tutte le frequenze disponibili."""
     if not os.path.exists(BASE_MODEL_DIR): return
     
     for freq_folder in os.listdir(BASE_MODEL_DIR):
         if not freq_folder.endswith('m'): continue
         
-        freq_key = freq_folder.replace('m', '') # es. '2', '6'
+        freq_key = freq_folder.replace('m', '') 
         freq_path = os.path.join(BASE_MODEL_DIR, freq_folder)
         
         loaded_models[freq_key] = {}
         loaded_info[freq_key] = {}
         loaded_env_arimas[freq_key] = {}
         
-        # 1. Carica Pipeline ML
         for task in TASKS.keys():
             best_dir = os.path.join(freq_path, task, "best_model")
             model_path = os.path.join(best_dir, "best_model.joblib")
@@ -55,7 +55,6 @@ def load_assets():
                         loaded_info[freq_key][task] = json.load(f)
                 print(f"[RAM {freq_folder}] Pipeline {task.upper()} caricata!")
 
-        # 2. Carica ARIMA
         env_dir = os.path.join(freq_path, "env_forecasters")
         if os.path.exists(env_dir):
             for feat in TASKS["t1"]["features"]:
@@ -106,13 +105,24 @@ def fetch_historical_data(board_id: str, limit: int, freq_minutes: int) -> pd.Da
         if not df.empty:
             df.set_index('_time', inplace=True)
             df.sort_index(inplace=True)
+            # print(df.head())
         return df
     except Exception as e:
         print(f"Errore query Influx: {e}")
         return pd.DataFrame()
 
-@app.get("/predict/{freq_minutes}m/{task}/latest")
-def predict_latest(freq_minutes: int, task: str, board_id: str = "9"):
+def prepare_arimas_for_inference(freq_key: str, df_history: pd.DataFrame) -> dict:
+    local_arimas = {}
+    for feat, arima_model in loaded_env_arimas[freq_key].items():
+        if feat in df_history.columns:
+            obs = df_history[feat].dropna().values
+            local_model = copy.deepcopy(arima_model)
+            local_model.update(obs)  
+            local_arimas[feat] = local_model
+    return local_arimas
+
+@app.get("/predict/{freq_minutes}m/standard/{task}/latest")
+def predict_latest(freq_minutes: int, task: str, board_id: str = DEFAULT_BOARD_ID):
     freq_key = str(freq_minutes)
     if freq_key not in loaded_models or task not in loaded_models[freq_key]:
         raise HTTPException(status_code=404, detail=f"Task {task} o frequenza {freq_minutes}m non configurati.")
@@ -127,17 +137,10 @@ def predict_latest(freq_minutes: int, task: str, board_id: str = "9"):
     time_span = df_history.index[-1] - df_history.index[0]
     expected_span = pd.Timedelta(minutes=freq_minutes * (len(df_history) - 1))
     
-    # Margine di tolleranza calcolato per assorbire 3-4 sample mancanti
     if abs(time_span - expected_span) > pd.Timedelta(minutes=freq_minutes * 4):
         raise HTTPException(status_code=400, detail=f"Integrità temporale compromessa.")
 
-    local_arimas = {}
-    for feat, arima_model in loaded_env_arimas[freq_key].items():
-        if feat in df_history.columns:
-            obs = df_history[feat].dropna().values
-            local_model = copy.deepcopy(arima_model)
-            local_model.update(obs)  
-            local_arimas[feat] = local_model
+    local_arimas = prepare_arimas_for_inference(freq_key, df_history)
 
     pred_list = recursive_multistep_inference(
         T_current_data=df_history, arima_models=local_arimas,
@@ -151,14 +154,108 @@ def predict_latest(freq_minutes: int, task: str, board_id: str = "9"):
         "prediction_steps": len(pred_list), "predictions": pred_list
     }
 
+# NUOVO ENDPOINT ENSEMBLE
+@app.get("/predict/{freq_minutes}m/ensemble/{group}/latest")
+def predict_ensemble(freq_minutes: int, group: str = "B", board_id: str = DEFAULT_BOARD_ID):
+    freq_key = str(freq_minutes)
+    group = group.upper()
+    
+    # Assegnazione Task in base al gruppo scelto
+    if group == 'A':
+        t_soft, t_env, t_auto = "t1", "t2", "t3"
+    elif group == 'B':
+        t_soft, t_env, t_auto = "t4", "t5", "t6"
+    else:
+        raise HTTPException(status_code=400, detail="Il gruppo deve essere 'A' (con TDS) o 'B' (senza TDS).")
+
+    # Verifica disponibilità modelli
+    for t in [t_soft, t_env, t_auto]:
+        if freq_key not in loaded_models or t not in loaded_models[freq_key]:
+            raise HTTPException(status_code=404, detail=f"Modelli incompleti per il gruppo {group} a {freq_minutes}m.")
+    
+    fetch_latest, _ = get_fetch_limits(freq_minutes)
+    df_history = fetch_historical_data(board_id, limit=fetch_latest, freq_minutes=freq_minutes)
+    min_history = get_min_history_records(freq_minutes)
+    
+    if len(df_history) < min_history:
+        raise HTTPException(status_code=400, detail=f"Dati storici insufficienti per board {board_id}.")
+
+    # Recupera il MAE del Soft Sensor per calcolare il peso
+    mae_soft = loaded_info[freq_key].get(t_soft, {}).get("mae", 1.0) 
+
+    local_arimas = prepare_arimas_for_inference(freq_key, df_history)
+    
+    ml_models = {
+        "soft": loaded_models[freq_key][t_soft],
+        "env": loaded_models[freq_key][t_env],
+        "auto": loaded_models[freq_key][t_auto]
+    }
+    
+    task_configs = {
+        "soft": TASKS[t_soft],
+        "env": TASKS[t_env],
+        "auto": TASKS[t_auto]
+    }
+
+    print("\n\n\n")
+
+    print(fetch_latest)
+    print("\n\n\n")
+    print(df_history)
+    print("\n\n\n")
+    print(min_history)
+    print("\n\n\n")
+    print(mae_soft)
+    print("\n\n\n")
+    print(local_arimas)
+    print("\n\n\n")
+    print(ml_models)
+    print("\n\n\n")
+    print(task_configs)
+
+
+    print("\n\n\n")
+
+    result = ensemble_multistep_inference(
+        T_current_data=df_history, 
+        arima_models=local_arimas, 
+        ml_models=ml_models, 
+        task_configs=task_configs, 
+        freq_minutes=freq_minutes, 
+        soft_mae=mae_soft
+    )
+    
+    # Calcoliamo i timestamp per le previsioni (che sono proiettate nel futuro)
+    last_timestamp = df_history.index[-1]
+    future_timestamps = [
+        (last_timestamp + pd.Timedelta(minutes=freq_minutes * (i + 1))).isoformat()
+        for i in range(len(result["forecast_blended"]))
+    ]
+    
+    # Funzione helper per associare timestamps ai listati di float
+    def map_forecast_to_dicts(values_list):
+        return [{"timestamp": t, "value": v} for t, v in zip(future_timestamps, values_list)]
+    
+    return {
+        "group": group,
+        "frequency": f"{freq_minutes}m",
+        "tasks_used": [t_soft, t_env, t_auto],
+        "soft_sensor_mae": round(mae_soft, 3),
+        "weights": result["weights"],
+        "prediction_steps": len(result["forecast_blended"]),
+        "generated_history": result["generated_history"],
+        "forecast_env": map_forecast_to_dicts(result["forecast_env"]),
+        "forecast_auto": map_forecast_to_dicts(result["forecast_auto"]),
+        "forecast_blended": map_forecast_to_dicts(result["forecast_blended"])
+    }
+
+# ... (resto del file) ...
 @app.get("/info/{freq_minutes}m/{task}")
 def get_task_info(freq_minutes: int, task: str):
     freq_key = str(freq_minutes)
     if freq_key not in loaded_info or task not in loaded_info[freq_key]:
         raise HTTPException(status_code=404, detail="Metriche non trovate.")
     return loaded_info[freq_key][task]
-
-
 
 @app.post("/reload-models")
 def reload_models():
