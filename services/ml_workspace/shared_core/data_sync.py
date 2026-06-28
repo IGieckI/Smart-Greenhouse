@@ -4,23 +4,27 @@ from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
 from shared_core.config import *
-# Spostato qui l'import della pipeline globale, rimossi quelli non più necessari per il file
 from shared_core.preprocessing import apply_board_pipeline 
 
-def sync_clean_bucket(influx_url, influx_token, influx_org):
-    """Controlla se ci sono nuovi dati in BUCKET_RAW, li pulisce e li salva in BUCKET_CLEAN."""
+# IMPORTANTE: Parametro freq_minutes aggiunto
+def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
+    """Sincronizza e processa i dati RAW verso un bucket con campionamento dinamico."""
+    
+    # Nome dinamico del DB di destinazione!
+    bucket_clean = f"{BUCKET_CLEAN_PREFIX}{freq_minutes}m"
+    
     client = InfluxDBClient(url=influx_url, token=influx_token, org=influx_org)
     
-    # 1. Assicurati che il bucket pulito esista
+    # 1. Assicurati che il bucket pulito dinamico esista
     buckets_api = client.buckets_api()
-    if buckets_api.find_bucket_by_name(BUCKET_CLEAN) is None:
-        print(f"[Sync] Bucket '{BUCKET_CLEAN}' non trovato. Creazione in corso...")
-        buckets_api.create_bucket(bucket_name=BUCKET_CLEAN, org=influx_org)
+    if buckets_api.find_bucket_by_name(bucket_clean) is None:
+        print(f"[Sync] Bucket '{bucket_clean}' non trovato. Creazione in corso...")
+        buckets_api.create_bucket(bucket_name=bucket_clean, org=influx_org)
 
-    # 2. Trova l'ultimo timestamp pulito
+    # 2. Trova l'ultimo timestamp pulito da questo specifico bucket
     query_api = client.query_api()
     query_last = f'''
-        from(bucket: "{BUCKET_CLEAN}")
+        from(bucket: "{bucket_clean}")
           |> range(start: {SYNC_LOOKBACK_DAYS})
           |> filter(fn: (r) => r._measurement == "sensor_measurements")
           |> last()
@@ -51,7 +55,6 @@ def sync_clean_bucket(influx_url, influx_token, influx_org):
         df_raw = pd.concat(df_raw, ignore_index=True)
     if df_raw.empty: return
 
-    # Unificazione label TDS
     if 'tds_value' in df_raw.columns:
         if 'tds' in df_raw.columns:
             df_raw['tds'] = df_raw['tds'].combine_first(df_raw['tds_value'])
@@ -66,17 +69,20 @@ def sync_clean_bucket(influx_url, influx_token, influx_org):
         df_board.set_index('_time', inplace=True)
         df_board.sort_index(inplace=True)
 
-        # Regolarizzazione temporale (aggiunto numeric_only=True per evitare eccezioni)
-        freq_str = f"{NOMINAL_FREQ_MINUTES}min"
+        # Regolarizzazione temporale parametrica
+        freq_str = f"{freq_minutes}min"
         df_board = df_board.resample(freq_str).mean(numeric_only=True)
         df_board['id_board'] = board 
 
-        # Applicazione dinamica pipeline
+        # A. Esegui la pipeline sofisticata (Gaussiana) prima, in presenza dei gap strutturali
         df_clean = apply_board_pipeline(df_board, board)
+        
+        # B. NOVITÀ: Interpolazione lineare per sistemare le variabili ambientali 
+        # (es. air_temp) sui micro-buchi creati passando da 6m a 2m
+        df_clean = df_clean.interpolate(method='linear', limit_direction='both')
 
         cols_to_drop = ['result', 'table', '_start', '_stop', '_measurement', 'block_id', 'leaf_weight']
         df_clean = df_clean.drop(columns=[c for c in cols_to_drop if c in df_clean.columns])
-
         df_clean.dropna(how='all', subset=[c for c in df_clean.columns if c != 'id_board'], inplace=True)
 
         points = []
@@ -88,5 +94,5 @@ def sync_clean_bucket(influx_url, influx_token, influx_org):
             points.append(p)
         
         if points:
-            write_api.write(bucket=BUCKET_CLEAN, org=influx_org, record=points)
-            print(f"[Sync] Inseriti {len(points)} nuovi record per board {board}")
+            write_api.write(bucket=bucket_clean, org=influx_org, record=points)
+            print(f"[Sync {freq_minutes}m] Inseriti {len(points)} record (Board {board})")
