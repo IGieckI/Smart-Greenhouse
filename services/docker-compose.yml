@@ -139,9 +139,6 @@ services:
   tg-bot:
     build: ./tg-bot
     container_name: tg-bot
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
     volumes:
       - ./tg-bot:/app
     command: python bot.py

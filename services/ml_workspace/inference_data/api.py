@@ -15,6 +15,7 @@ sys.path.append('/app')
 from shared_core.data_sync import sync_clean_bucket
 from shared_core.tasks import TASKS
 from shared_core.config import *
+from shared_core.preprocessing import build_advanced_features # Imported the native feature builder
 from .predictor import recursive_multistep_inference, ensemble_multistep_inference
 
 app = FastAPI(title="Multi-Freq IoT Inference API")
@@ -39,17 +40,6 @@ def calculate_vpd(t_leaf: float, t_air: float, rh: float) -> float:
     ea_air = svp(t_air) * (rh / 100.0)
     return max(0.0, es_leaf - ea_air)
 
-def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Extracts cyclical time features (time_sin, time_cos) from the DatetimeIndex."""
-    if not df.empty and isinstance(df.index, pd.DatetimeIndex):
-        # Calculate total minutes elapsed since midnight
-        minutes_past_midnight = df.index.hour * 60 + df.index.minute
-        
-        # 1440 = 24 hours * 60 minutes
-        df['time_sin'] = np.sin(2 * np.pi * minutes_past_midnight / 1440.0)
-        df['time_cos'] = np.cos(2 * np.pi * minutes_past_midnight / 1440.0)
-    return df
-
 def format_series(timestamps: List[Any], values: List[float]) -> List[Dict[str, Any]]:
     """Homologates time series data to a standardized dictionary format."""
     return [{"timestamp": t.isoformat() if hasattr(t, 'isoformat') else t, "value": round(v, 4)} 
@@ -66,10 +56,6 @@ def get_soft_task(task_or_group: str) -> str:
 
 @app.on_event("startup")
 def load_assets():
-    for t_key in TASKS:
-        if "features" in TASKS[t_key] and "time_sin" not in TASKS[t_key]["features"]:
-            TASKS[t_key]["features"] = list(TASKS[t_key]["features"]) + ["time_sin", "time_cos"]
-
     if not os.path.exists(BASE_MODEL_DIR): return
     for freq_folder in os.listdir(BASE_MODEL_DIR):
         if not freq_folder.endswith('m'): continue
@@ -93,9 +79,6 @@ def load_assets():
         env_dir = os.path.join(freq_path, "env_forecasters")
         if os.path.exists(env_dir):
             for feat in TASKS["t1"]["features"]:
-                # Ignore the time features for ARIMA loading
-                if feat in ["time_sin", "time_cos"]: continue 
-                
                 arima_path = os.path.join(env_dir, f"arima_{feat}.joblib")
                 if os.path.exists(arima_path):
                     loaded_env_arimas[freq_key][feat] = joblib.load(arima_path)
@@ -158,13 +141,7 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
     if len(df_history) < get_min_history_records(freq_minutes):
         raise HTTPException(status_code=400, detail=f"Dati insufficienti per board {board_id}.")
 
-    # 1. ADD TIME FEATURES HERE
-    # We must generate time_sin and time_cos before any model sees the dataframe
-    df_history = add_time_features(df_history)
-
-    print(df_history)
-
-    # 2. WHAT-IF Injection (Manual override)
+    # 1. WHAT-IF Injection (Manual override)
     if custom_data:
         last_idx = df_history.index[-1]
         custom_values = custom_data.dict(exclude_none=True)
@@ -172,23 +149,37 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
             if k in df_history.columns:
                 df_history.loc[last_idx, k] = v
 
-    # 3. Prevent Cheating: Impute Historical Leaf Temp using Soft Sensor (t1/t4)
+    # 2. Prevent Cheating: ALWAYS Impute Historical Leaf Temp using Soft Sensor (T1/T4)
     soft_task = get_soft_task(task_or_group)
     soft_model = loaded_models.get(freq_key, {}).get(soft_task)
     
     if not use_real_leaf_temp and soft_model:
-        features = TASKS[soft_task]["features"]
-        # Ensure all required features (including time_sin/time_cos) are available
-        if all(feat in df_history.columns for feat in features):
-            df_history['leaf_temp'] = soft_model.predict(df_history[features])
+        soft_config = TASKS[soft_task]
+        virtual_ratio = get_virtual_ratio(freq_minutes)
+        
+        # Build advanced features properly using the shared_core logic (Adds time_sin/cos flawlessly)
+        df_history_adv = build_advanced_features(
+            df_history, 
+            soft_config["features"], 
+            soft_config.get("use_lags", False), 
+            virtual_ratio
+        )
+        
+        # Ensure we slice EXACTLY the features the soft model was trained on
+        expected_features = list(soft_model.feature_names_in_)
+        valid_idx = df_history_adv.dropna(subset=expected_features).index
+        
+        if not valid_idx.empty:
+            # Overwrite the physical history with the calculated Soft Sensor data
+            df_history.loc[valid_idx, 'leaf_temp'] = soft_model.predict(df_history_adv.loc[valid_idx, expected_features])
 
-    # 4. Calculate Historical VPD
+    # 3. Calculate Historical VPD
     df_history['vpd'] = df_history.apply(
         lambda row: calculate_vpd(row.get('leaf_temp', 0), row.get('air_temp', 0), row.get('humidity', 0)), 
         axis=1
     )
 
-    # 5. Prepare ARIMAs
+    # 4. Prepare ARIMAs
     local_arimas = {}
     for feat, arima_model in loaded_env_arimas.get(freq_key, {}).items():
         if feat in df_history.columns:
