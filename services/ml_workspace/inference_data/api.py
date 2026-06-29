@@ -5,16 +5,16 @@ import joblib
 import copy
 import time
 import threading
+import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 sys.path.append('/app')
 from shared_core.data_sync import sync_clean_bucket
 from shared_core.tasks import TASKS
 from shared_core.config import *
-
 from .predictor import recursive_multistep_inference, ensemble_multistep_inference
 
 app = FastAPI(title="Multi-Freq IoT Inference API")
@@ -27,6 +27,32 @@ sync_lock = threading.Lock()
 LAST_SYNC_TIME = {} 
 SYNC_COOLDOWN_SECONDS = 30.0  
 
+# ---
+# Helper Functions for VPD and formatting
+
+def calculate_vpd(t_leaf: float, t_air: float, rh: float) -> float:
+    """Calculates Vapor Pressure Deficit (VPD) in kPa."""
+    def svp(t):
+        return 0.61078 * np.exp((17.27 * t) / (t + 237.3))
+    
+    es_leaf = svp(t_leaf)
+    ea_air = svp(t_air) * (rh / 100.0)
+    return max(0.0, es_leaf - ea_air)
+
+def format_series(timestamps: List[Any], values: List[float]) -> List[Dict[str, Any]]:
+    """Homologates time series data to a standardized dictionary format."""
+    return [{"timestamp": t.isoformat() if hasattr(t, 'isoformat') else t, "value": round(v, 4)} 
+            for t, v in zip(timestamps, values)]
+
+def get_soft_task(task_or_group: str) -> str:
+    """Maps a task or group to its corresponding soft sensor task."""
+    task_or_group = task_or_group.upper()
+    if task_or_group in ['T1', 'T2', 'T3', 'A']: return 't1'
+    if task_or_group in ['T4', 'T5', 'T6', 'B']: return 't4'
+    return 't4' 
+
+# ---
+
 @app.on_event("startup")
 def load_assets():
     if not os.path.exists(BASE_MODEL_DIR): return
@@ -37,6 +63,7 @@ def load_assets():
         loaded_models[freq_key] = {}
         loaded_info[freq_key] = {}
         loaded_env_arimas[freq_key] = {}
+        
         for task in TASKS.keys():
             best_dir = os.path.join(freq_path, task, "best_model")
             model_path = os.path.join(best_dir, "best_model.joblib")
@@ -47,6 +74,7 @@ def load_assets():
                     with open(info_path, "r") as f:
                         loaded_info[freq_key][task] = json.load(f)
                 print(f"[RAM {freq_folder}] Pipeline {task.upper()} caricata!")
+                
         env_dir = os.path.join(freq_path, "env_forecasters")
         if os.path.exists(env_dir):
             for feat in TASKS["t1"]["features"]:
@@ -101,71 +129,117 @@ def fetch_historical_data(board_id: str, limit: int, freq_minutes: int) -> pd.Da
         print(f"Errore query Influx: {e}")
         return pd.DataFrame()
 
-def prepare_arimas_for_inference(freq_key: str, df_history: pd.DataFrame) -> dict:
+
+def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: str, 
+                               custom_data: Optional[SensorData] = None, 
+                               use_real_leaf_temp: bool = False) -> tuple:
+    """DRY Function to handle fetching, injecting, imputing leaf_temp, and ARIMA prep."""
+    freq_key = str(freq_minutes)
+    fetch_latest, _ = get_fetch_limits(freq_minutes)
+    df_history = fetch_historical_data(board_id, limit=fetch_latest, freq_minutes=freq_minutes)
+    
+    if len(df_history) < get_min_history_records(freq_minutes):
+        raise HTTPException(status_code=400, detail=f"Dati insufficienti per board {board_id}.")
+
+    # 1. WHAT-IF Injection (Manual override)
+    if custom_data:
+        last_idx = df_history.index[-1]
+        custom_values = custom_data.dict(exclude_none=True)
+        for k, v in custom_values.items():
+            if k in df_history.columns:
+                df_history.loc[last_idx, k] = v
+
+    # 2. Prevent Cheating: Impute Historical Leaf Temp using Soft Sensor (t1/t4)
+    soft_task = get_soft_task(task_or_group)
+    soft_model = loaded_models.get(freq_key, {}).get(soft_task)
+    
+    if not use_real_leaf_temp and soft_model:
+        features = TASKS[soft_task]["features"]
+        # Ensure all required features are available before predicting
+        if all(feat in df_history.columns for feat in features):
+            df_history['leaf_temp'] = soft_model.predict(df_history[features])
+
+    # 3. Calculate Historical VPD
+    df_history['vpd'] = df_history.apply(
+        lambda row: calculate_vpd(row.get('leaf_temp', 0), row.get('air_temp', 0), row.get('humidity', 0)), 
+        axis=1
+    )
+
+    # 4. Prepare ARIMAs
     local_arimas = {}
-    for feat, arima_model in loaded_env_arimas[freq_key].items():
+    for feat, arima_model in loaded_env_arimas.get(freq_key, {}).items():
         if feat in df_history.columns:
             obs = df_history[feat].dropna().values
             local_model = copy.deepcopy(arima_model)
             local_model.update(obs)  
             local_arimas[feat] = local_model
-    return local_arimas
+
+    return df_history, local_arimas
 
 
-@app.get("/predict/{freq_minutes}m/standard/{task}/latest")
-def predict_latest(freq_minutes: int, task: str, board_id: str = DEFAULT_BOARD_ID):
+# API Routes
+
+def _run_standard_inference(freq_minutes: int, task: str, board_id: str, 
+                            custom_data: Optional[SensorData] = None, 
+                            use_real_leaf_temp: bool = False):
     freq_key = str(freq_minutes)
     if freq_key not in loaded_models or task not in loaded_models[freq_key]:
         raise HTTPException(status_code=404, detail=f"Task {task} non configurato.")
         
-    fetch_latest, _ = get_fetch_limits(freq_minutes)
-    df_history = fetch_historical_data(board_id, limit=fetch_latest, freq_minutes=freq_minutes)
-    min_history = get_min_history_records(freq_minutes)
-    if len(df_history) < min_history:
-        raise HTTPException(status_code=400, detail=f"Dati insufficienti per board {board_id}.")
+    df_history, local_arimas = _prepare_inference_context(
+        freq_minutes, board_id, task, custom_data, use_real_leaf_temp
+    )
 
-    local_arimas = prepare_arimas_for_inference(freq_key, df_history)
     pred_list = recursive_multistep_inference(
         T_current_data=df_history, arima_models=local_arimas,
         ml_model_pipeline=loaded_models[freq_key][task],
         task_config=TASKS[task], freq_minutes=freq_minutes
     )
     
+    last_timestamp = df_history.index[-1]
+    future_timestamps = [last_timestamp + pd.Timedelta(minutes=freq_minutes * (i + 1)) for i in range(len(pred_list))]
+    
+    # Calculate Future VPD if predicting leaf_temp
+    future_vpd = []
+    if TASKS[task]["target"] == "leaf_temp":
+        air_preds = local_arimas["air_temp"].predict(n_periods=len(pred_list))
+        hum_preds = local_arimas["humidity"].predict(n_periods=len(pred_list))
+        future_vpd = [calculate_vpd(lt, at, rh) for lt, at, rh in zip(pred_list, air_preds, hum_preds)]
+
     return {
-        "task": task, "frequency": f"{freq_minutes}m", "target": TASKS[task]["target"],
-        "model_used": loaded_info[freq_key].get(task, {}).get("best_model", "Unknown"),
-        "prediction_steps": len(pred_list), "predictions": pred_list
+        "task": task, 
+        "frequency": f"{freq_minutes}m", 
+        "target": TASKS[task]["target"],
+        "historical": {
+            "leaf_temp_estimated": format_series(df_history.index, df_history.get('leaf_temp', [])),
+            "vpd_calculated": format_series(df_history.index, df_history.get('vpd', []))
+        },
+        "predictions": {
+            "target_forecast": format_series(future_timestamps, pred_list),
+            "vpd_forecast": format_series(future_timestamps, future_vpd) if future_vpd else None
+        }
     }
 
+
+@app.get("/predict/{freq_minutes}m/standard/{task}/latest")
+def predict_latest(freq_minutes: int, task: str, board_id: str = DEFAULT_BOARD_ID, 
+                   use_real_leaf_temp: bool = Query(False, description="Set True to use physical sensor historical data instead of Soft Sensor")):
+    return _run_standard_inference(freq_minutes, task, board_id, None, use_real_leaf_temp)
+
+
 @app.post("/predict/{freq_minutes}m/standard/{task}/manual")
-def predict_manual(freq_minutes: int, task: str, custom_data: SensorData, board_id: str = DEFAULT_BOARD_ID):
-    freq_key = str(freq_minutes)
-    if freq_key not in loaded_models or task not in loaded_models[freq_key]:
-        raise HTTPException(status_code=404, detail=f"Task {task} non configurato.")
-        
-    fetch_latest, _ = get_fetch_limits(freq_minutes)
-    df_history = fetch_historical_data(board_id, limit=fetch_latest, freq_minutes=freq_minutes)
-    if len(df_history) < get_min_history_records(freq_minutes):
-        raise HTTPException(status_code=400, detail="Dati insufficienti.")
-
-    # INIEZIONE WHAT-IF (Standard)
-    last_idx = df_history.index[-1]
-    custom_values = custom_data.dict(exclude_none=True)
-    for k, v in custom_values.items():
-        if k in df_history.columns:
-            df_history.loc[last_idx, k] = v
-
-    local_arimas = prepare_arimas_for_inference(freq_key, df_history)
-    pred_list = recursive_multistep_inference(
-        T_current_data=df_history, arima_models=local_arimas,
-        ml_model_pipeline=loaded_models[freq_key][task],
-        task_config=TASKS[task], freq_minutes=freq_minutes
-    )
-    return {"task": task, "frequency": f"{freq_minutes}m", "predictions": pred_list}
+def predict_manual(freq_minutes: int, task: str, custom_data: SensorData, board_id: str = DEFAULT_BOARD_ID,
+                   use_real_leaf_temp: bool = Query(False, description="Set True to use physical sensor historical data instead of Soft Sensor")):
+    return _run_standard_inference(freq_minutes, task, board_id, custom_data, use_real_leaf_temp)
 
 
-@app.get("/predict/{freq_minutes}m/ensemble/{group}/latest")
-def predict_ensemble(freq_minutes: int, group: str = "B", board_id: str = DEFAULT_BOARD_ID):
+#############
+
+
+
+def _run_ensemble_inference(freq_minutes: int, group: str, board_id: str, 
+                            custom_data: Optional[SensorData] = None, 
+                            use_real_leaf_temp: bool = False):
     freq_key = str(freq_minutes)
     group = group.upper()
     if group == 'A': t_soft, t_env, t_auto = "t1", "t2", "t3"
@@ -174,96 +248,64 @@ def predict_ensemble(freq_minutes: int, group: str = "B", board_id: str = DEFAUL
 
     for t in [t_soft, t_env, t_auto]:
         if freq_key not in loaded_models or t not in loaded_models[freq_key]:
-            raise HTTPException(status_code=404, detail=f"Modelli incompleti.")
-    
-    fetch_latest, _ = get_fetch_limits(freq_minutes)
-    df_history = fetch_historical_data(board_id, limit=fetch_latest, freq_minutes=freq_minutes)
-    if len(df_history) < get_min_history_records(freq_minutes):
-        raise HTTPException(status_code=400, detail="Dati storici insufficienti.")
+            raise HTTPException(status_code=404, detail="Modelli incompleti.")
 
-    mae_soft = loaded_info[freq_key].get(t_soft, {}).get("mae", 1.0) 
-    local_arimas = prepare_arimas_for_inference(freq_key, df_history)
-    
+    df_history, local_arimas = _prepare_inference_context(
+        freq_minutes, board_id, group, custom_data, use_real_leaf_temp
+    )
+
     ml_models = {"soft": loaded_models[freq_key][t_soft], "env": loaded_models[freq_key][t_env], "auto": loaded_models[freq_key][t_auto]}
     task_configs = {"soft": TASKS[t_soft], "env": TASKS[t_env], "auto": TASKS[t_auto]}
 
     result = ensemble_multistep_inference(
         T_current_data=df_history, arima_models=local_arimas, 
         ml_models=ml_models, task_configs=task_configs, 
-        freq_minutes=freq_minutes#, soft_mae=mae_soft
+        freq_minutes=freq_minutes
     )
     
     last_timestamp = df_history.index[-1]
-    future_timestamps = [(last_timestamp + pd.Timedelta(minutes=freq_minutes * (i + 1))).isoformat() for i in range(len(result["forecast_blended"]))]
+    future_timestamps = [last_timestamp + pd.Timedelta(minutes=freq_minutes * (i + 1)) for i in range(len(result["forecast_blended"]))]
     
-    # Prepariamo le serie temporali per il bot
-    def map_series(values_list):
-        return [{"timestamp": t, "value": v} for t, v in zip(future_timestamps, values_list)]
-    
+    # Calculate Future VPD based on blended prediction
+    air_preds = local_arimas["air_temp"].predict(n_periods=len(result["forecast_blended"]))
+    hum_preds = local_arimas["humidity"].predict(n_periods=len(result["forecast_blended"]))
+    future_vpd = [calculate_vpd(lt, at, rh) for lt, at, rh in zip(result["forecast_blended"], air_preds, hum_preds)]
+
+    mae_soft = loaded_info.get(freq_key, {}).get(t_soft, {}).get("mae", 1.0) 
+
     return {
         "group": group, 
         "frequency": f"{freq_minutes}m", 
         "soft_sensor_mae": round(mae_soft, 3),
-        "forecast_blended": map_series(result["forecast_blended"]),
-        "forecast_env": map_series(result["forecast_env"]),    # Nuova serie
-        "forecast_auto": map_series(result["forecast_auto"]),  # Nuova serie
-        "arima_projections": {                                 # Dati per calcolare VPD
-            "air_temp": map_series(local_arimas["air_temp"].predict(n_periods=len(result["forecast_blended"]))),
-            "humidity": map_series(local_arimas["humidity"].predict(n_periods=len(result["forecast_blended"])))
+        "historical": {
+            "leaf_temp_estimated": format_series(df_history.index, df_history.get('leaf_temp', [])),
+            "vpd_calculated": format_series(df_history.index, df_history.get('vpd', []))
+        },
+        "predictions": {
+            "forecast_blended": format_series(future_timestamps, result["forecast_blended"]),
+            "forecast_env": format_series(future_timestamps, result["forecast_env"]),
+            "forecast_auto": format_series(future_timestamps, result["forecast_auto"]),
+            "vpd_forecast": format_series(future_timestamps, future_vpd)
+        },
+        "arima_projections": {
+            "air_temp": format_series(future_timestamps, air_preds),
+            "humidity": format_series(future_timestamps, hum_preds)
         }
     }
+
+
+@app.get("/predict/{freq_minutes}m/ensemble/{group}/latest")
+def predict_ensemble(freq_minutes: int, group: str = "B", board_id: str = DEFAULT_BOARD_ID,
+                     use_real_leaf_temp: bool = Query(False, description="Set True to use physical sensor historical data instead of Soft Sensor")):
+    return _run_ensemble_inference(freq_minutes, group, board_id, None, use_real_leaf_temp)
+
 
 @app.post("/predict/{freq_minutes}m/ensemble/{group}/manual")
-def predict_ensemble_manual(freq_minutes: int, group: str, custom_data: SensorData, board_id: str = DEFAULT_BOARD_ID):
-    freq_key = str(freq_minutes)
-    group = group.upper()
-    if group == 'A': t_soft, t_env, t_auto = "t1", "t2", "t3"
-    elif group == 'B': t_soft, t_env, t_auto = "t4", "t5", "t6"
-    else: raise HTTPException(status_code=400, detail="Gruppo 'A' o 'B'.")
+def predict_ensemble_manual(freq_minutes: int, group: str, custom_data: SensorData, board_id: str = DEFAULT_BOARD_ID,
+                            use_real_leaf_temp: bool = Query(False, description="Set True to use physical sensor historical data instead of Soft Sensor")):
+    return _run_ensemble_inference(freq_minutes, group, board_id, custom_data, use_real_leaf_temp)
 
-    fetch_latest, _ = get_fetch_limits(freq_minutes)
-    df_history = fetch_historical_data(board_id, limit=fetch_latest, freq_minutes=freq_minutes)
-    if len(df_history) < get_min_history_records(freq_minutes):
-        raise HTTPException(status_code=400, detail="Dati storici insufficienti.")
-
-    # INIEZIONE WHAT-IF (Ensemble)
-    last_idx = df_history.index[-1]
-    custom_values = custom_data.dict(exclude_none=True)
-    for k, v in custom_values.items():
-        if k in df_history.columns:
-            df_history.loc[last_idx, k] = v
-
-    mae_soft = loaded_info[freq_key].get(t_soft, {}).get("mae", 1.0) 
-    local_arimas = prepare_arimas_for_inference(freq_key, df_history)
-    
-    ml_models = {"soft": loaded_models[freq_key][t_soft], "env": loaded_models[freq_key][t_env], "auto": loaded_models[freq_key][t_auto]}
-    task_configs = {"soft": TASKS[t_soft], "env": TASKS[t_env], "auto": TASKS[t_auto]}
-
-    result = ensemble_multistep_inference(
-        T_current_data=df_history, arima_models=local_arimas, 
-        ml_models=ml_models, task_configs=task_configs, 
-        freq_minutes=freq_minutes#, soft_mae=mae_soft
-    )
-    
-    last_timestamp = df_history.index[-1]
-    future_timestamps = [(last_timestamp + pd.Timedelta(minutes=freq_minutes * (i + 1))).isoformat() for i in range(len(result["forecast_blended"]))]
-    
-    # Prepariamo le serie temporali per il bot
-    def map_series(values_list):
-        return [{"timestamp": t, "value": v} for t, v in zip(future_timestamps, values_list)]
-    
-    return {
-        "group": group, 
-        "frequency": f"{freq_minutes}m", 
-        "soft_sensor_mae": round(mae_soft, 3),
-        "forecast_blended": map_series(result["forecast_blended"]),
-        "forecast_env": map_series(result["forecast_env"]),    # Nuova serie
-        "forecast_auto": map_series(result["forecast_auto"]),  # Nuova serie
-        "arima_projections": {                                 # Dati per calcolare VPD
-            "air_temp": map_series(local_arimas["air_temp"].predict(n_periods=len(result["forecast_blended"]))),
-            "humidity": map_series(local_arimas["humidity"].predict(n_periods=len(result["forecast_blended"])))
-        }
-    }
+################
 
 @app.get("/info/{freq_minutes}m/{task}")
 def get_task_info(freq_minutes: int, task: str):
@@ -271,6 +313,7 @@ def get_task_info(freq_minutes: int, task: str):
     if freq_key not in loaded_info or task not in loaded_info[freq_key]:
         raise HTTPException(status_code=404, detail="Metriche non trovate.")
     return loaded_info[freq_key][task]
+
 
 @app.post("/reload-models")
 def reload_models():

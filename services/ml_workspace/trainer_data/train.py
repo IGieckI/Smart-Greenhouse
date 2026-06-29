@@ -28,9 +28,12 @@ from shared_core.preprocessing import build_advanced_features, get_extended_feat
 from shared_core.config import *
 from shared_core.tasks import TASKS
 
+# ==========================================
+# DATA FETCHING
+# ==========================================
 
 def fetch_clean_data(freq_minutes: int):
-    """Extracts data from the dynamic bucket based on frequency."""
+    """Extracts the heavily preprocessed, 6-min regularized data for lagged forecasting."""
     bucket_clean = f"{BUCKET_CLEAN_PREFIX}{freq_minutes}m"
     client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
     query = f'''
@@ -49,16 +52,65 @@ def fetch_clean_data(freq_minutes: int):
         df.sort_index(inplace=True)
     return df
 
-def plot_predictions(y_test, y_pred, model_name, mae, plots_dir):
+def fetch_raw_training_data():
+    """Extracts completely un-smoothed RAW data, preserving maximum data volume for T1/T4."""
+    print("[Data] Fetching massive RAW dataset for point-wise tasks (T1/T4)...")
+    client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
+    query = f'''
+        from(bucket: "{BUCKET_RAW}")
+          |> range(start: {SYNC_LOOKBACK_DAYS})
+          |> filter(fn: (r) => r._measurement == "sensor_measurements")
+          |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+    '''
+    df = client.query_api().query_data_frame(query)
+    if isinstance(df, list):
+        if len(df) == 0: return pd.DataFrame()
+        df = pd.concat(df, ignore_index=True)
+        
+    if not df.empty:
+        df.set_index('_time', inplace=True)
+        df.sort_index(inplace=True)
+        # Standardize TDS nomenclature
+        if 'tds_value' in df.columns:
+            if 'tds' in df.columns:
+                df['tds'] = df['tds'].combine_first(df['tds_value'])
+            else:
+                df.rename(columns={'tds_value': 'tds'}, inplace=True)
+            df.drop(columns=['tds_value'], inplace=True, errors='ignore')
+    return df
+
+# ==========================================
+# PLOTTING & EVALUATION
+# ==========================================
+
+def plot_predictions(y_test, y_pred, model_name, mae, plots_dir, task_name):
+    # 1. Full Test-Set Plot
     plt.figure(figsize=(12, 5))
-    plt.plot(y_test.values, label='Actual Values', color='green', alpha=0.7)
-    plt.plot(y_pred, label=f'{model_name} Predictions', color='orange', alpha=0.8, linestyle='--')
-    plt.title(f'{model_name} Performance (MAE: {mae:.3f})')
+    plt.plot(y_test.values, label='Actual True Values', color='green', alpha=0.6)
+    plt.plot(y_pred, label=f'{model_name} Forecast', color='orange', alpha=0.8, linestyle='--')
+    plt.title(f'[{task_name.upper()}] Full Performance: {model_name} (MAE: {mae:.3f})')
     plt.xlabel('Time Samples (Test Set)')
     plt.ylabel('Target Value')
     plt.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join(plots_dir, f"{model_name}_predictions.png"))
+    plt.savefig(os.path.join(plots_dir, f"{model_name}_full.png"))
+    plt.close()
+
+    # 2. Zoomed-In Plot (Last 150 points) for clearer variance evaluation
+    zoom_size = min(150, len(y_test))
+    y_test_zoom = y_test[-zoom_size:]
+    y_pred_zoom = y_pred[-zoom_size:]
+    
+    plt.figure(figsize=(10, 4))
+    plt.plot(y_test_zoom.values, label='Actual True Values', color='black', marker='o', markersize=3, alpha=0.7)
+    plt.plot(y_pred_zoom, label=f'{model_name} Forecast', color='red', linestyle='--', marker='x', markersize=3)
+    plt.title(f'[{task_name.upper()}] Zoomed Comparison (Last {zoom_size} pts)')
+    plt.xlabel('Recent Time Samples')
+    plt.ylabel('Target Value')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(plots_dir, f"{model_name}_zoomed.png"))
     plt.close()
 
 def plot_models_comparison(results_dict, plots_dir):
@@ -74,14 +126,70 @@ def plot_models_comparison(results_dict, plots_dir):
     plt.savefig(os.path.join(plots_dir, "final_models_comparison.png"))
     plt.close()
 
-def log_and_evaluate(y_test, y_pred, features_names, model, model_name, training_time, inf_time, best_params, archive_dir, plots_dir):
+def generate_global_comparison_plot(df_clean, freq_minutes):
+    """Evaluates all 6 tasks on a shared test window to visualize exactly where they fail/succeed."""
+    print(f"\n[{freq_minutes}m] Generating Global Task Comparison Plot...")
+    
+    board_id = DEFAULT_BOARD_ID
+    df_b = df_clean[df_clean['id_board'] == board_id].copy()
+    if df_b.empty: return
+    
+    test_window = 300 # Approx 30 hours at 6m frequency
+    history_needed = get_min_history_records(freq_minutes)
+    
+    # Slice the tail of the data, ensuring we have enough history to calculate lags safely
+    df_slice = df_b.tail(test_window + history_needed).copy()
+    
+    plt.figure(figsize=(16, 8))
+    true_target = df_slice['leaf_temp'].tail(test_window)
+    plt.plot(true_target.index, true_target.values, label='True Leaf Temp', color='black', linewidth=3, zorder=10)
+    
+    colors = ['#FF3333', '#3333FF', '#33FF33', '#FF9933', '#9933FF', '#33FFFF']
+    
+    for idx, (task_name, config) in enumerate(TASKS.items()):
+        model_path = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", task_name, "best_model", "best_model.joblib")
+        if not os.path.exists(model_path): continue
+        
+        model = joblib.load(model_path)
+        use_lags = config.get("use_lags", False)
+        lag_target = config.get("lag_target", True)
+        features_list = config["features"]
+        target_col = config["target"]
+        virtual_ratio = get_virtual_ratio(freq_minutes)
+        
+        # Build features identically to Inference logic
+        ext_features = get_extended_features_list(features_list, use_lags)
+        df_feat = build_advanced_features(df_slice, features_list, use_lags, virtual_ratio)
+        if use_lags:
+            df_feat = create_lagged_features(df_feat, target_col, ext_features, virtual_ratio, lags=DEFAULT_LAGS, lag_target=lag_target)
+            
+        model_features = [col for col in df_feat.columns if ('lag' in col and (lag_target or target_col not in col)) or col in ext_features] if use_lags else ext_features
+        
+        # Predict purely on the exact test window slice
+        df_infer = df_feat.tail(test_window)
+        if not df_infer.empty and all(c in df_infer.columns for c in model_features):
+            preds = model.predict(df_infer[model_features])
+            plt.plot(df_infer.index, preds, label=f'Task {task_name.upper()}', color=colors[idx % len(colors)], alpha=0.8, linestyle='--')
+
+    plt.title('Global Models Comparison: 6 Predictive Tasks vs True Environment', fontsize=14)
+    plt.xlabel('Time (Last 30 Hours)')
+    plt.ylabel('Leaf Temperature (°C)')
+    plt.legend(loc='upper left', bbox_to_anchor=(1, 1))
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    
+    plot_path = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", "global_tasks_comparison.png")
+    plt.savefig(plot_path)
+    plt.close()
+    print(f"[Plotting] Saved Global Comparison Matrix at {plot_path}")
+
+def log_and_evaluate(y_test, y_pred, features_names, model, model_name, task_name, training_time, inf_time, best_params, archive_dir, plots_dir):
     mae = mean_absolute_error(y_test, y_pred)
     rmse = np.sqrt(mean_squared_error(y_test, y_pred))
     r2 = r2_score(y_test, y_pred)
 
     if hasattr(model, 'named_steps') and 'poly_features' in model.named_steps:
-        try:
-            features_names = model.named_steps['poly_features'].get_feature_names_out()
+        try: features_names = model.named_steps['poly_features'].get_feature_names_out()
         except: pass
     
     importance_dict = {}
@@ -107,16 +215,19 @@ def log_and_evaluate(y_test, y_pred, features_names, model, model_name, training
     with open(os.path.join(archive_dir, f"{model_name}_metrics.json"), "w") as f:
         json.dump(report, f, indent=4)
         
-    plot_predictions(y_test, y_pred, model_name, mae, plots_dir)
+    plot_predictions(y_test, y_pred, model_name, mae, plots_dir, task_name)
     return report, mae
+
+# ==========================================
+# TRAINING PIPELINES
+# ==========================================
 
 def train_environmental_arimas(df_clean, features, output_dir, freq_minutes):
     print(f"\n{'='*60}\n[Trainer {freq_minutes}m] INDEPENDENT ENVIRONMENTAL ARIMA TRAINING\n{'='*60}")
     os.makedirs(output_dir, exist_ok=True)
     df_train = df_clean[df_clean['id_board'].isin(ACTIVE_BOARDS)].copy()
     
-    # MITIGATION STRATEGY:
-    # If freq < 6 min, ARIMA slows down drastically with too many samples. Reduce window to 3 days.
+    # MITIGATION STRATEGY: Limit history for high frequencies to prevent ARIMA hang-ups
     effective_days = ENV_ARIMA_TRAIN_DAYS if freq_minutes >= 6 else 3
     tail_samples = int((effective_days * 24 * 60) / freq_minutes)
     
@@ -124,17 +235,32 @@ def train_environmental_arimas(df_clean, features, output_dir, freq_minutes):
         print(f"Training for: {feat} (last {tail_samples} samples = {effective_days} days)...")
         y = df_train[feat].dropna().tail(tail_samples) 
         
-        # Limit max iterations for high frequencies
+        # ZOOM PLOT LOGIC: Hold out last N hours for visual evaluation
+        zoom_size = min(100, len(y) // 5) # Approx 10 hours at 6m
+        y_train_arima = y.iloc[:-zoom_size]
+        y_test_arima = y.iloc[-zoom_size:]
+        
         max_p_q = 5 if freq_minutes >= 6 else 3 
         
-        best_model = pm.auto_arima(
-            y, seasonal=False, stepwise=True, suppress_warnings=True,
-            max_p=max_p_q, max_q=max_p_q
-        )
-        print(f"-> Optimal for {feat}: {best_model.order}")
-        joblib.dump(best_model, os.path.join(output_dir, f"arima_{feat}.joblib"))
+        # Train on N-10 hours
+        best_model = pm.auto_arima(y_train_arima, seasonal=False, stepwise=True, suppress_warnings=True, max_p=max_p_q, max_q=max_p_q)
         
-    print("Environmental models saved successfully.")
+        # Plot evaluation
+        preds = best_model.predict(n_periods=zoom_size)
+        plt.figure(figsize=(10, 4))
+        plt.plot(y_test_arima.index, y_test_arima.values, label='True Environment', color='black')
+        plt.plot(y_test_arima.index, preds, label='ARIMA Forecast', color='blue', linestyle='--')
+        plt.title(f'ARIMA Zoom Forecast: {feat} (vs True Data)')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, f"arima_{feat}_zoom.png"))
+        plt.close()
+        
+        # Update model with the held-out tail so it goes to production fully trained to the present moment
+        best_model.update(y_test_arima)
+        joblib.dump(best_model, os.path.join(output_dir, f"arima_{feat}.joblib"))
+        print(f"-> Optimal for {feat}: {best_model.order} (Saved & Evaluated)")
 
 def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> dict:
     """Returns the appropriate hyperparameter grids based on frequency overhead."""
@@ -156,7 +282,6 @@ def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> d
                     "regressor__num_leaves": [31]
                 }
             }
-            # Note: SVR and RF removed for high frequency due to exorbitant execution times/RAM scaling.
         }
 
     return {
@@ -191,35 +316,41 @@ def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> d
         },
     }
 
-def run_pipeline_for_task(task_name, config, df_clean, freq_minutes):
-    print(f"\n{'='*60}\n[Trainer {freq_minutes}m] STARTING PIPELINE FOR TASK: {task_name.upper()}\n{'='*60}")
+def run_pipeline_for_task(task_name, config, df_data, freq_minutes, is_raw=False):
+    print(f"\n{'='*60}\n[Trainer {freq_minutes}m] STARTING PIPELINE: {task_name.upper()} (RAW Data Mode: {is_raw})\n{'='*60}")
     
     target_col = config["target"]
     features_list = config["features"]
     use_lags = config.get("use_lags", False)
     lag_target = config.get("lag_target", True) 
     
-    virtual_ratio = get_virtual_ratio(freq_minutes)
+    virtual_ratio = 1 if is_raw else get_virtual_ratio(freq_minutes)
     
-    # Dynamic Paths based on frequency
     task_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", task_name)
-    archive_dir = os.path.join(task_dir, "models_archive")
-    best_dir = os.path.join(task_dir, "best_model")
-    plots_dir = os.path.join(archive_dir, "plots")
-    
+    archive_dir, best_dir, plots_dir = [os.path.join(task_dir, p) for p in ["models_archive", "best_model", "plots"]]
     for d in [archive_dir, best_dir, plots_dir]: os.makedirs(d, exist_ok=True)
 
     extended_features_list = get_extended_features_list(features_list, use_lags)
     df_train_final_list, df_test_final_list = [], []
 
     for board_id in ACTIVE_BOARDS:
-        df_b = df_clean[df_clean['id_board'] == board_id].copy()
+        df_b = df_data[df_data['id_board'] == board_id].copy()
         if df_b.empty: continue
         
+        if is_raw:
+            # RAW DENSE ALIGNMENT: Align jittery raw ms timestamps to a 1-minute grid and ffill slightly.
+            # This preserves thousands of point-wise rows that would otherwise be destroyed by dropna().
+            df_b = df_b.resample('1min').mean(numeric_only=True)
+            df_b = df_b.ffill(limit=3)
+            
+            # Basic anomaly bounding without interpolation
+            if board_id == BOARD_944 and 'tds' in df_b.columns:
+                df_b.loc[df_b['tds'] < 60, 'tds'] = np.nan
+            if 'water_temp' in df_b.columns:
+                df_b.loc[df_b['water_temp'] < MIN_VALID_WATER_TEMP, 'water_temp'] = np.nan
+        
         split_idx = int(len(df_b) * TRAIN_SPLIT_PERCENTAGE)
-        df_train_b = df_b.iloc[:split_idx]
-        df_test_b = df_b.iloc[split_idx:]
-
+        df_train_b, df_test_b = df_b.iloc[:split_idx], df_b.iloc[split_idx:]
 
         df_train_b = build_advanced_features(df_train_b, features_list, use_lags, virtual_ratio)
         df_test_b = build_advanced_features(df_test_b, features_list, use_lags, virtual_ratio)
@@ -239,12 +370,15 @@ def run_pipeline_for_task(task_name, config, df_clean, freq_minutes):
     else:
         model_features = extended_features_list 
 
+    # Drop NaNs: Extremely strict to prevent dirty training.
     df_train_final.dropna(subset=model_features + [target_col], inplace=True)
     df_test_final.dropna(subset=model_features + [target_col], inplace=True)
 
     if df_train_final.empty or df_test_final.empty:
-        print(f"[{task_name}] Error: Empty datasets after processing.")
+        print(f"[{task_name}] Error: Empty datasets after processing. Skipping.")
         return
+
+    print(f"[{task_name}] Final Training Volume: {len(df_train_final)} points.")
 
     X_train, y_train = df_train_final[model_features], df_train_final[target_col]
     X_test, y_test = df_test_final[model_features], df_test_final[target_col]
@@ -264,7 +398,7 @@ def run_pipeline_for_task(task_name, config, df_clean, freq_minutes):
     best_model_name = ""
 
     for name, config in models_grids.items():
-        print(f"\n[{task_name}] Training model: {name}...")
+        print(f"[{task_name}] Training {name}...")
         grid_search = GridSearchCV(estimator=config["model"], param_grid=config["params"], cv=tscv, scoring='neg_mean_absolute_error', n_jobs=-1)
         
         start_time = time.time()
@@ -280,8 +414,8 @@ def run_pipeline_for_task(task_name, config, df_clean, freq_minutes):
 
         report, mae = log_and_evaluate(
             y_test=y_test, y_pred=y_pred, features_names=model_features,
-            model=best_model, model_name=name, training_time=training_time, inf_time=inf_time,
-            best_params=best_params, archive_dir=archive_dir, plots_dir=plots_dir
+            model=best_model, model_name=name, task_name=task_name, training_time=training_time, 
+            inf_time=inf_time, best_params=best_params, archive_dir=archive_dir, plots_dir=plots_dir
         )
         results[name] = report["metrics"]
         
@@ -298,25 +432,40 @@ def run_pipeline_for_task(task_name, config, df_clean, freq_minutes):
     formatted_results = {name: {"MAE": res["MAE"]} for name, res in results.items()}
     plot_models_comparison(formatted_results, plots_dir)
 
+# ==========================================
+# MAIN EXECUTION
+# ==========================================
+
 def main():
     print("[Trainer] Starting Multi-Frequency Global Pipeline...")
+    df_raw = fetch_raw_training_data()
     
     for freq in DEFAULT_FREQS:
         print(f"\n=== BEGIN TRAINING FOR FREQUENCY {freq} MINUTES ===")
         df_clean = fetch_clean_data(freq)
         
         if df_clean.empty:
-            print(f"[Trainer] Insufficient data for {freq}m. Please run cleaner.py first.")
+            print(f"[Trainer] Insufficient 6m data. Please run cleaner.py first.")
             continue
         
+        # 1. Environmental ARIMAs
         all_env_features = TASKS["t1"]["features"]
         env_output_dir = os.path.join(BASE_MODEL_DIR, f"{freq}m", "env_forecasters")
         train_environmental_arimas(df_clean, all_env_features, env_output_dir, freq)
         
+        # 2. ML Pipelines (Dual Strategy)
         for task_name, config in TASKS.items():
-            run_pipeline_for_task(task_name, config, df_clean, freq)
+            if config.get("use_lags", False):
+                # Lagged tasks require regularized 6m grid
+                run_pipeline_for_task(task_name, config, df_clean, freq, is_raw=False)
+            else:
+                # Point-wise tasks (T1/T4) devour raw unstructured data
+                run_pipeline_for_task(task_name, config, df_raw, freq, is_raw=True)
+                
+        # 3. Final Global Plotting Evaluation
+        generate_global_comparison_plot(df_clean, freq)
             
-    print(f"\n[Trainer] Multi-Frequency Pipeline completed! Artifacts saved in {BASE_MODEL_DIR}.")
+    print(f"\n[Trainer] Pipeline completed successfully! Artifacts & Visualizations saved in {BASE_MODEL_DIR}.")
 
 if __name__ == "__main__":
     main()
