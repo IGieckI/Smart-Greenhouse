@@ -2,26 +2,26 @@ import os
 import pandas as pd
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
-from shared_core.preprocessing import identify_leaf_steps, gaussian_weighted_interpolation, clean_anomalies
+
+from shared_core.config import *
+# Spostato qui l'import della pipeline globale, rimossi quelli non più necessari per il file
+from shared_core.preprocessing import apply_board_pipeline 
 
 def sync_clean_bucket(influx_url, influx_token, influx_org):
     """Controlla se ci sono nuovi dati in BUCKET_RAW, li pulisce e li salva in BUCKET_CLEAN."""
-    bucket_raw = "sensor_data"
-    bucket_clean = "sensor_data_clean"
-    
     client = InfluxDBClient(url=influx_url, token=influx_token, org=influx_org)
     
     # 1. Assicurati che il bucket pulito esista
     buckets_api = client.buckets_api()
-    if buckets_api.find_bucket_by_name(bucket_clean) is None:
-        print(f"[Sync] Bucket '{bucket_clean}' non trovato. Creazione in corso...")
-        buckets_api.create_bucket(bucket_name=bucket_clean, org=influx_org)
+    if buckets_api.find_bucket_by_name(BUCKET_CLEAN) is None:
+        print(f"[Sync] Bucket '{BUCKET_CLEAN}' non trovato. Creazione in corso...")
+        buckets_api.create_bucket(bucket_name=BUCKET_CLEAN, org=influx_org)
 
     # 2. Trova l'ultimo timestamp pulito
     query_api = client.query_api()
     query_last = f'''
-        from(bucket: "{bucket_clean}")
-          |> range(start: -30d)
+        from(bucket: "{BUCKET_CLEAN}")
+          |> range(start: {SYNC_LOOKBACK_DAYS})
           |> filter(fn: (r) => r._measurement == "sensor_measurements")
           |> last()
           |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
@@ -39,7 +39,7 @@ def sync_clean_bucket(influx_url, influx_token, influx_org):
     # 3. Estrai i nuovi dati dal RAW
     time_filter = f"|> range(start: {last_time.isoformat()})" if last_time else '|> range(start: 0)'
     query_raw = f'''
-        from(bucket: "{bucket_raw}")
+        from(bucket: "{BUCKET_RAW}")
           {time_filter}
           |> filter(fn: (r) => r._measurement == "sensor_measurements")
           |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
@@ -66,12 +66,18 @@ def sync_clean_bucket(influx_url, influx_token, influx_org):
         df_board.set_index('_time', inplace=True)
         df_board.sort_index(inplace=True)
 
-        df_board = identify_leaf_steps(df_board, max_gap_minutes=12)
-        df_board = gaussian_weighted_interpolation(df_board, 'leaf_temp', weight_col='leaf_weight', win_before=5, win_after=2)
-        df_board = clean_anomalies(df_board)
+        # Regolarizzazione temporale (aggiunto numeric_only=True per evitare eccezioni)
+        freq_str = f"{NOMINAL_FREQ_MINUTES}min"
+        df_board = df_board.resample(freq_str).mean(numeric_only=True)
+        df_board['id_board'] = board 
+
+        # Applicazione dinamica pipeline
+        df_clean = apply_board_pipeline(df_board, board)
 
         cols_to_drop = ['result', 'table', '_start', '_stop', '_measurement', 'block_id', 'leaf_weight']
-        df_clean = df_board.drop(columns=[c for c in cols_to_drop if c in df_board.columns])
+        df_clean = df_clean.drop(columns=[c for c in cols_to_drop if c in df_clean.columns])
+
+        df_clean.dropna(how='all', subset=[c for c in df_clean.columns if c != 'id_board'], inplace=True)
 
         points = []
         for timestamp, row in df_clean.iterrows():
@@ -82,5 +88,5 @@ def sync_clean_bucket(influx_url, influx_token, influx_org):
             points.append(p)
         
         if points:
-            write_api.write(bucket=bucket_clean, org=influx_org, record=points)
+            write_api.write(bucket=BUCKET_CLEAN, org=influx_org, record=points)
             print(f"[Sync] Inseriti {len(points)} nuovi record per board {board}")
