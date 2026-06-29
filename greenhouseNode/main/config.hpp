@@ -1,6 +1,7 @@
 #pragma once
 #include "driver/gpio.h"
 #include "driver/i2c.h"
+#include "driver/ledc.h"
 #include "hal/adc_types.h"
 
 #include "personal_config.hpp"
@@ -31,3 +32,19 @@
 
 // Network stuff
 // Star node MAC defined in personal_config.hpp
+
+// --- Actuator table ---
+// Names and types are fixed across all nodes. Pin assignments come from personal_config.hpp.
+typedef enum { ACT_BINARY = 0, ACT_PWM = 1 } act_type_t;
+
+typedef struct {
+    const char     *name;
+    gpio_num_t      pin;
+    act_type_t      type;
+    ledc_channel_t  ledc_ch;  // used only when type == ACT_PWM
+} actuator_cfg_t;
+
+static const actuator_cfg_t ACTUATOR_TABLE[] = {
+    { "pump", PIN_PUMP, ACT_BINARY, LEDC_CHANNEL_0 },
+};
+#define ACTUATOR_COUNT (sizeof(ACTUATOR_TABLE) / sizeof(ACTUATOR_TABLE[0]))

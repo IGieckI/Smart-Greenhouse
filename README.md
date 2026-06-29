@@ -12,12 +12,18 @@ A distributed IoT system for monitoring greenhouse environments. Sensor nodes tr
                                        └──CoAP Observe ──────────────────────────────────────────►│
                                        │
                                        └──HTTP /dump ─────────────────────────────────►[operatorTools]
+
+── Actuation (downlink) ──────────────────────────────────────────────────────────────────────────
+[services] ──MQTT──► [loraWANGateway] ──LoRa──► [greenhouseStar] ──ESP-NOW──► [Greenhouse Nodes]
 ```
 
-**Data paths:**
+**Telemetry paths (uplink):**
 1. **LoRa path** — Star → LoRaWAN Gateway → MQTT broker → `lw-client` → Controller → InfluxDB
 2. **CoAP path** — Star → `cw-client` (if laptop is on the Star's Wi-Fi AP) → Controller → InfluxDB
 3. **Offline path** — Star keeps a RAM ring buffer; operator downloads it via `operatorTools`
+
+**Actuation path (downlink):**
+4. **Command path** — Controller publishes to MQTT → Gateway TXs via LoRa → Star receives and queues → delivered to Node via ESP-NOW on next wakeup
 
 ---
 
@@ -58,6 +64,10 @@ An ESP32 that reads sensors, applies a median filter over 5 samples, and transmi
 // DS18B20 data pin
 #define DS18B20_DATA_PIN  GPIO_NUM_32
 
+// Actuator pin assignments — one #define per actuator
+// Names must match ACTUATOR_TABLE in config.hpp (max 4 chars)
+#define PIN_PUMP   GPIO_NUM_2
+
 // Optional: ADS1115 for leaf temperature via thermocouple
 // Comment this out if you don't have the ADS1115 wired up
 #define ADS1115_ADDR  0x48
@@ -91,10 +101,13 @@ idf.py -p /dev/ttyUSB0 flash monitor
 ## 2. greenhouseStar
 
 The central ESP32 hub. Receives packets from all Nodes via ESP-NOW, then:
-- Transmits via **LoRa** (primary uplink)
+- Transmits via **LoRa** (primary uplink, includes its own `star_id` in every payload)
+- Listens for **LoRa downlink commands** from the Gateway and forwards them to the target Node via ESP-NOW
 - Serves a **CoAP observable** endpoint for nearby operators
 - Maintains an in-RAM **ring buffer** accessible via HTTP
 - Displays live data on the **OLED** (Heltec boards only)
+
+> **`star_id`** is derived from the last 4 bytes of the Star's Wi-Fi STA MAC address (same formula as `node_id` on Nodes). It is printed at boot: `Star ID: XXXXXXXX`. The backend uses this to route commands to the correct Star.
 
 ### Configuration
 
@@ -156,7 +169,7 @@ These must match identically in the Gateway.
 
 ## 3. loraWANGateway
 
-An ESP32 (Heltec V3) that listens for LoRa packets from the Star and forwards them to an MQTT broker over Wi-Fi.
+An ESP32 (Heltec V3) that bridges LoRa ↔ MQTT. It forwards telemetry uplink (Star → MQTT) and relays actuation commands downlink (MQTT → Star via LoRa). When a command is received via MQTT, the Gateway TXs it once via LoRa and waits up to 500 ms for an ACK from the Star. If the Star ACKs, the ACK is forwarded to `greenhouse/acks` on the broker so the controller can stop retrying. If no ACK arrives, the controller retries (up to 3 attempts, 3 s apart).
 
 ### Configuration
 
@@ -264,6 +277,7 @@ TELEGRAM_TOKEN=your_telegram_bot_token_here
 
 1. Connect your laptop to `GREENHOUSE_STAR` (password: `operator123`)
 2. The `cw-client` container will automatically reach `coap://192.168.4.1/telemetry`
+3. At startup, `cw-client` queries `http://192.168.4.1/info` to auto-discover the Star's `star_id` — no manual configuration needed
 
 > When connected to the Star's AP, your machine loses internet access. The LoRa path (via a gateway on your home LAN) is the better option for permanent deployments.
 
@@ -297,13 +311,16 @@ Two team members can merge their InfluxDB datasets using `exchange.sh`:
 
 ### Controller API
 
-The controller exposes one endpoint consumed by both ingestion clients:
+#### `POST /api/data`
+
+Ingestion endpoint consumed by `lw-client` and `cw-client`. Both clients include `star_id` in the payload — the controller uses this to maintain `controller/data/topology.json`, which maps each `node_id` to the `star_id` of the Star it communicates through.
 
 ```
 POST http://localhost:3001/api/data
 Content-Type: application/json
 
 {
+  "star_id": "3C0F02EB",
   "node_id": 123456,
   "timestamp": 1750000000,
   "air_temp": 25.3,
@@ -317,7 +334,37 @@ Content-Type: application/json
 }
 ```
 
-The controller writes all numeric fields dynamically to InfluxDB under the `sensor_measurements` measurement, tagged with `id_board`.
+#### `POST /api/command`
+
+Sends an actuation command to a specific Node. The controller looks up the Node's Star in `topology.json` and publishes to `greenhouse/commands/<star_id>` on the MQTT broker. The loraWANGateway ESP32 (subscribed to that topic) picks it up and TXs it via LoRa — neither `lw-client` nor `cw-client` is involved.
+
+The easiest way to trigger a command is via `greenhouse.sh`:
+
+```bash
+# Pump on full for 10 seconds
+./greenhouse.sh command <node_id> pump 100 10
+
+# LED at 75% brightness for 30 seconds
+./greenhouse.sh command <node_id> led 75 30
+
+# Pump off immediately
+./greenhouse.sh command <node_id> pump 0 0
+```
+
+Raw API call if needed:
+
+```
+POST http://localhost:3001/api/command
+Content-Type: application/json
+
+{ "node_id": 123456, "actuator": "pump", "value": 100, "duration_s": 10 }
+```
+
+`value` is 0–100: binary actuators treat 0 as off and any non-zero as on; PWM actuators use it as duty cycle percentage.
+
+Responses: `200 OK` with `{ status, star_id, node_id, topic }` | `404` if the Node has never been seen | `400` if fields are missing.
+
+> **Note:** The Node delivers the command on its **next wakeup** (up to 2 minutes later). The command is queued in the Star's RAM until then.
 
 #### Leaf Temperature Fallback
 
@@ -356,9 +403,11 @@ The tool auto-detects when the Star is reachable (checks port 80 every 3 seconds
 
 ---
 
-## TelemetryPacket Format
+## Packet Formats
 
-The binary struct shared between all firmware components and the `cw-client`:
+### TelemetryPacket
+
+The binary struct sent from Node → Star via ESP-NOW, and from Star → `cw-client` via CoAP:
 
 ```c
 typedef struct {
@@ -375,10 +424,33 @@ typedef struct {
 } telemetry_packet_t;       // 40 bytes, little-endian
 ```
 
-The LoRa JSON payload uses abbreviated keys to minimize packet size:
+The Star's LoRa uplink JSON payload uses abbreviated keys to minimize airtime (also includes `sid` for Star identification):
 
 ```json
-{"ts":1750000000,"id":123456,"p":1013.2,"wt":22.1,"lux":4500,"tds":350,"sm":62,"at":25.3,"h":58,"lt":26.1}
+{"sid":1234567890,"ts":1750000000,"id":123456,"p":1013.2,"wt":22.1,"lux":4500,"tds":350,"sm":62,"at":25.3,"h":58,"lt":26.1}
 ```
 
-`lw-client` maps these back to the full field names before forwarding to the controller.
+`lw-client` maps these abbreviated keys back to the full field names before forwarding to the controller.
+
+### CommandPacket
+
+The binary struct sent from Star → Node via ESP-NOW after a downlink command is received:
+
+```c
+#define CMD_ACTUATOR_LEN 5  // max 4-char names + null terminator ("pump", "led", "fan")
+
+typedef struct {
+    uint32_t node_id;
+    char     actuator[CMD_ACTUATOR_LEN];  // null-terminated name matching ACTUATOR_TABLE
+    uint8_t  value;                        // 0=off, 1-100=level (binary: 0 or 100; PWM: duty %)
+    uint16_t duration_s;                   // 0=hold indefinitely
+} __attribute__((packed)) command_packet_t;  // 12 bytes
+```
+
+The LoRa downlink JSON (Gateway → Star) format:
+
+```json
+{"nid":123456,"act":"pump","val":100,"dur":10}
+```
+
+Actuators are defined in `greenhouseNode/main/personal_config.hpp` as an `ACTUATOR_TABLE` mapping names to GPIOs and control types (`ACT_BINARY` or `ACT_PWM`). The actuation logic in `main.cpp` is generic — adding a new actuator only requires a new row in the table.

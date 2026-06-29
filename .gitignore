@@ -87,7 +87,7 @@ Desktop.ini
 
 #Other ignore, mainly referred to "services"
 /services/ml_workspace/*/best_model
-/services/ml_workspace/*/models
+/services/ml_workspace/*/models*
 /services/ml_workspace/*/models_archive
 
 
@@ -95,3 +95,7 @@ Desktop.ini
 /rubbish
 
 .clangd
+
+
+
+*copy*.py

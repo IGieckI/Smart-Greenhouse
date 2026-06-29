@@ -88,12 +88,16 @@ services:
   cw-client:
     build: ./cw-client
     container_name: cw-client
+    network_mode: host
     volumes:
       - ./cw-client:/app
     command: python client_coap.py
     environment:
-      - CONTROLLER_URL=http://controller:3001/api/data
+      - CONTROLLER_URL=http://localhost:3001/api/data
       - STAR_COAP_URI=coap://192.168.4.1/telemetry
+      - STAR_HTTP_BASE=http://192.168.4.1
+      - MQTT_BROKER=localhost
+      - MQTT_PORT=1883
     depends_on:
       - controller
     restart: unless-stopped
