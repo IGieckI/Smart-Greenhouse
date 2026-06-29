@@ -29,9 +29,8 @@ from shared_core.config import *
 from shared_core.tasks import TASKS
 
 
-
 def fetch_clean_data(freq_minutes: int):
-    """Estrae i dati dal bucket dinamico in base alla frequenza."""
+    """Extracts data from the dynamic bucket based on frequency."""
     bucket_clean = f"{BUCKET_CLEAN_PREFIX}{freq_minutes}m"
     client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
     query = f'''
@@ -52,10 +51,10 @@ def fetch_clean_data(freq_minutes: int):
 
 def plot_predictions(y_test, y_pred, model_name, mae, plots_dir):
     plt.figure(figsize=(12, 5))
-    plt.plot(y_test.values, label='Valori Reali', color='green', alpha=0.7)
-    plt.plot(y_pred, label=f'Predizioni {model_name}', color='orange', alpha=0.8, linestyle='--')
-    plt.title(f'Performance {model_name} (MAE: {mae:.3f})')
-    plt.xlabel('Campioni Temporali (Test Set)')
+    plt.plot(y_test.values, label='Actual Values', color='green', alpha=0.7)
+    plt.plot(y_pred, label=f'{model_name} Predictions', color='orange', alpha=0.8, linestyle='--')
+    plt.title(f'{model_name} Performance (MAE: {mae:.3f})')
+    plt.xlabel('Time Samples (Test Set)')
     plt.ylabel('Target Value')
     plt.legend()
     plt.tight_layout()
@@ -67,8 +66,8 @@ def plot_models_comparison(results_dict, plots_dir):
     maes = [res['MAE'] for res in results_dict.values()]
     plt.figure(figsize=(10, 6))
     bars = plt.barh(names, maes, color='skyblue')
-    plt.xlabel('Mean Absolute Error (MAE) [Più basso è meglio]')
-    plt.title('Confronto Finale Modelli')
+    plt.xlabel('Mean Absolute Error (MAE) [Lower is better]')
+    plt.title('Final Models Comparison')
     for bar in bars:
         plt.text(bar.get_width() + 0.05, bar.get_y() + bar.get_height()/2, f'{bar.get_width():.3f}', va='center')
     plt.tight_layout()
@@ -112,36 +111,88 @@ def log_and_evaluate(y_test, y_pred, features_names, model, model_name, training
     return report, mae
 
 def train_environmental_arimas(df_clean, features, output_dir, freq_minutes):
-    print(f"\n{'='*60}\n[Trainer {freq_minutes}m] ADDESTRAMENTO ARIMA AMBIENTALI INDIPENDENTI\n{'='*60}")
+    print(f"\n{'='*60}\n[Trainer {freq_minutes}m] INDEPENDENT ENVIRONMENTAL ARIMA TRAINING\n{'='*60}")
     os.makedirs(output_dir, exist_ok=True)
     df_train = df_clean[df_clean['id_board'].isin(ACTIVE_BOARDS)].copy()
     
-    # STRATEGIA DI ALLEGGERIMENTO:
-    # Se freq < 6 min, ARIMA impazzisce con troppi campioni. Riduciamo la finestra a 3 giorni.
+    # MITIGATION STRATEGY:
+    # If freq < 6 min, ARIMA slows down drastically with too many samples. Reduce window to 3 days.
     effective_days = ENV_ARIMA_TRAIN_DAYS if freq_minutes >= 6 else 3
     tail_samples = int((effective_days * 24 * 60) / freq_minutes)
     
     for feat in features:
-        print(f"Addestramento per: {feat} (ultimi {tail_samples} campioni = {effective_days} giorni)...")
+        print(f"Training for: {feat} (last {tail_samples} samples = {effective_days} days)...")
         y = df_train[feat].dropna().tail(tail_samples) 
         
-        # Limitiamo il numero massimo di iterazioni per frequenze alte
+        # Limit max iterations for high frequencies
         max_p_q = 5 if freq_minutes >= 6 else 3 
         
         best_model = pm.auto_arima(
             y, seasonal=False, stepwise=True, suppress_warnings=True,
             max_p=max_p_q, max_q=max_p_q
         )
-        print(f"-> Ottimale per {feat}: {best_model.order}")
+        print(f"-> Optimal for {feat}: {best_model.order}")
         joblib.dump(best_model, os.path.join(output_dir, f"arima_{feat}.joblib"))
         
-    print("Modelli ambientali salvati con successo.")
+    print("Environmental models saved successfully.")
 
-def generate_pipeline(model):
-    return Pipeline([('scaler', MinMaxScaler()), ('regressor', model)])
+def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> dict:
+    """Returns the appropriate hyperparameter grids based on frequency overhead."""
+    is_high_freq = freq_minutes < 6
+    scaler_and_poly = [('poly_features', poly_transformer), ('scaler', MinMaxScaler())]
+
+    if is_high_freq:
+        print(f"[{freq_minutes}m] High frequency detected. Using reduced GridSearch to save RAM/Time.")
+        return {
+            "Ridge": {
+                "model": Pipeline(scaler_and_poly + [('regressor', Ridge())]),
+                "params": {"regressor__alpha": [0.1, 1.0, 10.0]} 
+            },
+            "LightGBM": {
+                "model": Pipeline([('scaler', MinMaxScaler()), ('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
+                "params": {
+                    "regressor__n_estimators": [100, 300], 
+                    "regressor__learning_rate": [0.05, 0.1],
+                    "regressor__num_leaves": [31]
+                }
+            }
+            # Note: SVR and RF removed for high frequency due to exorbitant execution times/RAM scaling.
+        }
+
+    return {
+        "Ridge": {
+            "model": Pipeline(scaler_and_poly + [('regressor', Ridge())]),
+            "params": {"regressor__alpha": [0.01, 0.1, 1.0, 10.0, 100.0]}
+        },
+        "RandomForest": {
+            "model": Pipeline([('scaler', MinMaxScaler()), ('regressor', RandomForestRegressor(random_state=42, n_jobs=1))]),
+            "params": {
+                "regressor__n_estimators": [100, 300, 500], 
+                "regressor__max_depth": [10, 20, None], 
+                "regressor__min_samples_split": [2, 5, 10]
+            }
+        },
+        "LightGBM": {
+            "model": Pipeline([('scaler', MinMaxScaler()), ('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
+            "params": {
+                "regressor__n_estimators": [100, 300, 500],
+                "regressor__learning_rate": [0.01, 0.05, 0.1],
+                "regressor__num_leaves": [31, 63, 127]
+            }
+        },
+        "SVR": {
+            "model": Pipeline([('scaler', MinMaxScaler()), ('regressor', SVR())]),
+            "params": {
+                "regressor__C": [0.1, 1.0, 10.0, 100.0], 
+                "regressor__gamma": ["scale", "auto", 0.1, 0.01], 
+                "regressor__kernel": ["linear", "rbf"],
+                "regressor__epsilon": [0.000001, 0.0001, 0.01, 1]
+            }
+        },
+    }
 
 def run_pipeline_for_task(task_name, config, df_clean, freq_minutes):
-    print(f"\n{'='*60}\n[Trainer {freq_minutes}m] AVVIO PIPELINE PER IL TASK: {task_name.upper()}\n{'='*60}")
+    print(f"\n{'='*60}\n[Trainer {freq_minutes}m] STARTING PIPELINE FOR TASK: {task_name.upper()}\n{'='*60}")
     
     target_col = config["target"]
     features_list = config["features"]
@@ -150,15 +201,13 @@ def run_pipeline_for_task(task_name, config, df_clean, freq_minutes):
     
     virtual_ratio = get_virtual_ratio(freq_minutes)
     
-    # Path Dinamici basati sulla frequenza
+    # Dynamic Paths based on frequency
     task_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", task_name)
     archive_dir = os.path.join(task_dir, "models_archive")
     best_dir = os.path.join(task_dir, "best_model")
     plots_dir = os.path.join(archive_dir, "plots")
     
-    os.makedirs(archive_dir, exist_ok=True)
-    os.makedirs(best_dir, exist_ok=True)
-    os.makedirs(plots_dir, exist_ok=True)
+    for d in [archive_dir, best_dir, plots_dir]: os.makedirs(d, exist_ok=True)
 
     extended_features_list = get_extended_features_list(features_list, use_lags)
     df_train_final_list, df_test_final_list = [], []
@@ -171,7 +220,7 @@ def run_pipeline_for_task(task_name, config, df_clean, freq_minutes):
         df_train_b = df_b.iloc[:split_idx]
         df_test_b = df_b.iloc[split_idx:]
 
-        # Passiamo il virtual_ratio!
+
         df_train_b = build_advanced_features(df_train_b, features_list, use_lags, virtual_ratio)
         df_test_b = build_advanced_features(df_test_b, features_list, use_lags, virtual_ratio)
 
@@ -194,7 +243,7 @@ def run_pipeline_for_task(task_name, config, df_clean, freq_minutes):
     df_test_final.dropna(subset=model_features + [target_col], inplace=True)
 
     if df_train_final.empty or df_test_final.empty:
-        print(f"[{task_name}] Errore: Dataset vuoti.")
+        print(f"[{task_name}] Error: Empty datasets after processing.")
         return
 
     X_train, y_train = df_train_final[model_features], df_train_final[target_col]
@@ -205,83 +254,17 @@ def run_pipeline_for_task(task_name, config, df_clean, freq_minutes):
         remainder='passthrough'
     )
 
-    # Configurazione di default
-    cv_splits = 3
-    
-    # STRATEGIA DI ALLEGGERIMENTO PER MODELLI ML
-    is_high_freq = freq_minutes < 6
-
-    models_grids = {}
-
-    if is_high_freq:
-        print(f"\n[{task_name}] Rilevata alta frequenza ({freq_minutes}m). Utilizzo GridSearch ridotta.")
-        cv_splits = 2 # Meno validazioni incrociate
-        models_grids = {
-            "Ridge": {
-                "model": Pipeline([
-                    ('poly_features', poly_transformer),
-                    ('scaler', MinMaxScaler()), 
-                    ('regressor', Ridge())
-                ]),
-                "params": {"regressor__alpha": [0.1, 1.0, 10.0]} # Ridotte opzioni
-            },
-            "LightGBM": {
-                "model": generate_pipeline(LGBMRegressor(random_state=42, verbose=-1, n_jobs=1)),
-                "params": {
-                    "regressor__n_estimators": [100, 300], # Eliminato 500
-                    "regressor__learning_rate": [0.05, 0.1],
-                    "regressor__num_leaves": [31] # Ridotta complessità albero
-                }
-            }
-            # NOTA BENE: Rimosso SVR e RandomForest. SVM ci metterebbe ore, 
-            # RF occuperebbe troppa RAM su decine di migliaia di righe.
-        }
-    else:
-        models_grids = {
-            "Ridge": {
-                "model": Pipeline([
-                    ('poly_features', poly_transformer), # Polinomio selettivo
-                    ('scaler', MinMaxScaler()), 
-                    ('regressor', Ridge())
-                ]),
-                "params": {
-                    "regressor__alpha": [0.01, 0.1, 1.0, 10.0, 100.0]
-                }
-            },
-            "RandomForest": {
-                "model": generate_pipeline(RandomForestRegressor(random_state=42, n_jobs=1)), 
-                "params": {
-                    "regressor__n_estimators": [100, 300, 500], 
-                    "regressor__max_depth": [10, 20, None], 
-                    "regressor__min_samples_split": [2, 5, 10]
-                }
-            },
-            "LightGBM": {
-                "model": generate_pipeline(LGBMRegressor(random_state=42, verbose=-1, n_jobs=1)),
-                "params": {
-                        "regressor__n_estimators": [100, 300, 500],
-                        "regressor__learning_rate": [0.01, 0.05, 0.1],
-                        "regressor__num_leaves": [31, 63, 127]}
-                        },
-            "SVR": {
-                "model": generate_pipeline(SVR()), 
-                "params": {
-                    "regressor__C": [0.1, 1.0, 10.0, 100.0], 
-                    "regressor__gamma": ["scale", "auto", 0.1, 0.01], 
-                    "regressor__kernel": ["linear", "rbf"],
-                    "regressor__epsilon": [0.000001, 0.0001, 0.01, 1]}
-                },
-        }
-
-
+    models_grids = get_model_grids(freq_minutes, poly_transformer)
+    cv_splits = 2 if freq_minutes < 6 else 3
     tscv = TimeSeriesSplit(n_splits=cv_splits)
+    
     results = {}
     best_overall_model = None
     best_overall_mae = float('inf')
     best_model_name = ""
 
     for name, config in models_grids.items():
-        print(f"\n[{task_name}] Addestramento modello: {name}...")
+        print(f"\n[{task_name}] Training model: {name}...")
         grid_search = GridSearchCV(estimator=config["model"], param_grid=config["params"], cv=tscv, scoring='neg_mean_absolute_error', n_jobs=-1)
         
         start_time = time.time()
@@ -307,7 +290,7 @@ def run_pipeline_for_task(task_name, config, df_clean, freq_minutes):
             best_overall_model = best_model
             best_model_name = name
 
-    print(f"\n[{task_name}] Miglior Modello: {best_model_name} (MAE: {best_overall_mae:.3f})")
+    print(f"\n[{task_name}] Best Model: {best_model_name} (MAE: {best_overall_mae:.3f})")
     joblib.dump(best_overall_model, os.path.join(best_dir, "best_model.joblib"))
     with open(os.path.join(best_dir, "best_model_info.json"), "w") as f:
         json.dump({"best_model": best_model_name, "mae": best_overall_mae, "target": target_col}, f)
@@ -316,14 +299,14 @@ def run_pipeline_for_task(task_name, config, df_clean, freq_minutes):
     plot_models_comparison(formatted_results, plots_dir)
 
 def main():
-    print("[Trainer] Avvio Global Pipeline Multi-Frequenza...")
+    print("[Trainer] Starting Multi-Frequency Global Pipeline...")
     
     for freq in DEFAULT_FREQS:
-        print(f"\n=== INIZIO ADDESTRAMENTO PER FREQUENZA {freq} MINUTI ===")
+        print(f"\n=== BEGIN TRAINING FOR FREQUENCY {freq} MINUTES ===")
         df_clean = fetch_clean_data(freq)
         
         if df_clean.empty:
-            print(f"[Trainer] Dati insufficienti per {freq}m. Esegui cleaner.py.")
+            print(f"[Trainer] Insufficient data for {freq}m. Please run cleaner.py first.")
             continue
         
         all_env_features = TASKS["t1"]["features"]
@@ -333,7 +316,7 @@ def main():
         for task_name, config in TASKS.items():
             run_pipeline_for_task(task_name, config, df_clean, freq)
             
-    print(f"\n[Trainer] Pipeline Multi-Frequenza completata! Artefatti in {BASE_MODEL_DIR}.")
+    print(f"\n[Trainer] Multi-Frequency Pipeline completed! Artifacts saved in {BASE_MODEL_DIR}.")
 
 if __name__ == "__main__":
     main()

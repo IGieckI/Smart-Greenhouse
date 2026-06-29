@@ -92,17 +92,23 @@ def ensemble_multistep_inference(
     ml_models: dict, 
     task_configs: dict, 
     freq_minutes: int,
-    soft_mae: float,
-    mae_min: float = 0.3,
-    mae_max: float = 1.0
+    # REMOVED soft_mae. We need the MAEs for env and auto to weight them fairly.
+    mae_env: float = 0.5, 
+    mae_auto: float = 0.5 
 ) -> dict:
     
-    w_auto = max(0.0, min(1.0, (mae_max - soft_mae) / (mae_max - mae_min)))
-    w_env = 1.0 - w_auto
+    # 1. Inverse MAE Weighting Calibration
+    # The lower the MAE, the higher the weight.
+    inv_mae_env = 1.0 / (mae_env + 1e-6)
+    inv_mae_auto = 1.0 / (mae_auto + 1e-6)
+    total_inv = inv_mae_env + inv_mae_auto
+    
+    w_env = inv_mae_env / total_inv
+    w_auto = inv_mae_auto / total_inv
 
     df_patched = T_current_data.copy()
-    df_patched['leaf_temp'] = np.nan 
     
+    # 2. Extract Soft Sensor History
     soft_cfg = task_configs["soft"]
     virtual_ratio = get_virtual_ratio(freq_minutes)
     
@@ -113,11 +119,13 @@ def ensemble_multistep_inference(
     
     generated_history = []
     if not X_soft.empty:
-        # Anche qui per sicurezza, estraiamo l'ordine esatto per il soft sensor
         soft_expected_features = list(ml_models["soft"].feature_names_in_)
         X_soft = X_soft[soft_expected_features]
         
         generated_leaf = ml_models["soft"].predict(X_soft)
+        
+        # 3. FIX CHEATING: Explicitly overwrite the historical leaf_temp 
+        # with the soft sensor's estimation, so T3 doesn't see real data.
         df_patched.loc[X_soft.index, 'leaf_temp'] = generated_leaf
         
         generated_history = [
@@ -125,8 +133,10 @@ def ensemble_multistep_inference(
             for ts, val in zip(X_soft.index, generated_leaf)
         ]
 
+    # Clean up any remaining NaNs (for rows before the soft sensor window)
     df_patched['leaf_temp'] = df_patched['leaf_temp'].ffill().bfill()
 
+    # 4. Generate Predictions
     preds_auto = recursive_multistep_inference(
         df_patched, arima_models, ml_models["auto"], task_configs["auto"], freq_minutes
     )

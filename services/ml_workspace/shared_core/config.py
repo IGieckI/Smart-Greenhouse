@@ -1,67 +1,53 @@
 import os
 
-# ==========================================
 # DATABASE & PATHS
-# ==========================================
 INFLUX_URL = os.getenv("INFLUX_URL", "http://influxdb:8086")
 INFLUX_TOKEN = os.getenv("INFLUX_TOKEN")
 INFLUX_ORG = os.getenv("INFLUX_ORG", "iot_org")
 
 BUCKET_RAW = "sensor_data"
-# Il bucket pulito ora è un prefisso, a cui accoderemo i minuti (es. "sensor_data_clean_2m")
 BUCKET_CLEAN_PREFIX = "sensor_data_clean_" 
 BASE_MODEL_DIR = "/app/shared_core/models"
 
-# ==========================================
 # BOARDS CONFIGURATION
-# ==========================================
 BOARD_324 = "3750846324"
 BOARD_944 = "3750866944"
 DEFAULT_BOARD_ID = BOARD_324
 ACTIVE_BOARDS = [BOARD_324, BOARD_944]
 TRAIN_SPLIT_PERCENTAGE = 0.90
 
-# ==========================================
 # DATA FREQUENCY & TIME HORIZONS
-# ==========================================
-TARGET_FREQ_MINUTES = 6# 30 # Il macro-trend target rimane a 30 minuti
+TARGET_FREQ_MINUTES = 6 
 SYNC_LOOKBACK_DAYS = "-30d"
 INFERENCE_LOOKBACK_DAYS = "-7d"
 
-# Orizzonte in GIORNI (non più sample fissi) per l'ARIMA ambientale
+# Horizon in DAYS for environmental ARIMA
 ENV_ARIMA_TRAIN_DAYS = 14
 
-# ==========================================
 # PREPROCESSING & INTERPOLATION
-# ==========================================
 DEFAULT_LAGS = 6
 INTERPOLATION_WIN_BEFORE = 5
 INTERPOLATION_WIN_AFTER = 2
 INTERPOLATION_SIGMA_MIN = 15.0
 LEAF_MAX_GAP_MINUTES = 12
 
-# ==========================================
 # ANOMALY DETECTION
-# ==========================================
 MIN_VALID_WATER_TEMP = 10.0
 TDS_ROLLING_WINDOW = 10
 TDS_SPIKE_THRESHOLD = 1.3
 
-# DEFAULT_FREQS = [6, 2]
 DEFAULT_FREQS = [6]
 
-# ==========================================
-# FUNZIONI HELPER DINAMICHE
-# ==========================================
+# DYNAMIC HELPER FUNCTIONS
 def get_virtual_ratio(freq_minutes: int) -> int:
-    """Calcola il salto per allineare i dati alla frequenza target (30 min)."""
+    """Calculates the jump ratio to align data to the target frequency."""
     return max(1, int(TARGET_FREQ_MINUTES / freq_minutes))
 
 def get_min_history_records(freq_minutes: int) -> int:
-    """Calcola lo storico minimo necessario in base alla frequenza."""
+    """Calculates the minimum required historical records based on frequency."""
     return (DEFAULT_LAGS * get_virtual_ratio(freq_minutes)) + 2
 
 def get_fetch_limits(freq_minutes: int):
-    """Restituisce (FETCH_LIMIT_LATEST, FETCH_LIMIT_MANUAL)."""
+    """Returns a tuple: (FETCH_LIMIT_LATEST, FETCH_LIMIT_MANUAL)."""
     min_rec = get_min_history_records(freq_minutes)
     return min_rec + 20, min_rec + 19
