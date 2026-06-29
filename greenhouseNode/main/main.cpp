@@ -21,12 +21,26 @@
 #include "SoilMoistureSensor.hpp"
 #include "config.hpp"
 #include "TelemetryPacket.h"
+#include "CommandPacket.h"
 
 static const char *TAG = "GREENHOUSE_NODE";
 
 // Network
 telemetry_packet_t myData;
 esp_now_peer_info_t peerInfo;
+
+// Actuation command received from the Star
+static command_packet_t received_command;
+static SemaphoreHandle_t command_sem = NULL;
+
+void OnCommandRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+    if (len == sizeof(command_packet_t)) {
+        memcpy(&received_command, data, sizeof(command_packet_t));
+        BaseType_t woken = pdFALSE;
+        xSemaphoreGiveFromISR(command_sem, &woken);
+        portYIELD_FROM_ISR(woken);
+    }
+}
 
 // Callback when data is sent
 void OnDataSent(const esp_now_send_info_t *info, esp_now_send_status_t status) {
@@ -153,6 +167,7 @@ void setup() {
     }
    
     esp_now_register_send_cb(OnDataSent);
+    esp_now_register_recv_cb(OnCommandRecv);
     memset(&peerInfo, 0, sizeof(peerInfo));
     memcpy(peerInfo.peer_addr, central_mac, 6);
     peerInfo.channel = 1;
@@ -203,6 +218,41 @@ void setup() {
     light_sensor.reset();
 
     envSensor.init();
+
+    // Initialize all actuators (GPIO output; LEDC channel for PWM types)
+    ledc_timer_config_t ledc_timer = {
+        .speed_mode      = LEDC_LOW_SPEED_MODE,
+        .duty_resolution = LEDC_TIMER_10_BIT,
+        .timer_num       = LEDC_TIMER_0,
+        .freq_hz         = 1000,
+        .clk_cfg         = LEDC_AUTO_CLK,
+    };
+    ledc_timer_config(&ledc_timer);
+
+    for (size_t i = 0; i < ACTUATOR_COUNT; i++) {
+        gpio_config_t io = {};
+        io.intr_type    = GPIO_INTR_DISABLE;
+        io.mode         = GPIO_MODE_OUTPUT;
+        io.pin_bit_mask = (1ULL << ACTUATOR_TABLE[i].pin);
+        io.pull_down_en = GPIO_PULLDOWN_DISABLE;
+        io.pull_up_en   = GPIO_PULLUP_DISABLE;
+        gpio_config(&io);
+
+        if (ACTUATOR_TABLE[i].type == ACT_PWM) {
+            ledc_channel_config_t ch = {
+                .gpio_num   = ACTUATOR_TABLE[i].pin,
+                .speed_mode = LEDC_LOW_SPEED_MODE,
+                .channel    = ACTUATOR_TABLE[i].ledc_ch,
+                .intr_type  = LEDC_INTR_DISABLE,
+                .timer_sel  = LEDC_TIMER_0,
+                .duty       = 0,
+                .hpoint     = 0,
+            };
+            ledc_channel_config(&ch);
+        } else {
+            gpio_set_level(ACTUATOR_TABLE[i].pin, 0);
+        }
+    }
 
     ESP_LOGI(TAG, "Sensors initialized. Preparing to sample...");
 }
@@ -270,10 +320,43 @@ extern "C" void app_main(void)
     );
 
     // Send over ESP-NOW
-    esp_err_t result = esp_now_send(central_mac, (uint8_t *) &myData, sizeof(myData));
-    
-    // Give ESP-NOW some time to actually transmit the packet before going to sleep
-    vTaskDelay(pdMS_TO_TICKS(500));
+    command_sem = xSemaphoreCreateBinary();
+    esp_now_send(central_mac, (uint8_t *)&myData, sizeof(myData));
+
+    // Wait up to 1.5s for an actuation command from the Star.
+    // This window covers the Star's LoRa TX + any queued command reply.
+    if (xSemaphoreTake(command_sem, pdMS_TO_TICKS(1500)) == pdTRUE) {
+        ESP_LOGI(TAG, "Command: %.*s val=%d dur=%ds",
+                 CMD_ACTUATOR_LEN, received_command.actuator,
+                 received_command.value, received_command.duration_s);
+
+        const actuator_cfg_t *act = NULL;
+        for (size_t i = 0; i < ACTUATOR_COUNT; i++) {
+            if (strncmp(received_command.actuator, ACTUATOR_TABLE[i].name, CMD_ACTUATOR_LEN) == 0) {
+                act = &ACTUATOR_TABLE[i];
+                break;
+            }
+        }
+
+        if (act == NULL) {
+            ESP_LOGW(TAG, "Unknown actuator: %.*s", CMD_ACTUATOR_LEN, received_command.actuator);
+        } else if (act->type == ACT_BINARY) {
+            gpio_set_level(act->pin, received_command.value > 0 ? 1 : 0);
+            if (received_command.value > 0 && received_command.duration_s > 0) {
+                vTaskDelay(pdMS_TO_TICKS((uint32_t)received_command.duration_s * 1000));
+                gpio_set_level(act->pin, 0);
+            }
+        } else {
+            uint32_t duty = ((uint32_t)received_command.value * 1023) / 100;
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, act->ledc_ch, duty);
+            ledc_update_duty(LEDC_LOW_SPEED_MODE, act->ledc_ch);
+            if (received_command.duration_s > 0) {
+                vTaskDelay(pdMS_TO_TICKS((uint32_t)received_command.duration_s * 1000));
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, act->ledc_ch, 0);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, act->ledc_ch);
+            }
+        }
+    }
 
 
     // Ottieni i millisecondi totali trascorsi dall'accensione (boot)
