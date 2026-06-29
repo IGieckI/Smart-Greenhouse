@@ -221,13 +221,11 @@ def log_and_evaluate(y_test, y_pred, features_names, model, model_name, task_nam
 # ==========================================
 # TRAINING PIPELINES
 # ==========================================
-
 def train_environmental_arimas(df_clean, features, output_dir, freq_minutes):
     print(f"\n{'='*60}\n[Trainer {freq_minutes}m] INDEPENDENT ENVIRONMENTAL ARIMA TRAINING\n{'='*60}")
     os.makedirs(output_dir, exist_ok=True)
     df_train = df_clean[df_clean['id_board'].isin(ACTIVE_BOARDS)].copy()
     
-    # MITIGATION STRATEGY: Limit history for high frequencies to prevent ARIMA hang-ups
     effective_days = ENV_ARIMA_TRAIN_DAYS if freq_minutes >= 6 else 3
     tail_samples = int((effective_days * 24 * 60) / freq_minutes)
     
@@ -235,18 +233,23 @@ def train_environmental_arimas(df_clean, features, output_dir, freq_minutes):
         print(f"Training for: {feat} (last {tail_samples} samples = {effective_days} days)...")
         y = df_train[feat].dropna().tail(tail_samples) 
         
-        # ZOOM PLOT LOGIC: Hold out last N hours for visual evaluation
-        zoom_size = min(100, len(y) // 5) # Approx 10 hours at 6m
+        zoom_size = min(100, len(y) // 5)
         y_train_arima = y.iloc[:-zoom_size]
         y_test_arima = y.iloc[-zoom_size:]
         
         max_p_q = 5 if freq_minutes >= 6 else 3 
         
-        # Train on N-10 hours
-        best_model = pm.auto_arima(y_train_arima, seasonal=False, stepwise=True, suppress_warnings=True, max_p=max_p_q, max_q=max_p_q)
+        best_model = pm.auto_arima(
+            y_train_arima.values, 
+            seasonal=False, 
+            stepwise=True, 
+            suppress_warnings=True, 
+            max_p=max_p_q, 
+            max_q=max_p_q
+        )
         
-        # Plot evaluation
         preds = best_model.predict(n_periods=zoom_size)
+        
         plt.figure(figsize=(10, 4))
         plt.plot(y_test_arima.index, y_test_arima.values, label='True Environment', color='black')
         plt.plot(y_test_arima.index, preds, label='ARIMA Forecast', color='blue', linestyle='--')
@@ -257,25 +260,28 @@ def train_environmental_arimas(df_clean, features, output_dir, freq_minutes):
         plt.savefig(os.path.join(output_dir, f"arima_{feat}_zoom.png"))
         plt.close()
         
-        # Update model with the held-out tail so it goes to production fully trained to the present moment
-        best_model.update(y_test_arima)
+        # --- MODIFICA 2: Passa .values anche qui ---
+        best_model.update(y_test_arima.values)
+        
         joblib.dump(best_model, os.path.join(output_dir, f"arima_{feat}.joblib"))
         print(f"-> Optimal for {feat}: {best_model.order} (Saved & Evaluated)")
+
 
 def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> dict:
     """Returns the appropriate hyperparameter grids based on frequency overhead."""
     is_high_freq = freq_minutes < 6
     scaler_and_poly = [('poly_features', poly_transformer), ('scaler', MinMaxScaler())]
+    scaler_only = [('scaler', MinMaxScaler())]
 
     if is_high_freq:
         print(f"[{freq_minutes}m] High frequency detected. Using reduced GridSearch to save RAM/Time.")
         return {
-            "Ridge": {
-                "model": Pipeline(scaler_and_poly + [('regressor', Ridge())]),
+            "Ridge_linear": {
+                "model": Pipeline(scaler_only + [('regressor', Ridge())]),
                 "params": {"regressor__alpha": [0.1, 1.0, 10.0]} 
             },
             "LightGBM": {
-                "model": Pipeline([('scaler', MinMaxScaler()), ('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
+                "model": Pipeline(scaler_only + [('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
                 "params": {
                     "regressor__n_estimators": [100, 300], 
                     "regressor__learning_rate": [0.05, 0.1],
@@ -285,12 +291,16 @@ def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> d
         }
 
     return {
-        "Ridge": {
+        "Ridge_linear": {
+            "model": Pipeline(scaler_only + [('regressor', Ridge())]),
+            "params": {"regressor__alpha": [0.01, 0.1, 1.0, 10.0, 100.0]}
+        },
+        "Ridge_poly": { # Rinominato in poly per distinguerlo chiaramente nei grafici di confronto
             "model": Pipeline(scaler_and_poly + [('regressor', Ridge())]),
             "params": {"regressor__alpha": [0.01, 0.1, 1.0, 10.0, 100.0]}
         },
         "RandomForest": {
-            "model": Pipeline([('scaler', MinMaxScaler()), ('regressor', RandomForestRegressor(random_state=42, n_jobs=1))]),
+            "model": Pipeline(scaler_only + [('regressor', RandomForestRegressor(random_state=42, n_jobs=1))]),
             "params": {
                 "regressor__n_estimators": [100, 300, 500], 
                 "regressor__max_depth": [10, 20, None], 
@@ -298,7 +308,7 @@ def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> d
             }
         },
         "LightGBM": {
-            "model": Pipeline([('scaler', MinMaxScaler()), ('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
+            "model": Pipeline(scaler_only + [('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
             "params": {
                 "regressor__n_estimators": [100, 300, 500],
                 "regressor__learning_rate": [0.01, 0.05, 0.1],
@@ -306,7 +316,7 @@ def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> d
             }
         },
         "SVR": {
-            "model": Pipeline([('scaler', MinMaxScaler()), ('regressor', SVR())]),
+            "model": Pipeline(scaler_only + [('regressor', SVR())]),
             "params": {
                 "regressor__C": [0.1, 1.0, 10.0, 100.0], 
                 "regressor__gamma": ["scale", "auto", 0.1, 0.01], 
@@ -315,7 +325,6 @@ def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> d
             }
         },
     }
-
 def run_pipeline_for_task(task_name, config, df_data, freq_minutes, is_raw=False):
     print(f"\n{'='*60}\n[Trainer {freq_minutes}m] STARTING PIPELINE: {task_name.upper()} (RAW Data Mode: {is_raw})\n{'='*60}")
     

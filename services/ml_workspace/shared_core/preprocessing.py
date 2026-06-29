@@ -31,14 +31,25 @@ def gaussian_weighted_interpolation(df: pd.DataFrame, target_col: str, weight_co
     return df_out
 
 def create_lagged_features(df: pd.DataFrame, target_col: str, feature_cols: list, virtual_ratio: int, lags: int = DEFAULT_LAGS, lag_target: bool = True) -> pd.DataFrame:
-    df_lagged = df.copy()
     cols_to_lag = feature_cols.copy()
-    if lag_target: cols_to_lag.append(target_col)
+    if lag_target: 
+        cols_to_lag.append(target_col)
+    
+    # Dizionario per accumulare le nuove colonne shifted senza frammentare la memoria
+    lagged_data = {}
     
     for col in cols_to_lag:
-        for i in range(1, lags + 1):
-            df_lagged[f'{col}_lag_{i}'] = df_lagged[col].shift(i * virtual_ratio)
-            
+        if col in df.columns:
+            for i in range(1, lags + 1):
+                lagged_data[f'{col}_lag_{i}'] = df[col].shift(i * virtual_ratio)
+                
+    # Se sono state generate colonne, le uniamo al DataFrame originale in blocco
+    if lagged_data:
+        df_lagged = pd.concat([df, pd.DataFrame(lagged_data, index=df.index)], axis=1)
+    else:
+        df_lagged = df.copy()
+        
+    # Applichiamo il dropna sul DataFrame finale combinato
     df_lagged.dropna(inplace=True)
     return df_lagged
 

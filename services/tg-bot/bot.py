@@ -1,5 +1,6 @@
 import os
 import io
+import json
 import logging
 import asyncio
 import httpx
@@ -46,7 +47,7 @@ async def fetch_inference_api(endpoint: str, payload: dict = None, timeout: floa
     url = f"{INFERENCE_URL}{endpoint}"
     try:
         async with httpx.AsyncClient() as client:
-            if payload:
+            if payload is not None:
                 response = await client.post(url, json=payload, timeout=timeout)
             else:
                 response = await client.get(url, timeout=timeout)
@@ -90,9 +91,6 @@ def calculate_vpd(df: pd.DataFrame) -> pd.DataFrame:
     if all(col in df.columns for col in ['air_temp', 'humidity', 'leaf_temp']):
         df['vpd'] = df.apply(lambda row: calculate_vpd_array(row['air_temp'], row['humidity'], row['leaf_temp']), axis=1)
     return df
-
-def calculate_future_vpd(temp_list: list, hum_list: list, leaf_temp_list: list) -> list:
-    return [calculate_vpd_array(t, h, l) for t, h, l in zip(temp_list, hum_list, leaf_temp_list)]
 
 def fetch_history_data(board_id: str, hours: int) -> pd.DataFrame:
     client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
@@ -218,7 +216,11 @@ def create_semantic_category_plots(df_hist: pd.DataFrame) -> list[io.BytesIO]:
 # ==========================================
 
 async def setup_commands(application: Application):
-    await application.bot.set_my_commands([BotCommand("menu", "🎛 Open Control Panel")])
+    await application.bot.set_my_commands([
+        BotCommand("menu", "🎛 Open Control Panel"),
+        BotCommand("info", "📊 View ML Model Metrics (Usage: /info <freq> <task>)"),
+        BotCommand("reload", "🔄 Reload API Models into RAM")
+    ])
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['is_processing'] = False 
@@ -257,6 +259,37 @@ async def _check_spam_lock(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return True
     context.user_data['is_processing'] = True
     return False
+
+# NEW COMMANDS: /info and /reload
+
+async def handle_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = update.message.text.split()
+    if len(args) != 3:
+        await update.message.reply_text("ℹ️ **Usage:** `/info [freq_minutes] [task]`\n_Example:_ `/info 6 t1`", parse_mode='Markdown')
+        return
+    
+    freq, task = args[1], args[2].lower()
+    msg = await update.message.reply_text(f"🔍 Fetching metrics for **{freq}m {task.upper()}**...")
+    
+    data = await fetch_inference_api(f"/info/{freq}m/{task}")
+    if data:
+        formatted_json = json.dumps(data, indent=2)
+        await msg.edit_text(f"📊 **Model Metrics ({freq}m {task.upper()}):**\n```json\n{formatted_json}\n```", parse_mode='Markdown')
+    else:
+        await msg.edit_text("⚠️ **Model info not found.** Check if the task/frequency exists.")
+
+async def handle_reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("🔄 Requesting API server to reload models into RAM...")
+    data = await fetch_inference_api("/reload-models", payload={})
+    
+    if data and data.get("status") == "ok":
+        await msg.edit_text("✅ **Models reloaded successfully!**", parse_mode='Markdown')
+    else:
+        await msg.edit_text("⚠️ **Failed to reload models.** Check API logs.", parse_mode='Markdown')
+
+# ==========================================
+# HISTORY & PREDICT HANDLERS
+# ==========================================
 
 async def handle_history_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -409,44 +442,39 @@ async def process_whatif_values(update: Update, context: ContextTypes.DEFAULT_TY
         return ConversationHandler.END
 
     df_hist = await asyncio.to_thread(fetch_history_data, board_id, 3)
+    
+    # Extract Native API payloads properly
+    historical_api = data.get("historical", {})
+    predictions_api = data.get("predictions", {})
+    arima_proj = data.get("arima_projections", {})
+
     series_temp = {}
     arima_series = {}
-    future_vpd = []
 
-    # Map API output to our Graphing Dictionary just like in `process_prediction`
+    # Gather estimated Soft-Sensor history
+    est_hist = historical_api.get("leaf_temp_estimated", [])
+    if est_hist:
+        series_temp["T1/T4 Est. History (Soft Sensor)"] = est_hist
+
+    # Extract forecasts
     if mode == "ensemble":
-        blended = data.get("forecast_blended", [])
-        env = data.get("forecast_env", [])
-        auto = data.get("forecast_auto", [])
-        arima_proj = data.get("arima_projections", {})
-
+        blended = predictions_api.get("forecast_blended", [])
         if blended: series_temp["What-If Projection"] = blended
-        if env: series_temp["Environment (Env)"] = env
-        if auto: series_temp["Autoregressive (Auto)"] = auto
-        
         if arima_proj:
             arima_series["Air Temp Forecast (°C)"] = arima_proj.get("air_temp", [])
             arima_series["Humidity Forecast (%)"] = arima_proj.get("humidity", [])
             
-            # Calculate Future VPD
-            if blended:
-                air_t = [x['value'] for x in arima_proj['air_temp']]
-                hum = [x['value'] for x in arima_proj['humidity']]
-                leaf_t = [x['value'] for x in blended]
-                vpd_vals = calculate_future_vpd(air_t, hum, leaf_t)
-                for i, vpd in enumerate(vpd_vals):
-                    future_vpd.append({"timestamp": blended[i]['timestamp'], "value": vpd})
-                    
     elif mode == "standard":
-        raw_preds = data.get("predictions", [])
+        raw_preds = predictions_api.get("target_forecast", [])
         if raw_preds:
-            last_dt = df_hist.index[-1] if not df_hist.empty else pd.Timestamp.now(tz=TZ_ROME)
-            future_times = [last_dt + timedelta(minutes=freq_min * (i + 1)) for i in range(len(raw_preds))]
-            series_temp["What-If Projection"] = [{"timestamp": t.isoformat(), "value": v} for t, v in zip(future_times, raw_preds)]
+            series_temp["What-If Projection"] = raw_preds
+
+    future_vpd = predictions_api.get("vpd_forecast", [])
 
     # Generate Plots
     plots = []
-    plots.append(InputMediaPhoto(media=create_series_plot(df_hist, series_temp, f"What-If Simulation: {task.upper()}")))
+    hide_real = bool(mode == "ensemble" and series_temp.get("T1/T4 Est. History (Soft Sensor)"))
+    plots.append(InputMediaPhoto(media=create_series_plot(df_hist, series_temp, f"What-If Simulation: {task.upper()}", hide_real)))
     
     if arima_series:
         plots.append(InputMediaPhoto(media=create_series_plot(pd.DataFrame(), arima_series, "What-If ARIMA Forecast")))
@@ -508,49 +536,47 @@ async def process_prediction(update: Update, mode: str, task_or_group: str, boar
         return
 
     df_hist = await asyncio.to_thread(fetch_history_data, board_id, 3)
+    
+    # Unpack API responses correctly based on nested schemas
+    historical_api = data.get("historical", {})
+    predictions_api = data.get("predictions", {})
+    arima_proj = data.get("arima_projections", {})
+    
     series_temp = {}
     arima_series = {}
-    future_vpd = []
-    weights = data.get("weights", {})
+    
+    # Grab Soft Sensor Estimated History if available
+    est_hist = historical_api.get("leaf_temp_estimated", [])
+    if est_hist:
+        series_temp["T1/T4 Est. History (Soft Sensor)"] = est_hist
+        
+    # Grab natively calculated VPD array
+    future_vpd = predictions_api.get("vpd_forecast", [])
     
     if mode == "ensemble":
-        blended = data.get("forecast_blended", [])
-        env = data.get("forecast_env", [])
-        auto = data.get("forecast_auto", [])
-        generated_hist = data.get("generated_history", [])
-        arima_proj = data.get("arima_projections", {})
+        blended = predictions_api.get("forecast_blended", [])
+        env = predictions_api.get("forecast_env", [])
+        auto = predictions_api.get("forecast_auto", [])
         
         if blended: series_temp["Blended (Final)"] = blended
         if env: series_temp["Environment (Env)"] = env
         if auto: series_temp["Autoregressive (Auto)"] = auto
-        if generated_hist: series_temp["T1/T4 Est. History (Soft Sensor)"] = generated_hist
         
         if arima_proj:
             # Prepare ARIMA Environmental Data for a dedicated Plot
             arima_series["Air Temp Forecast (°C)"] = arima_proj.get("air_temp", [])
             arima_series["Humidity Forecast (%)"] = arima_proj.get("humidity", [])
 
-            # Calculate Future VPD
-            if blended:
-                air_t = [x['value'] for x in arima_proj['air_temp']]
-                hum = [x['value'] for x in arima_proj['humidity']]
-                leaf_t = [x['value'] for x in blended]
-                vpd_vals = calculate_future_vpd(air_t, hum, leaf_t)
-                for i, vpd in enumerate(vpd_vals):
-                    future_vpd.append({"timestamp": blended[i]['timestamp'], "value": vpd})
-
     elif mode == "standard":
-        raw_preds = data.get("predictions", [])
+        raw_preds = predictions_api.get("target_forecast", [])
         if raw_preds:
-            last_dt = df_hist.index[-1] if not df_hist.empty else pd.Timestamp.now(tz=TZ_ROME)
-            future_times = [last_dt + timedelta(minutes=freq_min * (i + 1)) for i in range(len(raw_preds))]
-            series_temp["Standard Prediction"] = [{"timestamp": t.isoformat(), "value": v} for t, v in zip(future_times, raw_preds)]
+            series_temp["Standard Prediction"] = raw_preds
 
     # Plotting
     plots = []
     
-    # 1. Main Temp Plot (Hide Real History if Ensemble is generating its own Soft History to compare)
-    hide_real = bool(mode == "ensemble" and series_temp.get("T1/T4 Est. History (Soft Sensor)"))
+    # 1. Main Temp Plot (Hide Real History if Ensemble or Standard provides Soft History to compare)
+    hide_real = bool(series_temp.get("T1/T4 Est. History (Soft Sensor)"))
     plots.append(InputMediaPhoto(media=create_series_plot(df_hist, series_temp, f"Temp. Prediction: {task_or_group.upper()}", hide_real)))
     
     # 2. ARIMA Environment Plot (Only if ensemble)
@@ -567,6 +593,8 @@ async def process_prediction(update: Update, mode: str, task_or_group: str, boar
         f"**Target:** {REVERSE_BOARD_MAP[board_id]} (ID: `{board_id}`)\n"
         f"**Task/Group:** {task_or_group.upper()}\n"
     )
+    # The API might not return weights anymore based on your snippet, but retaining safely:
+    weights = data.get("weights", {})
     if weights:
         summary += f"**Ensemble Weights:** Auto: `{weights.get('autoregressive', 0)}` | Env: `{weights.get('environmental', 0)}`\n"
 
@@ -579,7 +607,10 @@ def main():
         return logger.error("TELEGRAM_BOT_TOKEN missing in .env file!")
     application = Application.builder().token(TOKEN).post_init(setup_commands).build()
     
+    # Register core commands
     application.add_handler(CommandHandler(["start", "menu"], show_main_menu))
+    application.add_handler(CommandHandler("info", handle_info_command))
+    application.add_handler(CommandHandler("reload", handle_reload_command))
     
     # The conversation handler for What-If
     conv_handler = ConversationHandler(
