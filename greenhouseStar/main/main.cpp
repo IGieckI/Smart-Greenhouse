@@ -180,6 +180,46 @@ esp_err_t info_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+esp_err_t command_handler(httpd_req_t *req) {
+    char buf[128];
+    int ret, remaining = req->content_len;
+    if (remaining >= (int)sizeof(buf)) { httpd_resp_send_500(req); return ESP_FAIL; }
+    ret = httpd_req_recv(req, buf, remaining);
+    if (ret <= 0) return ESP_FAIL;
+    buf[ret] = '\0';
+
+    cJSON *json = cJSON_Parse(buf);
+    if (!json) { httpd_resp_send_500(req); return ESP_FAIL; }
+
+    cJSON *nid = cJSON_GetObjectItem(json, "nid");
+    cJSON *act = cJSON_GetObjectItem(json, "act");
+    cJSON *val = cJSON_GetObjectItem(json, "val");
+    cJSON *dur = cJSON_GetObjectItem(json, "dur");
+
+    if (cJSON_IsNumber(nid) && cJSON_IsString(act) && cJSON_IsNumber(val) && cJSON_IsNumber(dur)) {
+        command_packet_t cp = {};
+        cp.node_id    = (uint32_t)nid->valuedouble;
+        strncpy(cp.actuator, act->valuestring, CMD_ACTUATOR_LEN - 1);
+        cp.value      = (uint8_t)val->valueint;
+        cp.duration_s = (uint16_t)dur->valueint;
+
+        xSemaphoreTake(pending_cmds_mutex, portMAX_DELAY);
+        pending_cmds[cp.node_id] = cp;
+        xSemaphoreGive(pending_cmds_mutex);
+
+        ESP_LOGI(TAG, "HTTP command queued for node %lu: %s val=%d dur=%ds",
+                 (unsigned long)cp.node_id, cp.actuator, cp.value, cp.duration_s);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"status\":\"queued\"}");
+    } else {
+        cJSON_Delete(json);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    cJSON_Delete(json);
+    return ESP_OK;
+}
+
 static void start_webserver() {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     httpd_handle_t server = NULL;
@@ -188,10 +228,12 @@ static void start_webserver() {
         httpd_uri_t uri_dump = { "/dump",     HTTP_GET,  download_data_handler, NULL };
         httpd_uri_t uri_time = { "/set_time", HTTP_POST, set_time_handler,      NULL };
         httpd_uri_t uri_info = { "/info",     HTTP_GET,  info_handler,          NULL };
+        httpd_uri_t uri_cmd  = { "/command",  HTTP_POST, command_handler,       NULL };
         httpd_register_uri_handler(server, &uri_dump);
         httpd_register_uri_handler(server, &uri_time);
         httpd_register_uri_handler(server, &uri_info);
-        ESP_LOGI(TAG, "HTTP server ready at http://192.168.4.1  (/dump, /set_time, /info)");
+        httpd_register_uri_handler(server, &uri_cmd);
+        ESP_LOGI(TAG, "HTTP server ready at http://192.168.4.1  (/dump, /set_time, /info, /command)");
     } else {
         ESP_LOGE(TAG, "Failed to start HTTP server!");
     }
