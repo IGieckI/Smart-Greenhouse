@@ -36,9 +36,8 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     switch (event_id) {
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "MQTT connected to %s", MQTT_BROKER);
-            // Subscribe to command topics for all Stars
-            esp_mqtt_client_subscribe(mqtt_client, "greenhouse/commands/+", 1);
-            ESP_LOGI(TAG, "Subscribed to greenhouse/commands/+");
+            esp_mqtt_client_subscribe(mqtt_client, "greenhouse/gateway/commands", 1);
+            ESP_LOGI(TAG, "Subscribed to greenhouse/gateway/commands");
             break;
 
         case MQTT_EVENT_DISCONNECTED:
@@ -47,9 +46,8 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
         case MQTT_EVENT_DATA: {
             esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)event_data;
-            // Forward commands destined for any Star via LoRa
             if (event->topic_len > 0 &&
-                strncmp(event->topic, "greenhouse/commands/", 20) == 0) {
+                strncmp(event->topic, "greenhouse/gateway/commands", event->topic_len) == 0) {
 
                 char payload[LORA_TX_PAYLOAD_SIZE] = {0};
                 int len = (event->data_len < LORA_TX_PAYLOAD_SIZE - 1)
