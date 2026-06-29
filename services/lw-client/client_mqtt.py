@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 # The Star serializes LoRa payloads with abbreviated keys to fit the packet.
 # Map them to the full names expected by the controller (matching cw-client output).
 _KEY_MAP = {
+    "sid": "star_id",
     "ts":  "timestamp",
     "id":  "node_id",
     "p":   "pressure",

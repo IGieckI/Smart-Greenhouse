@@ -104,6 +104,24 @@ cmd_reset() {
     $COMPOSE logs -f "$svc"
 }
 
+cmd_command() {
+    local node_id="${1:-}"
+    local actuator="${2:-}"
+    local value="${3:-}"
+    local duration="${4:-10}"
+    [[ -z "$node_id" || -z "$actuator" || -z "$value" ]] && \
+        die "Usage: ./greenhouse.sh command <node_id> <actuator> <value 0-100> [duration_s]
+  Examples:
+    ./greenhouse.sh command 3750866944 pump 100 10   # pump on full for 10s
+    ./greenhouse.sh command 3750866944 led  75  30   # LED at 75% for 30s
+    ./greenhouse.sh command 3750866944 pump 0   0    # pump off immediately"
+    info "Sending command to node $node_id: $actuator=$value% for ${duration}s..."
+    curl -sf -X POST http://localhost:3001/api/command \
+        -H "Content-Type: application/json" \
+        -d "{\"node_id\":$node_id,\"actuator\":\"$actuator\",\"value\":$value,\"duration_s\":$duration}" \
+        | (command -v jq >/dev/null 2>&1 && jq || cat)
+}
+
 cmd_exchange() {
     local csv="${1:-}"
     [[ -z "$csv" ]] && die "Specify a CSV file. Example: ./greenhouse.sh exchange friend_dump.csv"
@@ -140,16 +158,18 @@ case "$CMD" in
     logs)     cmd_logs  "${1:-}" ;;
     reset)    cmd_reset "${1:-}" ;;
     exchange) cmd_exchange "${1:-}" ;;
+    command)  cmd_command "${1:-}" "${2:-10}" "${3:-on}" ;;
     help|--help|-h)
         echo "Usage: ./greenhouse.sh <command> [options]"
         echo ""
         echo "Commands:"
-        echo "  setup                  First-time setup: create .env, check Docker"
-        echo "  up [core|ml|all]       Start services (default: all)"
-        echo "  down                   Stop all services"
-        echo "  logs [service]         Follow logs (all services, or one by name)"
-        echo "  reset <service>        Rebuild and restart a single service"
-        echo "  exchange <file.csv>    Import colleague CSV, export merged dump"
+        echo "  setup                        First-time setup: create .env, check Docker"
+        echo "  up [core|ml|all]             Start services (default: all)"
+        echo "  down                         Stop all services"
+        echo "  logs [service]               Follow logs (all services, or one by name)"
+        echo "  reset <service>              Rebuild and restart a single service"
+        echo "  exchange <file.csv>          Import colleague CSV, export merged dump"
+        echo "  command <node_id> <act> <val 0-100> [dur]   Send actuator command (default dur: 10s)"
         ;;
     *)
         die "Unknown command '$CMD'. Run './greenhouse.sh help' for usage."
