@@ -209,7 +209,7 @@ app.post('/api/data', async (req, res) => {
 
 // Send an actuation command to a Node.
 // The Star managing that node is looked up from the topology file.
-// Body: { node_id: number, actuator: string, value: number (0-100), duration_s: number }
+// Body: { node_id: number, actuator: string, value: number (0-255), duration_s: number }
 app.post('/api/command', (req, res) => {
     const { node_id, actuator, value, duration_s } = req.body;
 

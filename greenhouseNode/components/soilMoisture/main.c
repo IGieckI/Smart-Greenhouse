@@ -10,12 +10,11 @@ void app_main(void)
 {
     SoilMoistureSensor sensor;
 
-    // Configuration
     soil_moisture_config_t config = {
         .adc_unit = ADC_UNIT_1,
         .adc_channel = ADC_CHANNEL_4, 
-        .dry_value = 3000,  // READ RAW VALUE IN DRY AIR AND PUT IT HERE
-        .wet_value = 1200   // READ RAW VALUE IN A GLASS OF WATER AND PUT IT HERE
+        .dry_value = 3000,
+        .wet_value = 1200
     };
 
     esp_err_t ret = soil_moisture_init(&config, &sensor_handle);

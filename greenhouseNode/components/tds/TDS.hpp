@@ -4,27 +4,28 @@
 #include <esp_adc/adc_oneshot.h>
 #include <esp_adc/adc_cali.h>
 
+/**
+ * @ref Based on DFRobot/DFRobot_ESP_EC_and_TDS_with_MQTT_Iotcloud implementation.
+ */
 class TDS {
 public:
     /**
-     * @brief Construct a new Gravity TDS object
-     * * @param adc_handle Initialized ADC oneshot unit handle
+     * TDS Constructor
+     * @param adc_handle Initialized ADC oneshot unit handle
      * @param channel ADC channel the sensor is connected to
      * @param cali_handle (Optional) ADC calibration handle for accurate voltage reading
      */
     TDS(adc_oneshot_unit_handle_t adc_handle, adc_channel_t channel, adc_cali_handle_t cali_handle = nullptr);
-    TDS();
-    ~TDS();
 
     /**
      * @brief Set the ambient temperature for compensation
-     * @param temp Temperature in Celsius (Default is 25.0)
+     * @param temp Temperature in Celsius
      */
     void setTemperature(float temp);
 
     /**
      * @brief Set the calibration K-Value
-     * @param k Calibration factor (Default is 1.0)
+     * @param k Calibration factor
      */
     void setKValue(float k);
 

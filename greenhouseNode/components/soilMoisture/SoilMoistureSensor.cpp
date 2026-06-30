@@ -13,7 +13,6 @@ SoilMoistureSensor::SoilMoistureSensor()
 }
 
 SoilMoistureSensor::~SoilMoistureSensor() {
-    // Replaces soil_moisture_deinit()
     if (_is_initialized && _adc_handle) {
         adc_oneshot_del_unit(_adc_handle);
         ESP_LOGI(TAG, "Soil moisture sensor deinitialized");
@@ -64,10 +63,8 @@ esp_err_t SoilMoistureSensor::read_percentage(float& percentage) {
     // ESP_LOGI("MAIN", "Raw Moisture Value: %d", raw_val);
     if (ret != ESP_OK) return ret;
 
-    // Map the raw value to a 0-100% scale
     float mapped = 100.0f * static_cast<float>(_dry_value - raw_val) / static_cast<float>(_dry_value - _wet_value);
     
-    // std::clamp safely restricts the mapped value between 0.0f and 100.0f
     percentage = std::clamp(mapped, 0.0f, 100.0f);
 
     return ESP_OK;

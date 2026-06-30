@@ -4,16 +4,6 @@
 
 static const char* TAG = "TDS";
 
-TDS::TDS() 
-    : _adc_handle(nullptr), 
-      _channel(ADC_CHANNEL_0), 
-      _cali_handle(nullptr), 
-      _temperature(25.0f), 
-      _kValue(1.0f), 
-      _tdsValue(0.0f) 
-{
-}
-
 TDS::TDS(adc_oneshot_unit_handle_t adc_handle, adc_channel_t channel, adc_cali_handle_t cali_handle)
     : _adc_handle(adc_handle), 
       _channel(channel), 
@@ -22,10 +12,6 @@ TDS::TDS(adc_oneshot_unit_handle_t adc_handle, adc_channel_t channel, adc_cali_h
       _kValue(1.0f), 
       _tdsValue(0.0f) 
 {
-}
-
-TDS::~TDS() {
-    // ADC handles are managed externally, nothing to free here
 }
 
 void TDS::setTemperature(float temp) {
@@ -55,22 +41,17 @@ esp_err_t TDS::update() {
 
     float voltage = 0.0f;
     
-    // If a calibration handle is provided, use it for accurate voltage mapping
     if (_cali_handle) {
         int voltage_mv = 0;
         adc_cali_raw_to_voltage(_cali_handle, raw_val, &voltage_mv);
-        voltage = voltage_mv / 1000.0f; // Convert mV to V
+        voltage = voltage_mv / 1000.0f;
     } else {
-        // Fallback calculation if no calibration scheme is provided 
-        // Assumes 12-bit ADC and 3.3V reference. This will be less accurate.
         voltage = (raw_val / 4095.0f) * 3.3f;
     }
 
-    // Apply temperature compensation
     float compensationCoefficient = 1.0f + 0.02f * (_temperature - 25.0f);
     float compensationVoltage = voltage / compensationCoefficient;
 
-    // DFRobot TDS calculation algorithm
     _tdsValue = (133.42f * std::pow(compensationVoltage, 3) -
                  255.86f * std::pow(compensationVoltage, 2) +
                  857.39f * compensationVoltage) * 0.5f * _kValue;

@@ -4,7 +4,6 @@
 #include "driver/i2c.h"
 #include "bh1750.hpp"
 
-// I2C Config
 #define I2C_MASTER_NUM     I2C_NUM_0
 #define I2C_MASTER_SDA_IO  21
 #define I2C_MASTER_SCL_IO  22
@@ -44,8 +43,6 @@ void app_main(void) {
     float lux = 0;
 
     while (1) {
-        // Because the sensor is in ONE_TIME mode,it goes to sleep after measuring, so
-        // we must re-issue the measurement command every time we want a new reading
         bh1750_setup_mode(&light_sensor, mode);
 
         if (bh1750_read_lux(&light_sensor, mode, &lux) == ESP_OK) {

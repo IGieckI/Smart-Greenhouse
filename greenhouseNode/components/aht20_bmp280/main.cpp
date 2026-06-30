@@ -15,9 +15,6 @@
 
 static const char *TAG = "MAIN_APP";
 
-/**
- * @brief i2c master initialization
- */
 static esp_err_t i2c_master_init(void) {
     i2c_config_t conf = {};
     conf.mode = I2C_MODE_MASTER;
@@ -37,7 +34,6 @@ extern "C" void app_main(void) {
 
     ESP_LOGI(TAG, "Initializing Sensors...");
     
-    // Instantiate the sensor object
     Aht20Bmp280 sensor(I2C_MASTER_NUM, Aht20Bmp280::BMP280_I2C_ADDR_77);
     
     if (sensor.init() != ESP_OK) {

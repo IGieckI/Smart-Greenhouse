@@ -61,8 +61,8 @@ float Aht20Bmp280::bmp280_compensate_P(int32_t adc_P) {
 }
 
 esp_err_t Aht20Bmp280::init() {
-    // 1. Initialize AHT20
-    vTaskDelay(pdMS_TO_TICKS(40)); // Wait for AHT20 power on
+    // Initialize AHT20
+    vTaskDelay(pdMS_TO_TICKS(40));
     uint8_t aht_init_cmd[] = {0xBE, 0x08, 0x00};
     esp_err_t err = i2c_master_write_to_device(_port, AHT20_I2C_ADDRESS, aht_init_cmd, sizeof(aht_init_cmd), pdMS_TO_TICKS(100));
     if (err != ESP_OK) {
@@ -70,7 +70,7 @@ esp_err_t Aht20Bmp280::init() {
         return err;
     }
 
-    // 2. Initialize BMP280
+    // Initialize BMP280
     uint8_t bmp_id = 0;
     uint8_t id_reg = 0xD0;
     err = i2c_master_write_read_device(_port, _bmp_addr, &id_reg, 1, &bmp_id, 1, pdMS_TO_TICKS(100));
@@ -82,11 +82,10 @@ esp_err_t Aht20Bmp280::init() {
     err = bmp280_read_calib();
     if (err != ESP_OK) return err;
 
-    // Set BMP280 config: Normal mode, Temp OSx1, Press OSx1 (0x27)
+    // Set BMP280 config Normal mode
     err = write_reg(_bmp_addr, 0xF4, 0x27);
     if (err != ESP_OK) return err;
     
-    // Set Standby 1000ms, Filter x16 (0xA0)
     err = write_reg(_bmp_addr, 0xF5, 0xA0);
     
     ESP_LOGI(TAG, "AHT20 & BMP280 Initialized successfully");
@@ -96,11 +95,11 @@ esp_err_t Aht20Bmp280::init() {
 esp_err_t Aht20Bmp280::read(SensorData& out_data) {
     esp_err_t err;
 
-    // --- Read AHT20 ---
+    // Read AHT20
     uint8_t aht_trigger[] = {0xAC, 0x33, 0x00};
     err = i2c_master_write_to_device(_port, AHT20_I2C_ADDRESS, aht_trigger, sizeof(aht_trigger), pdMS_TO_TICKS(100));
     if (err == ESP_OK) {
-        vTaskDelay(pdMS_TO_TICKS(80)); // Wait for measurement
+        vTaskDelay(pdMS_TO_TICKS(80));
         uint8_t aht_data[6];
         err = i2c_master_read_from_device(_port, AHT20_I2C_ADDRESS, aht_data, 6, pdMS_TO_TICKS(100));
         
@@ -113,7 +112,7 @@ esp_err_t Aht20Bmp280::read(SensorData& out_data) {
         }
     }
 
-    // --- Read BMP280 ---
+    // Read BMP280
     uint8_t bmp_data[6];
     uint8_t reg = 0xF7;
     err = i2c_master_write_read_device(_port, _bmp_addr, &reg, 1, bmp_data, 6, pdMS_TO_TICKS(100));

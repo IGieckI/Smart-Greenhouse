@@ -3,24 +3,24 @@
 #include "driver/i2c.h"
 #include "esp_err.h"
 
+/**
+ * @ref Based on Seeed-Studio/Seeed_Arduino_AHT20 and adafruit/adafruit_bmp280_library implementation
+ */
 class Aht20Bmp280 {
 public:
-    // I2C Addresses
     static constexpr uint8_t AHT20_I2C_ADDRESS = 0x38;
-    static constexpr uint8_t BMP280_I2C_ADDR_76 = 0x76; // SDO to GND
-    static constexpr uint8_t BMP280_I2C_ADDR_77 = 0x77; // SDO to VCC (Default for many combo boards)
+    static constexpr uint8_t BMP280_I2C_ADDR_77 = 0x77;
 
-    // Data container
     struct SensorData {
         float aht_temperature;  // Celsius
         float aht_humidity;     // Percentage
         float bmp_temperature;  // Celsius
-        float bmp_pressure;     // Pascals (Pa)
+        float bmp_pressure;     // Pascals
     };
 
     /**
      * @brief Constructor
-     * @param port I2C port number (e.g., I2C_NUM_0)
+     * @param port I2C port number
      * @param bmp280_addr I2C address of the BMP280
      */
     Aht20Bmp280(i2c_port_t port = I2C_NUM_0, uint8_t bmp280_addr = BMP280_I2C_ADDR_77);
@@ -51,9 +51,23 @@ private:
 
     int32_t _t_fine;
 
-    // Internal Helper Methods
+    /**
+     * Write one byte to a device register over I2C
+     */
     esp_err_t write_reg(uint8_t addr, uint8_t reg, uint8_t data);
+    
+    /**
+     * Read factory calibration coefficients from BMP280 NVM
+     */
     esp_err_t bmp280_read_calib();
+
+    /**
+     * Apply Bosch calibration formula to raw temperature ADC value (from datasheet)
+     */
     float bmp280_compensate_T(int32_t adc_T);
+
+    /**
+     * Apply Bosch calibration formula to raw pressure ADC value (from datasheet)
+     */
     float bmp280_compensate_P(int32_t adc_P);
 };
