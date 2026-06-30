@@ -15,7 +15,7 @@ const bucket = process.env.INFLUX_BUCKET;
 const influxDB = new InfluxDB({ url, token });
 const writeApi = influxDB.getWriteApi(org, bucket);
 
-const LEAF_TEMP_LABEL = process.env.LEAF_TEMP_LABEL || 'leaf_temperature';
+const LEAF_TEMP_LABEL = process.env.LEAF_TEMP_LABEL || 'leaf_temp';
 const FALLBACK_FILE_PATH = './data/leaf_temp.txt';
 const AUDIO_FILE = path.join(__dirname, 'ringtone.mp3'); 
 
