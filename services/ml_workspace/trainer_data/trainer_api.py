@@ -9,6 +9,7 @@ import uvicorn
 from fastapi.responses import FileResponse
 from fastapi import Path
 
+from analytics_plotter import ensure_analytics_plots
 
 from shared_core.data_sync import sync_clean_bucket
 from train import fetch_clean_data, train_environmental_prophet, run_pipeline_for_task
@@ -132,16 +133,19 @@ def get_queue_status():
 
 @app.get("/analytics/{freq_minutes}/{task_name}/plots")
 def list_analytics_plots(freq_minutes: int, task_name: str):
-    """Restituisce la lista di tutti i grafici analitici disponibili per un task e frequenza specifici."""
-    analytics_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", task_name, "analytics_plots")
+    """Valuta in modo lazy i plot, li genera se assenti, e ne restituisce la lista."""
+    task_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", task_name)
     
-    if not os.path.exists(analytics_dir):
-        raise HTTPException(status_code=404, detail="Directory analytics non trovata. Il modello è stato addestrato?")
-        
+    # Generazione Idempotente
+    success = ensure_analytics_plots(task_dir, task_name)
+    if not success:
+        raise HTTPException(status_code=404, detail="Dati di training non trovati. Addestrare prima il modello.")
+
+    analytics_dir = os.path.join(task_dir, "analytics_plots")
     plots = [f for f in os.listdir(analytics_dir) if f.endswith(".png")]
     
     if not plots:
-        return {"message": "Nessun grafico trovato.", "plots": []}
+        return {"message": "Nessun grafico generato.", "plots": []}
         
     return {
         "freq_minutes": freq_minutes,
@@ -153,17 +157,21 @@ def list_analytics_plots(freq_minutes: int, task_name: str):
 @app.get("/analytics/{freq_minutes}/{task_name}/plot/{filename}")
 def get_analytics_plot(freq_minutes: int, task_name: str, filename: str):
     """Restituisce il file immagine effettivo del plot richiesto."""
-    file_path = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", task_name, "analytics_plots", filename)
+    task_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", task_name)
+    file_path = os.path.join(task_dir, "analytics_plots", filename)
     
+    # Assicuriamoci che esista (utile se l'utente chiama l'URL diretto senza passare da /plots)
     if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Grafico non trovato.")
+        ensure_analytics_plots(task_dir, task_name)
+        
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Grafico non trovato. Generazione fallita o nome errato.")
         
     return FileResponse(
         path=file_path, 
         media_type="image/png", 
         filename=f"{task_name}_{freq_minutes}m_{filename}"
     )
-
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8001)

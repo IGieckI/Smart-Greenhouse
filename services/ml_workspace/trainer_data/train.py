@@ -8,6 +8,9 @@ import joblib
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+# ELIMINA: from analytics_plotter import generate_analytics_plots
+from analytics_plotter import clear_analytics_cache
+
 from analytics_plotter import generate_analytics_plots
 
 from influxdb_client import InfluxDBClient
@@ -367,14 +370,14 @@ def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> d
             "model": Pipeline(scaler_and_poly + [('regressor', Ridge())]),
             "params": {"regressor__alpha": [0.01, 0.1, 1.0, 10.0, 100.0]}
         },
-        "RandomForest": {
-            "model": Pipeline(scaler_only + [('regressor', RandomForestRegressor(random_state=42, n_jobs=1))]),
-            "params": {
-                "regressor__n_estimators": [100, 300, 500], 
-                "regressor__max_depth": [10, 20, None], 
-                "regressor__min_samples_split": [2, 5, 10]
-            }
-        },
+        # "RandomForest": {
+        #     "model": Pipeline(scaler_only + [('regressor', RandomForestRegressor(random_state=42, n_jobs=1))]),
+        #     "params": {
+        #         "regressor__n_estimators": [100, 300, 500], 
+        #         "regressor__max_depth": [10, 20, None], 
+        #         "regressor__min_samples_split": [2, 5, 10]
+        #     }
+        # },
         "LightGBM": {
             "model": Pipeline(scaler_only + [('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
             "params": {
@@ -393,9 +396,11 @@ def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> d
             }
         },
     }
+
+
 def run_pipeline_for_task(task_name, config, df_data, freq_minutes, is_raw=False):
     print(f"\n{'='*60}\n[Trainer {freq_minutes}m] STARTING PIPELINE: {task_name.upper()} (RAW Data Mode: {is_raw})\n{'='*60}")
-    
+
     target_col = config["target"]
     features_list = config["features"]
     use_lags = config.get("use_lags", False)
@@ -405,7 +410,9 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes, is_raw=False
     
     task_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", task_name)
     archive_dir, best_dir, plots_dir = [os.path.join(task_dir, p) for p in ["models_archive", "best_model", "plots"]]
-    for d in [archive_dir, best_dir, plots_dir]: os.makedirs(d, exist_ok=True)
+    
+    for d in [archive_dir, best_dir, plots_dir]: 
+        os.makedirs(d, exist_ok=True)
 
     extended_features_list = get_extended_features_list(features_list, use_lags)
     df_train_final_list, df_test_final_list = [], []
