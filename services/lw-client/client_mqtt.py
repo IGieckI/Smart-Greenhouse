@@ -31,6 +31,7 @@ _KEY_MAP = {
 def _normalize(raw: dict) -> dict:
     return {_KEY_MAP.get(k, k): v for k, v in raw.items()}
 
+_subscribed_stars = set()
 
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
@@ -44,10 +45,22 @@ def on_disconnect(client, userdata, rc):
         logger.warning(f"Unexpected disconnect (rc={rc}), will auto-reconnect")
 
 def on_message(client, userdata, msg):
+    if msg.topic.startswith("greenhouse/commands/"):
+        client.publish("greenhouse/gateway/commands", msg.payload)
+        logger.info(f"Forwarded command to Gateway: {msg.payload.decode()}")
+        return
+
     logger.info(f"Message on '{msg.topic}'")
     try:
         raw = json.loads(msg.payload.decode())
         payload = _normalize(raw)
+
+        star_id = payload.get("star_id")
+        if star_id and star_id not in _subscribed_stars:
+            _subscribed_stars.add(star_id)
+            client.subscribe(f"greenhouse/commands/{star_id}")
+            logger.info(f"Subscribed to commands for star {star_id}")
+
         response = requests.post(CONTROLLER_URL, json=payload, timeout=5)
         logger.info(f"Forwarded to controller, status={response.status_code}")
     except json.JSONDecodeError:

@@ -5,17 +5,21 @@
 
 class SoilMoistureSensor {
 public:
-    // Configuration structure mapped directly inside the class
     struct Config {
         adc_oneshot_unit_handle_t adc_handle;
         adc_channel_t adc_channel;
-        int dry_value;              // ADC raw value when completely dry (air)
+        int dry_value;              // ADC raw value when completely dry (dry soil)
         int wet_value;              // ADC raw value when completely wet (water)
     };
 
+    /** 
+     * @brief Constructor 
+     */
     SoilMoistureSensor();
-    
-    // Destructor automatically cleans up the ADC unit
+
+    /** 
+     * @brief Destructor
+     */
     ~SoilMoistureSensor();
 
     // Prevent copying to avoid multiple objects trying to free the same hardware handle

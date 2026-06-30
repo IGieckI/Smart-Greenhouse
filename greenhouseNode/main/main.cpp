@@ -33,6 +33,7 @@ esp_now_peer_info_t peerInfo;
 static command_packet_t received_command;
 static SemaphoreHandle_t command_sem = NULL;
 
+// Callback when a command is received
 void OnCommandRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
     if (len == sizeof(command_packet_t)) {
         memcpy(&received_command, data, sizeof(command_packet_t));
@@ -118,7 +119,6 @@ static int16_t read_ads1115(uint16_t config_flags) {
         return 0; 
     }
 
-    // Wait for conversion
     vTaskDelay(pdMS_TO_TICKS(15));
 
     uint8_t reg = ADS_POINTER_CONVERSION;
@@ -294,7 +294,6 @@ extern "C" void app_main(void)
 #else
         leaf_temps[i] = 0;
 #endif
-        // Short wait before taking the next sample
         vTaskDelay(pdMS_TO_TICKS(SAMPLE_DELAY_MS));
     }
 
@@ -324,7 +323,6 @@ extern "C" void app_main(void)
     esp_now_send(central_mac, (uint8_t *)&myData, sizeof(myData));
 
     // Wait up to 1.5s for an actuation command from the Star.
-    // This window covers the Star's LoRa TX + any queued command reply.
     if (xSemaphoreTake(command_sem, pdMS_TO_TICKS(1500)) == pdTRUE) {
         ESP_LOGI(TAG, "Command: %.*s val=%d dur=%ds",
                  CMD_ACTUATOR_LEN, received_command.actuator,
@@ -347,7 +345,7 @@ extern "C" void app_main(void)
                 gpio_set_level(act->pin, 0);
             }
         } else {
-            uint32_t duty = ((uint32_t)received_command.value * 1023) / 100;
+            uint32_t duty = ((uint32_t)received_command.value * 1023) / 255;
             ledc_set_duty(LEDC_LOW_SPEED_MODE, act->ledc_ch, duty);
             ledc_update_duty(LEDC_LOW_SPEED_MODE, act->ledc_ch);
             if (received_command.duration_s > 0) {
@@ -358,27 +356,17 @@ extern "C" void app_main(void)
         }
     }
 
-
-    // Ottieni i millisecondi totali trascorsi dall'accensione (boot)
+    // Get milliseconds since boot to calculate how long the node has been awake
     int64_t awake_time_ms = esp_timer_get_time() / 1000; 
-    
-    // Calcola quanto tempo manca per completare l'intervallo esatto
     int64_t sleep_time_ms = DEEP_SLEEP_MS - awake_time_ms;
 
-    // Controllo di sicurezza: se per qualche motivo (es. ritardi di rete) 
-    // l'esecuzione ha richiesto più tempo del tuo DEEP_SLEEP_MS, evita numeri negativi
+    // Check if the execution time exceeded DEEP_SLEEP_MS to avoid negative sleep time
     if (sleep_time_ms < 0) {
         sleep_time_ms = 0; 
     }
 
     ESP_LOGI(TAG, "Awake time: %lld ms, entering deep sleep mode for %lld ms...", awake_time_ms, sleep_time_ms);
     
-    // Converti in microsecondi per la funzione di deep sleep
     esp_sleep_enable_timer_wakeup((uint64_t)sleep_time_ms * 1000ULL);
     esp_deep_sleep_start();
-
-    // // // // Enter deep sleep
-    // // // ESP_LOGI(TAG, "Entering deep sleep for %d milliseconds...", DEEP_SLEEP_MS);
-    // // // esp_sleep_enable_timer_wakeup(DEEP_SLEEP_MS * 1000ULL);
-    // // // esp_deep_sleep_start();
 }

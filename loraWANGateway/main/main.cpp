@@ -36,9 +36,8 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     switch (event_id) {
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "MQTT connected to %s", MQTT_BROKER);
-            // Subscribe to command topics for all Stars
-            esp_mqtt_client_subscribe(mqtt_client, "greenhouse/commands/+", 1);
-            ESP_LOGI(TAG, "Subscribed to greenhouse/commands/+");
+            esp_mqtt_client_subscribe(mqtt_client, "greenhouse/gateway/commands", 1);
+            ESP_LOGI(TAG, "Subscribed to greenhouse/gateway/commands");
             break;
 
         case MQTT_EVENT_DISCONNECTED:
@@ -47,9 +46,8 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
         case MQTT_EVENT_DATA: {
             esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)event_data;
-            // Forward commands destined for any Star via LoRa
             if (event->topic_len > 0 &&
-                strncmp(event->topic, "greenhouse/commands/", 20) == 0) {
+                strncmp(event->topic, "greenhouse/gateway/commands", event->topic_len) == 0) {
 
                 char payload[LORA_TX_PAYLOAD_SIZE] = {0};
                 int len = (event->data_len < LORA_TX_PAYLOAD_SIZE - 1)
@@ -106,78 +104,33 @@ static void lora_rx_task(void *pvParameters) {
     char    tx_payload[LORA_TX_PAYLOAD_SIZE];
     ESP_LOGI(TAG, "LoRa RX task started, listening on 868 MHz");
 
-    // Use interrupt-driven receive so the TX queue is checked every 10ms
-    // regardless of whether a packet is arriving.
     radio->setDio1Action(setRxFlag);
     radio->startReceive();
 
     while (1) {
-        // TX has priority: forward command to Star via LoRa, then wait for ACK.
-        // Retry logic is handled by the backend — the Gateway just sends once.
         if (xQueueReceive(lora_tx_queue, tx_payload, 0) == pdTRUE) {
             ESP_LOGI(TAG, "LoRa TX command: %s", tx_payload);
             radio->transmit((uint8_t *)tx_payload, strlen(tx_payload));
-
-            // startReceive() BEFORE clearing the flag: any pending TX_DONE edge from
-            // the ESP32 interrupt controller fires and is absorbed by the subsequent clear.
-            int post_tx_rx = radio->startReceive();
-            ESP_LOGI(TAG, "post-TX startReceive=%d", post_tx_rx);
-
-            lora_rx_flag = false;
-
-            // Wait up to 500ms for ACK; re-arm and keep waiting if a non-ACK packet arrives.
-            bool acked = false;
-            TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(500);
-            while (xTaskGetTickCount() < deadline && !acked) {
-                uint32_t irq = radio->getIrqFlags();
-                if (lora_rx_flag || (irq & (1UL << RADIOLIB_IRQ_RX_DONE))) {
-                    lora_rx_flag = false;
-                    memset(buf, 0, sizeof(buf));
-                    int rx_state = radio->readData(buf, sizeof(buf)-1);
-                    ESP_LOGI(TAG, "ACK-window RX: state=%d data=\"%s\"", rx_state, (char *)buf);
-                    if (rx_state == RADIOLIB_ERR_NONE) {
-                        if (strstr((char *)buf, "\"ack\"") != NULL) {
-                            acked = true;
-                            ESP_LOGI(TAG, "ACK from Star: %s", (char *)buf);
-                            if (mqtt_client != NULL)
-                                esp_mqtt_client_publish(mqtt_client, "greenhouse/acks", (char *)buf, 0, 0, 0);
-                        } else {
-                            // Telemetry arrived during ACK window — forward and keep waiting
-                            ESP_LOGI(TAG, "Telemetry during ACK wait: %s", (char *)buf);
-                            if (mqtt_client != NULL)
-                                esp_mqtt_client_publish(mqtt_client, MQTT_TOPIC, (char *)buf, 0, 0, 0);
-                        }
-                    }
-                    if (!acked) {
-                        radio->startReceive();
-                        lora_rx_flag = false;
-                    }
-                }
-                vTaskDelay(pdMS_TO_TICKS(10));
-            }
-
-            if (!acked)
-                ESP_LOGW(TAG, "No ACK from Star (final IRQ=0x%lx) — backend will retry if needed",
-                        (unsigned long)radio->getIrqFlags());
-
             lora_rx_flag = false;
             radio->startReceive();
         }
 
-        // Normal telemetry path: packet arrived outside a command window
         if (lora_rx_flag) {
             lora_rx_flag = false;
             memset(buf, 0, sizeof(buf));
             int state = radio->readData(buf, sizeof(buf) - 1);
 
             if (state == RADIOLIB_ERR_NONE) {
-                ESP_LOGI(TAG, "Packet received — RSSI: %.1f dBm, SNR: %.1f dB",
-                         radio->getRSSI(), radio->getSNR());
-                ESP_LOGI(TAG, "Payload: %s", (char *)buf);
-
-                if (mqtt_client != NULL) {
-                    esp_mqtt_client_publish(mqtt_client, MQTT_TOPIC, (char *)buf, 0, 0, 0);
-                    ESP_LOGI(TAG, "Forwarded to MQTT topic: %s", MQTT_TOPIC);
+                if (strstr((char *)buf, "\"ack\"") != NULL) {
+                    ESP_LOGI(TAG, "ACK from Star: %s", (char *)buf);
+                    if (mqtt_client != NULL)
+                        esp_mqtt_client_publish(mqtt_client, "greenhouse/acks", (char *)buf, 0, 0, 0);
+                } else {
+                    ESP_LOGI(TAG, "Telemetry received — RSSI: %.1f dBm, SNR: %.1f dB",
+                             radio->getRSSI(), radio->getSNR());
+                    ESP_LOGI(TAG, "Payload: %s", (char *)buf);
+                    if (mqtt_client != NULL)
+                        esp_mqtt_client_publish(mqtt_client, MQTT_TOPIC, (char *)buf, 0, 0, 0);
                 }
             } else {
                 ESP_LOGE(TAG, "LoRa readData error, code: %d", state);
