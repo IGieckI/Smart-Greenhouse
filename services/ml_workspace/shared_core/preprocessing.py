@@ -113,6 +113,8 @@ def identify_leaf_steps(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def apply_gaussian_interpolation(df: pd.DataFrame) -> pd.DataFrame:
+    if 'leaf_temp' not in df.columns:
+        return df
     return gaussian_weighted_interpolation(df, 'leaf_temp', weight_col='leaf_weight')
 
 def clean_anomalies(df: pd.DataFrame) -> pd.DataFrame:
