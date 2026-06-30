@@ -137,8 +137,8 @@ static int16_t read_ads1115(uint16_t config_flags) {
 #endif
 
 float get_leaf_temp(float ambient_temp) {
-    uint16_t config_tc = 0x8F83; 
     #ifdef ADS1115_ADDR
+    uint16_t config_tc = 0x8F83; 
     int16_t raw_tc = read_ads1115(config_tc);
     #else
     int16_t raw_tc = 0;
@@ -220,13 +220,13 @@ void setup() {
     envSensor.init();
 
     // Initialize all actuators (GPIO output; LEDC channel for PWM types)
-    ledc_timer_config_t ledc_timer = {
-        .speed_mode      = LEDC_LOW_SPEED_MODE,
-        .duty_resolution = LEDC_TIMER_10_BIT,
-        .timer_num       = LEDC_TIMER_0,
-        .freq_hz         = 1000,
-        .clk_cfg         = LEDC_AUTO_CLK,
-    };
+    ledc_timer_config_t ledc_timer = {};
+    ledc_timer.speed_mode      = LEDC_LOW_SPEED_MODE;
+    ledc_timer.duty_resolution = LEDC_TIMER_10_BIT;
+    ledc_timer.timer_num       = LEDC_TIMER_0;
+    ledc_timer.freq_hz         = 1000;
+    ledc_timer.clk_cfg         = LEDC_AUTO_CLK;
+    
     ledc_timer_config(&ledc_timer);
 
     for (size_t i = 0; i < ACTUATOR_COUNT; i++) {
@@ -239,15 +239,15 @@ void setup() {
         gpio_config(&io);
 
         if (ACTUATOR_TABLE[i].type == ACT_PWM) {
-            ledc_channel_config_t ch = {
-                .gpio_num   = ACTUATOR_TABLE[i].pin,
-                .speed_mode = LEDC_LOW_SPEED_MODE,
-                .channel    = ACTUATOR_TABLE[i].ledc_ch,
-                .intr_type  = LEDC_INTR_DISABLE,
-                .timer_sel  = LEDC_TIMER_0,
-                .duty       = 0,
-                .hpoint     = 0,
-            };
+            ledc_channel_config_t ch = {}; // Inizializza a zero per evitare warning
+            ch.gpio_num   = ACTUATOR_TABLE[i].pin;
+            ch.speed_mode = LEDC_LOW_SPEED_MODE;
+            ch.channel    = ACTUATOR_TABLE[i].ledc_ch;
+            ch.intr_type  = LEDC_INTR_DISABLE;
+            ch.timer_sel  = LEDC_TIMER_0;
+            ch.duty       = 0;
+            ch.hpoint     = 0;
+            
             ledc_channel_config(&ch);
         } else {
             gpio_set_level(ACTUATOR_TABLE[i].pin, 0);

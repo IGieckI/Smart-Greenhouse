@@ -66,10 +66,14 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
         df_board = df_board.resample(freq_str).mean(numeric_only=True)
         df_board['id_board'] = board 
 
+        # Corretto dff_clean in df_clean
         df_clean = apply_board_pipeline(df_board, board)
-        # repair eventually micro-holes 
-        df_clean = df_clean.interpolate(method='linear', limit_direction='both')
-
+        
+        # --- MODIFICA: repair eventually micro-holes limitato ---
+        # Calcoliamo quanti "step" corrispondono a 30 minuti (es: a 6m freq sono 5 step)
+        max_nans_to_fill = max(1, int(MAX_INTERPOLATION_GAP_MINUTES / freq_minutes))
+        df_clean = df_clean.interpolate(method='linear', limit=max_nans_to_fill)
+        # --------------------------------------------------------
         cols_to_drop = ['result', 'table', '_start', '_stop', '_measurement', 'block_id', 'leaf_weight']
         df_clean.drop(columns=[c for c in cols_to_drop if c in df_clean.columns], inplace=True)
         df_clean.dropna(how='all', subset=[c for c in df_clean.columns if c != 'id_board'], inplace=True)

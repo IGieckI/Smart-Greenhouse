@@ -13,6 +13,19 @@ def gaussian_weighted_interpolation(df: pd.DataFrame, target_col: str, weight_co
         before = valid_data.loc[:idx].iloc[-INTERPOLATION_WIN_BEFORE:] if not valid_data.loc[:idx].empty else pd.DataFrame()
         after = valid_data.loc[idx:].iloc[:INTERPOLATION_WIN_AFTER] if not valid_data.loc[idx:].empty else pd.DataFrame()
         
+        # --- NUOVA LOGICA: Controllo della grandezza del buco ---
+        if not before.empty and not after.empty:
+            gap_minutes = (after.index[0] - before.index[-1]).total_seconds() / 60.0
+            if gap_minutes > MAX_INTERPOLATION_GAP_MINUTES:
+                continue # Buco troppo grande, non interpoliamo (lasciamo NaN)
+        elif not before.empty: # Caso ai bordi (fine dataset)
+            if (idx - before.index[-1]).total_seconds() / 60.0 > MAX_INTERPOLATION_GAP_MINUTES:
+                continue
+        elif not after.empty: # Caso ai bordi (inizio dataset)
+            if (after.index[0] - idx).total_seconds() / 60.0 > MAX_INTERPOLATION_GAP_MINUTES:
+                continue
+        # --------------------------------------------------------
+
         neighbors = pd.concat([before, after])
         if neighbors.empty: continue
 

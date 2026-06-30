@@ -28,7 +28,8 @@
 #define NUM_SAMPLES          5
 #define SAMPLE_DELAY_MS      100
 #define DEEP_SLEEP_MS        120000
-//120000
+
+#define PIN_PUMP GPIO_NUM_2
 
 // Network stuff
 // Star node MAC defined in personal_config.hpp

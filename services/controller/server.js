@@ -176,6 +176,7 @@ app.post('/api/data', async (req, res) => {
                     }
                 } else {
                     console.error("[Controller] Invalid txt format. Use layout: 21.5/A");
+                    data[LEAF_TEMP_LABEL] = undefined
                 }
             }
         } catch (error) {

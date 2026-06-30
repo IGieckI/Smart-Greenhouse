@@ -91,15 +91,32 @@ public:
       return;
     }
 
-    gpio_config_t conf = {
-        .pin_bit_mask = (1ULL << pin),
-        .mode = (mode == OUTPUT) ? GPIO_MODE_OUTPUT : GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
+    gpio_config_t conf = {};
+    conf.pin_bit_mask = (1ULL << pin);
+    conf.mode = (mode == OUTPUT) ? GPIO_MODE_OUTPUT : GPIO_MODE_INPUT;
+    conf.pull_up_en = GPIO_PULLUP_DISABLE;
+    
+    // --- IL TRUCCO È QUI ---
+    // Se il pin è configurato come ingresso (es. LORA_BUSY o LORA_DIO1),
+    // attiviamo il pull-down. Se non c'è il modulo, leggeremo sempre LOW.
+    conf.pull_down_en = (mode == INPUT) ? GPIO_PULLDOWN_ENABLE : GPIO_PULLDOWN_DISABLE;
+    conf.intr_type = GPIO_INTR_DISABLE;
+    
     gpio_config(&conf);
   }
+  //   if (pin == RADIOLIB_NC) {
+  //     return;
+  //   }
+
+  //   gpio_config_t conf = {
+  //       .pin_bit_mask = (1ULL << pin),
+  //       .mode = (mode == OUTPUT) ? GPIO_MODE_OUTPUT : GPIO_MODE_INPUT,
+  //       .pull_up_en = GPIO_PULLUP_DISABLE,
+  //       .pull_down_en = GPIO_PULLDOWN_DISABLE,
+  //       .intr_type = GPIO_INTR_DISABLE,
+  //   };
+  //   gpio_config(&conf);
+  // }
 
   void digitalWrite(uint32_t pin, uint32_t value) override {
     if (pin == RADIOLIB_NC) {
@@ -134,7 +151,19 @@ public:
   }
 
   // Timing functions
-  void delay(unsigned long ms) override { vTaskDelay(pdMS_TO_TICKS(ms)); }
+  void delay(unsigned long ms) override { 
+    TickType_t ticks = pdMS_TO_TICKS(ms);
+    if (ms > 0 && ticks == 0) {
+      ticks = 1; // Assicura sempre almeno 1 tick di pausa
+    }
+    vTaskDelay(ticks); 
+  }
+
+  void yield() override {
+    vTaskDelay(1); // Cede il controllo a FreeRTOS durante le attese lunghe
+  }
+
+  // void delay(unsigned long ms) override { vTaskDelay(pdMS_TO_TICKS(ms)); }
 
   void delayMicroseconds(unsigned long us) override { esp_rom_delay_us(us); }
 

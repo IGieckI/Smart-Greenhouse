@@ -12,7 +12,7 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 5.5.3
+    version: 5.5.4
   jgromes/radiolib:
     component_hash: 024269f750d7eb181d07bd57ccec5e5e4e276dbb262d681a6501c8e2244e80f0
     dependencies:
@@ -46,5 +46,5 @@ direct_dependencies:
 - u8g2
 - u8g2_hal
 manifest_hash: e8e37850d05d0456c8261647582a2dfa1e4b51eafb0061d17659d8d7844fcec1
-target: esp32s3
+target: esp32
 version: 2.0.0

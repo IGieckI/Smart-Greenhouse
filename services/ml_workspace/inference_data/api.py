@@ -7,6 +7,9 @@ import time
 import threading
 import numpy as np
 import pandas as pd
+
+from prophet.serialize import model_from_json
+
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -79,10 +82,12 @@ def load_assets():
         env_dir = os.path.join(freq_path, "env_forecasters")
         if os.path.exists(env_dir):
             for feat in TASKS["t1"]["features"]:
-                arima_path = os.path.join(env_dir, f"arima_{feat}.joblib")
-                if os.path.exists(arima_path):
-                    loaded_env_arimas[freq_key][feat] = joblib.load(arima_path)
-            print(f"[RAM {freq_folder}] ARIMA caricati!")
+                # CERCHIAMO IL JSON DI PROPHET, NON IL JOBLIB
+                prophet_path = os.path.join(env_dir, f"prophet_{feat}.json")
+                if os.path.exists(prophet_path):
+                    with open(prophet_path, "r") as f:
+                        loaded_env_arimas[freq_key][feat] = model_from_json(json.load(f))
+            print(f"[RAM {freq_folder}] Modelli Prophet ambientali caricati!")
 
 class SensorData(BaseModel):
     air_temp: Optional[float] = None
@@ -180,15 +185,9 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
     )
 
     # 4. Prepare ARIMAs
-    local_arimas = {}
-    for feat, arima_model in loaded_env_arimas.get(freq_key, {}).items():
-        if feat in df_history.columns:
-            obs = df_history[feat].dropna().values
-            local_model = copy.deepcopy(arima_model)
-            local_model.update(obs)  
-            local_arimas[feat] = local_model
+    local_env_models = loaded_env_arimas.get(freq_key, {})
 
-    return df_history, local_arimas
+    return df_history, local_env_models
 
 # API Routes
 
@@ -215,8 +214,11 @@ def _run_standard_inference(freq_minutes: int, task: str, board_id: str,
     # Calculate Future VPD if predicting leaf_temp
     future_vpd = []
     if TASKS[task]["target"] == "leaf_temp":
-        air_preds = local_arimas["air_temp"].predict(n_periods=len(pred_list))
-        hum_preds = local_arimas["humidity"].predict(n_periods=len(pred_list))
+        future_dates_naive = [t.tz_localize(None) if t.tz is not None else t for t in future_timestamps]
+        df_future = pd.DataFrame({'ds': future_dates_naive})
+        
+        air_preds = local_arimas["air_temp"].predict(df_future)['yhat'].values
+        hum_preds = local_arimas["humidity"].predict(df_future)['yhat'].values
         future_vpd = [calculate_vpd(lt, at, rh) for lt, at, rh in zip(pred_list, air_preds, hum_preds)]
 
     return {
@@ -280,9 +282,9 @@ def _run_ensemble_inference(freq_minutes: int, group: str, board_id: str,
     future_timestamps = [last_timestamp + pd.Timedelta(minutes=freq_minutes * (i + 1)) for i in range(len(result["forecast_blended"]))]
     
     # Calculate Future VPD based on blended prediction
-    air_preds = local_arimas["air_temp"].predict(n_periods=len(result["forecast_blended"]))
-    hum_preds = local_arimas["humidity"].predict(n_periods=len(result["forecast_blended"]))
-    future_vpd = [calculate_vpd(lt, at, rh) for lt, at, rh in zip(result["forecast_blended"], air_preds, hum_preds)]
+    air_preds = local_arimas["air_temp"].predict(future_timestamps)['yhat'].values
+    hum_preds = local_arimas["humidity"].predict(future_timestamps)['yhat'].values
+    future_vpd = [calculate_vpd(lt, at, rh) for lt, at, rh in zip(future_timestamps, air_preds, hum_preds)]
 
     mae_soft = loaded_info.get(freq_key, {}).get(t_soft, {}).get("mae", 1.0) 
 

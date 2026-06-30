@@ -5,6 +5,7 @@
 #include <time.h>
 #include <map>
 #include <array>
+#include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -83,27 +84,42 @@ u8g2_t u8g2;
 void lora_init() {
     ESP_LOGI(TAG, "Initializing SPI for LoRa...");
 
-    spi_bus_config_t buscfg = {};
-    buscfg.mosi_io_num   = LORA_MOSI;
-    buscfg.miso_io_num   = LORA_MISO;
-    buscfg.sclk_io_num   = LORA_SCK;
-    buscfg.quadwp_io_num = -1;
-    buscfg.quadhd_io_num = -1;
-    buscfg.max_transfer_sz = 0;
+    // spi_bus_config_t buscfg = {};
+    // buscfg.mosi_io_num   = LORA_MOSI;
+    // buscfg.miso_io_num   = LORA_MISO;
+    // buscfg.sclk_io_num   = LORA_SCK;
+    // buscfg.quadwp_io_num = -1;
+    // buscfg.quadhd_io_num = -1;
+    // buscfg.max_transfer_sz = 0;
 
-    ESP_ERROR_CHECK(spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO));
+    // // ESP_ERROR_CHECK(spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO));
+    // esp_err_t ret = spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO);
+    // if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+    //     ESP_LOGE(TAG, "SPI init failed: %s", esp_err_to_name(ret));
+    //     return;
+    // }
+
+    // // gpio_set_pull_mode((gpio_num_t)LORA_BUSY, GPIO_PULLDOWN_ONLY);
 
     hal   = new EspHal(LORA_SCK, LORA_MISO, LORA_MOSI, SPI3_HOST, SPI_MASTER_FREQ_8M);
     mod   = new Module(hal, LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);
     radio = new SX1262(mod);
 
-    // Must match Gateway exactly: 868 MHz, BW 125, SF9, CR7, sync 0x12
+    ESP_LOGI(TAG, "Sensing presence of a LoRA module...");
     int state = radio->begin(868.0, 125.0, 9, 7, 0x12, 10, 8, 1.6, false);
     if (state == RADIOLIB_ERR_NONE) {
         ESP_LOGI(TAG, "LoRa initialized successfully!");
+        // Ripristina il pull a stato neutrale se il modulo esiste davvero
+        gpio_set_pull_mode((gpio_num_t)LORA_BUSY, GPIO_FLOATING); 
     } else {
-        ESP_LOGE(TAG, "LoRa init failed, code: %d", state);
+        ESP_LOGE(TAG, "LoRa module not present or broken, radio obj disabled. Error code: %d", state);
+        delete radio; radio = nullptr;
+        delete mod;   mod = nullptr;
+        delete hal;   hal = nullptr;
+        
+        
     }
+
 }
 
 // HTTP Server Handlers
@@ -347,6 +363,11 @@ void OnDataRecv(const esp_now_recv_info_t *esp_now_info, const uint8_t *incoming
 // Uses interrupt-driven continuous receive so the radio stays in RX at all times.
 // The mutex is held only for the brief readData() + startReceive() calls.
 static void lora_rx_task(void *p) {
+    if (radio == nullptr) {
+        ESP_LOGW(TAG, "Modulo LoRa disabilitato. Terminazione preventiva del task lora_rx_task.");
+        vTaskDelete(NULL);
+        return; 
+    }
     uint8_t buf[256];
     ESP_LOGI(TAG, "LoRa RX task running on Core %d", xPortGetCoreID());
 
@@ -600,7 +621,11 @@ extern "C" void app_main(void) {
     esp_now_register_recv_cb(OnDataRecv);
 
     xTaskCreatePinnedToCore(coap_server_task,  "coap_server",   8192, NULL, 5, NULL, 0);
-    xTaskCreatePinnedToCore(lora_rx_task,      "LoRa_RX",       4096, NULL, 4, NULL, 0);
+
+    if (radio != nullptr) {
+        xTaskCreatePinnedToCore(lora_rx_task,  "LoRa_RX",       4096, NULL, 4, NULL, 0);
+    }
+
     xTaskCreatePinnedToCore(reception_task,    "Telemetry_Recv",4096, NULL, 5, NULL, 0);
     xTaskCreatePinnedToCore(data_manager_task, "Display_Mgr",   4096, NULL, 4, NULL, 1);
 }

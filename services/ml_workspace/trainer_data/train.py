@@ -8,6 +8,8 @@ import joblib
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+from analytics_plotter import generate_analytics_plots
+
 from influxdb_client import InfluxDBClient
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
@@ -17,16 +19,34 @@ from sklearn.linear_model import Ridge
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.svm import SVR
 from lightgbm import LGBMRegressor
-import pmdarima as pm  
+from prophet import Prophet
+from prophet.serialize import model_to_json
 
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import PolynomialFeatures
 
+import cmdstanpy # <--- AGGIUNTO
+import os        # <--- AGGIUNTO
+
+# ==========================================
+# FIX PROPHET: FORZA IL PATH DI CMDSTAN
+# ==========================================
+# Evita che Prophet usi la sua cartella "rotta" (stan_model) e lo forza 
+# a puntare all'installazione globale appena compilata dal Dockerfile.
+try:
+    os.environ['CMDSTAN'] = cmdstanpy.cmdstan_path()
+except Exception as e:
+    print(f"[Warning] Impossibile settare CMDSTAN dinamicamente: {e}")
+
 sys.path.append('/app')
+from shared_core.preprocessing import build_advanced_features, get_extended_features_list, create_lagged_features
+
 from shared_core.preprocessing import build_advanced_features, get_extended_features_list, create_lagged_features
 from shared_core.config import *
 from shared_core.tasks import TASKS
+
+import traceback
 
 # ==========================================
 # DATA FETCHING
@@ -220,9 +240,8 @@ def log_and_evaluate(y_test, y_pred, features_names, model, model_name, task_nam
 
 # ==========================================
 # TRAINING PIPELINES
-# ==========================================
-def train_environmental_arimas(df_clean, features, output_dir, freq_minutes):
-    print(f"\n{'='*60}\n[Trainer {freq_minutes}m] INDEPENDENT ENVIRONMENTAL ARIMA TRAINING\n{'='*60}")
+def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
+    print(f"\n{'='*60}\n[Trainer {freq_minutes}m] INDEPENDENT ENVIRONMENTAL PROPHET TRAINING\n{'='*60}")
     os.makedirs(output_dir, exist_ok=True)
     df_train = df_clean[df_clean['id_board'].isin(ACTIVE_BOARDS)].copy()
     
@@ -230,42 +249,91 @@ def train_environmental_arimas(df_clean, features, output_dir, freq_minutes):
     tail_samples = int((effective_days * 24 * 60) / freq_minutes)
     
     for feat in features:
-        print(f"Training for: {feat} (last {tail_samples} samples = {effective_days} days)...")
-        y = df_train[feat].dropna().tail(tail_samples) 
-        
-        zoom_size = min(100, len(y) // 5)
-        y_train_arima = y.iloc[:-zoom_size]
-        y_test_arima = y.iloc[-zoom_size:]
-        
-        max_p_q = 5 if freq_minutes >= 6 else 3 
-        
-        best_model = pm.auto_arima(
-            y_train_arima.values, 
-            seasonal=False, 
-            stepwise=True, 
-            suppress_warnings=True, 
-            max_p=max_p_q, 
-            max_q=max_p_q
-        )
-        
-        preds = best_model.predict(n_periods=zoom_size)
-        
-        plt.figure(figsize=(10, 4))
-        plt.plot(y_test_arima.index, y_test_arima.values, label='True Environment', color='black')
-        plt.plot(y_test_arima.index, preds, label='ARIMA Forecast', color='blue', linestyle='--')
-        plt.title(f'ARIMA Zoom Forecast: {feat} (vs True Data)')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, f"arima_{feat}_zoom.png"))
-        plt.close()
-        
-        # --- MODIFICA 2: Passa .values anche qui ---
-        best_model.update(y_test_arima.values)
-        
-        joblib.dump(best_model, os.path.join(output_dir, f"arima_{feat}.joblib"))
-        print(f"-> Optimal for {feat}: {best_model.order} (Saved & Evaluated)")
+        try:
+            print(f"Training Prophet for: {feat} (last {tail_samples} samples = {effective_days} days)...")
+            
+            if feat not in df_train.columns:
+                print(f"-> Feature {feat} non trovata. Addestramento saltato.")
+                continue
 
+            y = df_train[feat].dropna().tail(tail_samples) 
+            
+            if len(y) < 100:
+                print(f"-> Dati insufficienti per {feat} ({len(y)} samples). Salto.")
+                continue
+                
+            if y.nunique() <= 1:
+                print(f"-> La serie di {feat} è piatta. Salto.")
+                continue
+            
+            timestamps = y.index.tz_localize(None) if y.index.tz is not None else y.index
+            zoom_size = min(150, len(y) // 5)
+            
+            if zoom_size > 0:
+                train_ts, train_y = timestamps[:-zoom_size], y.values[:-zoom_size]
+                test_ts, test_y = timestamps[-zoom_size:], y.values[-zoom_size:]
+            else:
+                train_ts, train_y = timestamps, y.values
+                test_ts, test_y = timestamps[-1:], y.values[-1:] 
+            
+            # --- FIX 1: Cast FORZATO ai tipi supportati nativamente da Stan ---
+            df_prophet_train = pd.DataFrame({
+                'ds': pd.to_datetime(train_ts),
+                'y': pd.to_numeric(train_y, errors='coerce')
+            }).dropna()
+            
+            df_prophet_test = pd.DataFrame({
+                'ds': pd.to_datetime(test_ts)
+            })
+            
+            # Init e Fit
+            model = Prophet(
+                daily_seasonality=True, 
+                yearly_seasonality=False, 
+                weekly_seasonality=False,
+                stan_backend='CMDSTANPY'
+            )
+            # Se il backend C++ deve fallire, fallirà qui!
+            model.fit(df_prophet_train)
+            
+            forecast = model.predict(df_prophet_test)
+            preds = forecast['yhat'].values
+            
+            plt.figure(figsize=(10, 4))
+            plt.plot(test_ts, test_y, label='True Environment', color='black')
+            plt.plot(test_ts, preds, label='Prophet Forecast', color='blue', linestyle='--')
+            plt.title(f'Prophet Zoom Forecast: {feat} (vs True Data)')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(os.path.join(output_dir, f"prophet_{feat}_zoom.png"))
+            plt.close()
+            
+            print(f"-> Re-fitting full model for {feat} to save latest state...")
+            df_prophet_full = pd.DataFrame({
+                'ds': pd.to_datetime(timestamps),
+                'y': pd.to_numeric(y.values, errors='coerce')
+            }).dropna()
+            
+            # <--- AGGIUNGI stan_backend ANCHE QUI
+            final_model = Prophet(
+                daily_seasonality=True, 
+                yearly_seasonality=False, 
+                weekly_seasonality=False,
+                stan_backend='CMDSTANPY'
+            )
+            final_model.fit(df_prophet_full)
+            
+            with open(os.path.join(output_dir, f"prophet_{feat}.json"), 'w') as fout:
+                fout.write(model_to_json(final_model)) 
+                
+            print(f"-> Model for {feat} Saved & Evaluated")
+            
+        except Exception as e:
+            print(f"-> [ERRORE PROPHET] Addestramento interrotto per {feat}: {str(e)}")
+            # --- FIX 2: Stampiamo lo stack trace reale per capire perché Stan fallisce ---
+            traceback.print_exc()
+            continue
 
 def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> dict:
     """Returns the appropriate hyperparameter grids based on frequency overhead."""
@@ -440,6 +508,8 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes, is_raw=False
     
     formatted_results = {name: {"MAE": res["MAE"]} for name, res in results.items()}
     plot_models_comparison(formatted_results, plots_dir)
+    # AGGIUNGI QUESTA RIGA QUI: Genera i plot analitici usando i JSON appena salvati
+    generate_analytics_plots(task_dir, task_name)
 
 # ==========================================
 # MAIN EXECUTION
@@ -457,11 +527,11 @@ def main():
             print(f"[Trainer] Insufficient 6m data. Please run cleaner.py first.")
             continue
         
-        # 1. Environmental ARIMAs
+        # 1. Environmental Prophet Forecasters
         all_env_features = TASKS["t1"]["features"]
         env_output_dir = os.path.join(BASE_MODEL_DIR, f"{freq}m", "env_forecasters")
-        train_environmental_arimas(df_clean, all_env_features, env_output_dir, freq)
-        
+        train_environmental_prophet(df_clean, all_env_features, env_output_dir, freq)
+
         # 2. ML Pipelines (Dual Strategy)
         for task_name, config in TASKS.items():
             if config.get("use_lags", False):

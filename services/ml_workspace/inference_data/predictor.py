@@ -9,7 +9,7 @@ from shared_core.preprocessing import build_advanced_features, get_extended_feat
 
 def recursive_multistep_inference(
     T_current_data: pd.DataFrame, 
-    arima_models: dict, 
+    env_models: dict, 
     ml_model_pipeline, 
     task_config: dict, 
     freq_minutes: int
@@ -23,14 +23,22 @@ def recursive_multistep_inference(
     horizon_minutes = task_config.get("horizon_minutes", 0)
     steps = max(1, horizon_minutes // freq_minutes) if horizon_minutes > 0 else 1
     
-    env_forecasts = {}
-    for feat in features:
-        env_forecasts[feat] = arima_models[feat].predict(n_periods=steps)
-    
-    df_future_env = pd.DataFrame(env_forecasts)
     last_time = T_current_data.index[-1]
     
+    # Generiamo le date future
     future_dates = [last_time + pd.Timedelta(minutes=freq_minutes * (i + 1)) for i in range(steps)]
+    
+    # Prophet NON sopporta le date con fuso orario (tz-aware). Rimuoviamo il fuso per il calcolo.
+    future_dates_naive = [t.tz_localize(None) if t.tz is not None else t for t in future_dates]
+    df_prophet_future = pd.DataFrame({'ds': future_dates_naive})
+    
+    # Generiamo i forecast ambientali usando Prophet
+    env_forecasts = {}
+    for feat in features:
+        forecast = env_models[feat].predict(df_prophet_future)
+        env_forecasts[feat] = forecast['yhat'].values
+    
+    df_future_env = pd.DataFrame(env_forecasts)
     df_future_env.index = future_dates
     
     target_predictions = []
