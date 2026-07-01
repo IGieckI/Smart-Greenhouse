@@ -12,8 +12,6 @@ CONTROLLER_URL = os.getenv("CONTROLLER_URL", "http://controller:3001/api/data")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# The Star serializes LoRa payloads with abbreviated keys to fit the packet.
-# Map them to the full names expected by the controller (matching cw-client output).
 _KEY_MAP = {
     "sid": "star_id",
     "ts":  "timestamp",

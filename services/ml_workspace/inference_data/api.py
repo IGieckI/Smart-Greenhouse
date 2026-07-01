@@ -30,9 +30,9 @@ from shared_core.data_sync import sync_clean_bucket
 from shared_core.tasks import TASKS
 from shared_core.config import *
 from shared_core.preprocessing import build_advanced_features
-from .predictor import recursive_multistep_inference, ensemble_multistep_inference
 
-from sensor_payload import SensorData
+from .predictor import recursive_multistep_inference, ensemble_multistep_inference
+from .sensor_payload import SensorData
 
 app = FastAPI(title="Multi-Freq IoT Inference API")
 
@@ -112,9 +112,9 @@ def save_predictions_to_influx(board_id: str, freq_minutes: int, source_name: st
         try:
             write_api.write(bucket=bucket_clean, org=INFLUX_ORG, record=points)
             write_api.write(bucket=bucket_caveaux, org=INFLUX_ORG, record=points)
-            print(f"[Inference API] Salvati {len(points)} punti (Modello: {source_name}) su {bucket_clean} e {bucket_caveaux}")
+            print(f"[Inference API] Saved {len(points)} points (Model: {source_name}) to {bucket_clean} and {bucket_caveaux}")
         except Exception as e:
-            print(f"[Inference API] Errore di salvataggio previsioni: {e}")
+            print(f"[Inference API] Prediction saving error: {e}")
     client.close()
 
 
@@ -146,6 +146,8 @@ def fetch_historical_data(board_id: str, limit: int, freq_minutes: int) -> pd.Da
           |> range(start: {INFERENCE_LOOKBACK_DAYS})
           |> filter(fn: (r) => r._measurement == "sensor_measurements")
           |> filter(fn: (r) => r.id_board == "{board_id}")
+          |> filter(fn: (r) => r._field !~ /pred/)
+          |> drop(columns: ["model_source", "freq"])
           |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
           |> tail(n: {limit})
     '''
@@ -158,9 +160,10 @@ def fetch_historical_data(board_id: str, limit: int, freq_minutes: int) -> pd.Da
             df.set_index('_time', inplace=True)
             df.sort_index(inplace=True)
             
+            df = df[~df.index.duplicated(keep='last')]
             if USE_INDOOR_FEATURE:
                 df['is_indoor'] = df['id_board'].map(BOARD_ENV_MAP).fillna(0).astype(int)
-                
+            
         return df
     except Exception as e:
         print(f"InfluxDB Query Error: {e}")
@@ -260,13 +263,20 @@ def load_assets():
                 
         env_dir = os.path.join(freq_path, "env_forecasters")
         if os.path.exists(env_dir):
+            loaded_feats = []
+            missing_feats = []
             for feat in TASKS["t1"]["features"]:
                 prophet_path = os.path.join(env_dir, f"prophet_{feat}.json")
                 if os.path.exists(prophet_path):
                     with open(prophet_path, "r") as f:
                         loaded_env_prophets[freq_key][feat] = model_from_json(f.read())
-            print(f"[RAM {freq_folder}] Environmental Prophet forecasters loaded successfully!")
-
+                    loaded_feats.append(feat)
+                else:
+                    missing_feats.append(feat)
+            
+            if missing_feats:
+                print(f"[RAM {freq_folder}] WARNING! Missing Prophet models for: {missing_feats}")
+            print(f"[RAM {freq_folder}] Prophet models loaded for: {loaded_feats}")
 
 @app.get("/info/{freq_minutes}m/{task}")
 def get_task_info(freq_minutes: int, task: str):
@@ -290,7 +300,8 @@ def reload_models():
 
 def _run_standard_inference(freq_minutes: int, task: str, board_id: str, 
                             custom_data: Optional[SensorData] = None, 
-                            use_real_leaf_temp: bool = False):
+                            use_real_leaf_temp: bool = False,
+                            save_to_db: bool = True):
     freq_key = str(freq_minutes)
     if freq_key not in loaded_models or task not in loaded_models[freq_key]:
         raise HTTPException(status_code=404, detail=f"Task {task} not configured or trained.")
@@ -323,47 +334,64 @@ def _run_standard_inference(freq_minutes: int, task: str, board_id: str,
         if "humidity" in local_prophets:
             hum_preds = local_prophets["humidity"].predict(df_future)['yhat'].values
 
-        
-
-
         if TASKS[task]["target"] == "leaf_temp" and len(air_preds) > 0 and len(hum_preds) > 0:
             future_vpd = [calculate_vpd(lt, at, rh) for lt, at, rh in zip(pred_list, air_preds, hum_preds)]
     
-        
+        if save_to_db:
+            save_predictions_to_influx(
+                board_id, freq_minutes, task.upper(), future_timestamps, pred_list,
+                air_preds if len(air_preds) > 0 else None,
+                hum_preds if len(hum_preds) > 0 else None
+            )
+    
+    hist_leaf = format_series(df_history.index, df_history.get('leaf_temp', []))
+    hist_air = format_series(df_history.index, df_history.get('air_temp', []))
+    hist_hum = format_series(df_history.index, df_history.get('humidity', []))
+    hist_vpd = format_series(df_history.index, df_history.get('vpd', []))
 
+    fut_leaf = format_series(future_timestamps, pred_list)
+    fut_air = format_series(future_timestamps, air_preds) if len(air_preds) > 0 else []
+    fut_hum = format_series(future_timestamps, hum_preds) if len(hum_preds) > 0 else []
+    fut_vpd = format_series(future_timestamps, future_vpd) if len(future_vpd) > 0 else []
 
-        save_predictions_to_influx(
-            board_id, freq_minutes, task.upper(), future_timestamps, pred_list,
-            air_preds if len(air_preds) > 0 else None,
-            hum_preds if len(hum_preds) > 0 else None
-        )
+    summary_msg = f"Standard inference for task {task.upper()} on board {board_id} executed." if save_to_db else f"What-if (manual) inference for task {task.upper()} on board {board_id} executed. Data not saved to InfluxDB."
 
     return {
-        "task": task, 
-        "frequency": f"{freq_minutes}m", 
-        "target": TASKS[task]["target"],
-        "historical": {
-            "leaf_temp_estimated": format_series(df_history.index, df_history.get('leaf_temp', [])),
-            "vpd_calculated": format_series(df_history.index, df_history.get('vpd', []))
+        "message": summary_msg,
+        "task": task,
+        "frequency": f"{freq_minutes}m",
+        "leaf_temperature": {
+            "historical": hist_leaf,
+            "forecast": fut_leaf
         },
-        "predictions": {
-            "target_forecast": format_series(future_timestamps, pred_list),
-            "vpd_forecast": format_series(future_timestamps, future_vpd) if future_vpd else None
+        "environmental_data": {
+            "historical": {
+                "air_temp": hist_air,
+                "humidity": hist_hum
+            },
+            "forecast": {
+                "air_temp": fut_air,
+                "humidity": fut_hum
+            }
+        },
+        "vpd": {
+            "historical": hist_vpd,
+            "forecast": fut_vpd
         }
     }
+
 
 
 @app.get("/predict/{freq_minutes}m/standard/{task}/latest")
 def predict_latest(freq_minutes: int, task: str, board_id: str = DEFAULT_BOARD_ID, 
                    use_real_leaf_temp: bool = Query(False, description="Set True to use physical sensor historical data instead of Soft Sensor")):
-    return _run_standard_inference(freq_minutes, task, board_id, None, use_real_leaf_temp)
+    return _run_standard_inference(freq_minutes, task, board_id, None, use_real_leaf_temp, save_to_db=True)
 
 
 @app.post("/predict/{freq_minutes}m/standard/{task}/manual")
 def predict_manual(freq_minutes: int, task: str, custom_data: SensorData, board_id: str = DEFAULT_BOARD_ID,
                    use_real_leaf_temp: bool = Query(False, description="Set True to use physical sensor historical data instead of Soft Sensor")):
-    return _run_standard_inference(freq_minutes, task, board_id, custom_data, use_real_leaf_temp)
-
+    return _run_standard_inference(freq_minutes, task, board_id, custom_data, use_real_leaf_temp, save_to_db=False)
 
 
 
@@ -372,7 +400,8 @@ def predict_manual(freq_minutes: int, task: str, custom_data: SensorData, board_
 
 def _run_ensemble_inference(freq_minutes: int, group: str, board_id: str, 
                             custom_data: Optional[SensorData] = None, 
-                            use_real_leaf_temp: bool = False):
+                            use_real_leaf_temp: bool = False,
+                            save_to_db: bool = True):
     freq_key = str(freq_minutes)
     group = group.upper()
     
@@ -388,7 +417,8 @@ def _run_ensemble_inference(freq_minutes: int, group: str, board_id: str,
     for t in [t_soft, t_env, t_auto]:
         if freq_key not in loaded_models or t not in loaded_models[freq_key]:
             raise HTTPException(status_code=404, detail="Incomplete models for this ensemble.")
-
+        
+    
     df_history, local_prophets = _prepare_inference_context(
         freq_minutes, board_id, group, custom_data, use_real_leaf_temp
     )
@@ -405,15 +435,15 @@ def _run_ensemble_inference(freq_minutes: int, group: str, board_id: str,
         "auto": TASKS[t_auto]
     }
 
-    mae_env = loaded_info.get(freq_key, {}).get(t_env, {}).get("mae", 0.5) 
-    mae_auto = loaded_info.get(freq_key, {}).get(t_auto, {}).get("mae", 0.5) 
+    mae_env = loaded_info.get(freq_key, {}).get(t_env, {}).get("mae", -999.0) 
+    mae_auto = loaded_info.get(freq_key, {}).get(t_auto, {}).get("mae", -999.0) 
 
     result = ensemble_multistep_inference(
         T_current_data=df_history, prophet_models=local_prophets, 
         ml_models=ml_models, task_configs=task_configs, 
         freq_minutes=freq_minutes, mae_env=mae_env, mae_auto=mae_auto
     )
-    
+
     last_timestamp = df_history.index[-1]
     future_timestamps = [last_timestamp + pd.Timedelta(minutes=freq_minutes * (i + 1)) for i in range(len(result["forecast_blended"]))]
     
@@ -433,42 +463,63 @@ def _run_ensemble_inference(freq_minutes: int, group: str, board_id: str,
     if len(air_preds) > 0 and len(hum_preds) > 0:
         future_vpd = [calculate_vpd(lt, at, rh) for lt, at, rh in zip(result["forecast_blended"], air_preds, hum_preds)]
 
-    mae_soft = loaded_info.get(freq_key, {}).get(t_soft, {}).get("mae", 1.0) 
-    
-    if len(result["forecast_blended"]) > 0:
+    if save_to_db and len(result["forecast_blended"]) > 0:
         save_predictions_to_influx(
             board_id, freq_minutes, f"ENSEMBLE_{group}", future_timestamps, result["forecast_blended"],
             air_preds if len(air_preds) > 0 else None,
             hum_preds if len(hum_preds) > 0 else None
         )
+    
+    hist_leaf = format_series(df_history.index, df_history.get('leaf_temp', []))
+    hist_air = format_series(df_history.index, df_history.get('air_temp', []))
+    hist_hum = format_series(df_history.index, df_history.get('humidity', []))
+    hist_vpd = format_series(df_history.index, df_history.get('vpd', []))
+
+    fut_leaf = format_series(future_timestamps, result["forecast_blended"])
+    fut_air = format_series(future_timestamps, air_preds) if len(air_preds) > 0 else []
+    fut_hum = format_series(future_timestamps, hum_preds) if len(hum_preds) > 0 else []
+    fut_vpd = format_series(future_timestamps, future_vpd) if len(future_vpd) > 0 else []
+
+    summary_msg = f"Ensemble inference for group {group.upper()} on board {board_id} executed." if save_to_db else f"What-if (manual) ensemble inference for group {group.upper()} on board {board_id} executed. Data not saved to InfluxDB."
+
+    summary_msg = f"Ensemble inference for group {group.upper()} on board {board_id} executed." if save_to_db else f"What-if (manual) ensemble inference for group {group.upper()} on board {board_id} executed. Data not saved to InfluxDB."
 
     return {
+        "message": summary_msg,
         "group": group,
-        "frequency": f"{freq_minutes}m", 
-        "soft_sensor_mae": round(mae_soft, 3),
-        "historical": {
-            "leaf_temp_estimated": format_series(df_history.index, df_history.get('leaf_temp', [])),
-            "vpd_calculated": format_series(df_history.index, df_history.get('vpd', []))
+        "frequency": f"{freq_minutes}m",
+        "leaf_temperature": {
+            "historical": hist_leaf,
+            "forecast": fut_leaf
         },
-        "predictions": {
-            "forecast_blended": format_series(future_timestamps, result["forecast_blended"]),
-            "forecast_env": format_series(future_timestamps, result["forecast_env"]),
-            "forecast_auto": format_series(future_timestamps, result["forecast_auto"]),
-            "vpd_forecast": format_series(future_timestamps, future_vpd)
+        "environmental_data": {
+            "historical": {
+                "air_temp": hist_air,
+                "humidity": hist_hum
+            },
+            "forecast": {
+                "air_temp": fut_air,
+                "humidity": fut_hum
+            }
         },
-        "prophet_projections": {
-            "air_temp": format_series(future_timestamps, air_preds) if len(air_preds) > 0 else [],
-            "humidity": format_series(future_timestamps, hum_preds) if len(hum_preds) > 0 else []
+        "vpd": {
+            "historical": hist_vpd,
+            "forecast": fut_vpd
+        },
+        "ensemble_details": {
+            "weights": result.get("weights", {}),
+            "forecast_env": format_series(future_timestamps, result.get("forecast_env", [])),
+            "forecast_auto": format_series(future_timestamps, result.get("forecast_auto", []))
         }
     }
 
 @app.get("/predict/{freq_minutes}m/ensemble/{group}/latest")
 def predict_ensemble(freq_minutes: int, group: str = "B", board_id: str = DEFAULT_BOARD_ID,
                      use_real_leaf_temp: bool = Query(False, description="Set True to use physical sensor historical data instead of Soft Sensor")):
-    return _run_ensemble_inference(freq_minutes, group, board_id, None, use_real_leaf_temp)
+    return _run_ensemble_inference(freq_minutes, group, board_id, None, use_real_leaf_temp, save_to_db=True)
 
 
 @app.post("/predict/{freq_minutes}m/ensemble/{group}/manual")
 def predict_ensemble_manual(freq_minutes: int, group: str, custom_data: SensorData, board_id: str = DEFAULT_BOARD_ID,
                             use_real_leaf_temp: bool = Query(False, description="Set True to use physical sensor historical data instead of Soft Sensor")):
-    return _run_ensemble_inference(freq_minutes, group, board_id, custom_data, use_real_leaf_temp)
+    return _run_ensemble_inference(freq_minutes, group, board_id, custom_data, use_real_leaf_temp, save_to_db=False)

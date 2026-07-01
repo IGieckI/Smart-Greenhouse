@@ -35,7 +35,7 @@ async def handle_history_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.get_bot().send_message(chat_id=query.message.chat_id, text=summary, parse_mode='Markdown')
             await query.message.delete()
         finally:
-            context.user_data['is_processing'] = False 
+            context.user_data['is_processing'] = False
 
 
 
@@ -77,6 +77,72 @@ async def handle_predict_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
         finally:
             context.user_data['is_processing'] = False
 
+async def _send_prediction_results(update: Update, wait_msg, df_hist: pd.DataFrame, data: dict, mode: str, task: str, board_id: str, is_whatif: bool = False):
+    leaf_data = data.get("leaf_temperature", {})
+    env_data = data.get("environmental_data", {})
+    vpd_data = data.get("vpd", {})
+    ens_details = data.get("ensemble_details", {})
+
+    series_temp = {}
+    arima_series = {}
+
+    if est_hist := leaf_data.get("historical", []):
+        series_temp["T1/T4 Est. History (Soft Sensor)"] = est_hist
+
+    future_vpd = vpd_data.get("forecast", [])
+
+    proj_name = "What-If Projection" if is_whatif else ("Blended (Final)" if mode == "ensemble" else "Standard Prediction")
+
+    if mode == "ensemble":
+        if p := leaf_data.get("forecast", []): series_temp[proj_name] = p
+        if p := ens_details.get("forecast_env", []): series_temp["Environment (Env)"] = p
+        if p := ens_details.get("forecast_auto", []): series_temp["Autoregressive (Auto)"] = p
+    elif mode == "standard":
+        if p := leaf_data.get("forecast", []): series_temp[proj_name] = p
+
+    if env_forecast := env_data.get("forecast", {}):
+        if air := env_forecast.get("air_temp", []): arima_series["Air Temp Forecast (°C)"] = air
+        if hum := env_forecast.get("humidity", []): arima_series["Humidity Forecast (%)"] = hum
+
+    plots = []
+    
+    hide_real = bool(series_temp.get("T1/T4 Est. History (Soft Sensor)"))
+    title_prefix = "What-If Simulation" if is_whatif else "Temp. Prediction"
+    
+    plots.append(InputMediaPhoto(media=create_series_plot(df_hist, series_temp, f"{title_prefix}: {task.upper()}", hide_real)))
+    if arima_series: plots.append(InputMediaPhoto(media=create_series_plot(pd.DataFrame(), arima_series, f"{title_prefix} Prophet Forecast")))
+    if future_vpd: plots.append(InputMediaPhoto(media=create_vpd_plot(df_hist, future_vpd)))
+
+    
+    action_type = "What-If Simulation" if is_whatif else "ML Prediction"
+    summary = (
+        f"✅ **Request Completed**\n"
+        f"**Action:** {action_type} ({mode.capitalize()})\n"
+        f"**Target:** {REVERSE_BOARD_MAP[board_id]}\n"
+        f"**Task/Group:** {task.upper()}\n"
+    )
+
+    
+    weights = ens_details.get("weights", {})
+    if mode == "ensemble" and weights:
+        w_auto = weights.get("autoregressive", 0) * 100
+        w_env = weights.get("environmental", 0) * 100
+        summary += (
+            f"\n⚖️ **Ensemble Weights:**\n"
+            f" • Autoregressive: {w_auto:.1f}%\n"
+            f" • Environmental: {w_env:.1f}%\n"
+        )
+
+    # # Aggiunta snapshot testuali per le proiezioni What-If
+    # if is_whatif:
+    #     target_series = series_temp.get(proj_name, [])
+    #     summary_lines = [f"🕒 {pd.to_datetime(p['timestamp']).astimezone(TZ_ROME).strftime('%H:%M')} ➔ **{p['value']:.2f}°C**" for i, p in enumerate(target_series) if (i+1) % 5 == 0]
+    #     summary += "\n_Future snapshots (every 30m):_\n" + "\n".join(summary_lines)
+
+    await update.get_bot().send_media_group(chat_id=wait_msg.chat_id, media=plots)
+    await update.get_bot().send_message(chat_id=wait_msg.chat_id, text=summary, parse_mode='Markdown')
+    await wait_msg.delete()
+
 
 
 async def _process_prediction(update: Update, mode: str, task_or_group: str, board_id: str, wait_message, freq_min: int = 6):
@@ -89,29 +155,35 @@ async def _process_prediction(update: Update, mode: str, task_or_group: str, boa
 
     df_hist = await asyncio.to_thread(fetch_history_data, board_id, 3)
     
-    historical_api = data.get("historical", {})
-    predictions_api = data.get("predictions", {})
-    arima_proj = data.get("prophet_projections", {}) 
+    leaf_data = data.get("leaf_temperature", {})
+    env_data = data.get("environmental_data", {})
+    vpd_data = data.get("vpd", {})
+    ens_details = data.get("ensemble_details", {})
     
     series_temp = {}
     arima_series = {}
     
-    est_hist = historical_api.get("leaf_temp_estimated", [])
-    if est_hist: series_temp["T1/T4 Est. History (Soft Sensor)"] = est_hist
+    
+    if est_hist := leaf_data.get("historical", []): 
+        series_temp["T1/T4 Est. History (Soft Sensor)"] = est_hist
         
-    future_vpd = predictions_api.get("vpd_forecast", [])
+    future_vpd = vpd_data.get("forecast", [])
     
     if mode == "ensemble":
-        if p := predictions_api.get("forecast_blended", []): series_temp["Blended (Final)"] = p
-        if p := predictions_api.get("forecast_env", []): series_temp["Environment (Env)"] = p
-        if p := predictions_api.get("forecast_auto", []): series_temp["Autoregressive (Auto)"] = p
+        if p := leaf_data.get("forecast", []): 
+            series_temp["Blended (Final)"] = p
+        if p := ens_details.get("forecast_env", []): 
+            series_temp["Environment (Env)"] = p
+        if p := ens_details.get("forecast_auto", []): 
+            series_temp["Autoregressive (Auto)"] = p
         
-        if arima_proj:
-            arima_series["Air Temp Forecast (°C)"] = arima_proj.get("air_temp", [])
-            arima_series["Humidity Forecast (%)"] = arima_proj.get("humidity", [])
-
     elif mode == "standard":
-        if p := predictions_api.get("target_forecast", []): series_temp["Standard Prediction"] = p
+        if p := leaf_data.get("forecast", []): 
+            series_temp["Standard Prediction"] = p
+
+    if env_forecast := env_data.get("forecast", {}):
+        if air := env_forecast.get("air_temp", []): arima_series["Air Temp Forecast (°C)"] = air
+        if hum := env_forecast.get("humidity", []): arima_series["Humidity Forecast (%)"] = hum
 
     plots = []
     hide_real = bool(series_temp.get("T1/T4 Est. History (Soft Sensor)"))
@@ -239,24 +311,26 @@ async def process_whatif_values(update: Update, context: ContextTypes.DEFAULT_TY
 
     df_hist = await asyncio.to_thread(fetch_history_data, board_id, 3)
     
-    historical_api = data.get("historical", {})
-    predictions_api = data.get("predictions", {})
-    arima_proj = data.get("prophet_projections", {})
+    leaf_data = data.get("leaf_temperature", {})
+    env_data = data.get("environmental_data", {})
+    vpd_data = data.get("vpd", {})
+    ens_details = data.get("ensemble_details", {})
 
     series_temp, arima_series = {}, {}
 
-    if est_hist := historical_api.get("leaf_temp_estimated", []): series_temp["T1/T4 Est. History (Soft Sensor)"] = est_hist
+    if est_hist := leaf_data.get("historical", []): 
+        series_temp["T1/T4 Est. History (Soft Sensor)"] = est_hist
 
     if mode == "ensemble":
-        if blended := predictions_api.get("forecast_blended", []): series_temp["What-If Projection"] = blended
-        if arima_proj:
-            arima_series["Air Temp Forecast (°C)"] = arima_proj.get("air_temp", [])
-            arima_series["Humidity Forecast (%)"] = arima_proj.get("humidity", [])
-            
+        if blended := leaf_data.get("forecast", []): series_temp["What-If Projection"] = blended
     elif mode == "standard":
-        if raw_preds := predictions_api.get("target_forecast", []): series_temp["What-If Projection"] = raw_preds
+        if raw_preds := leaf_data.get("forecast", []): series_temp["What-If Projection"] = raw_preds
 
-    future_vpd = predictions_api.get("vpd_forecast", [])
+    if env_forecast := env_data.get("forecast", {}):
+        if air := env_forecast.get("air_temp", []): arima_series["Air Temp Forecast (°C)"] = air
+        if hum := env_forecast.get("humidity", []): arima_series["Humidity Forecast (%)"] = hum
+            
+    future_vpd = vpd_data.get("forecast", [])
 
     plots = []
     hide_real = bool(mode == "ensemble" and series_temp.get("T1/T4 Est. History (Soft Sensor)"))

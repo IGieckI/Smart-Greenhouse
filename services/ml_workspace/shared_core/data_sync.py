@@ -27,6 +27,7 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
         from(bucket: "{bucket_clean}")
           |> range(start: {SYNC_LOOKBACK_DAYS})
           |> filter(fn: (r) => r._measurement == "sensor_measurements")
+          |> filter(fn: (r) => r._field !~ /pred/)
           |> last()
           |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
     '''
@@ -143,12 +144,13 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
         print(f"[Sync {freq_minutes}m] Import historical forecast from caveaux bucket...")
         if buckets_api.find_bucket_by_name(BUCKET_CAVEAUX) is None:
             buckets_api.create_bucket(bucket_name=BUCKET_CAVEAUX, org=influx_org)
-            
+        
         query_caveaux = f'''
             from(bucket: "{BUCKET_CAVEAUX}")
             |> range(start: 0)
             |> filter(fn: (r) => r._measurement == "sensor_measurements")
             |> filter(fn: (r) => r.freq == "{freq_minutes}m")
+            |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
         '''
         try:
             df_caveaux = query_api.query_data_frame(query_caveaux)
@@ -158,12 +160,19 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
             if df_caveaux is not None and not df_caveaux.empty:
                 cav_points = []
                 for _, row in df_caveaux.iterrows():
-                    p = Point(row['_measurement']) \
+                    p = Point("sensor_measurements") \
                         .tag("id_board", str(row.get('id_board', ''))) \
                         .tag("model_source", str(row.get('model_source', ''))) \
                         .tag("freq", str(row.get('freq', f'{freq_minutes}m'))) \
-                        .field(row['_field'], float(row['_value'])) \
                         .time(row['_time'])
+                    
+                    if 'leaf_temp_pred' in row and pd.notna(row['leaf_temp_pred']):
+                        p.field("leaf_temp_pred", float(row['leaf_temp_pred']))
+                    if 'air_temp_pred' in row and pd.notna(row['air_temp_pred']):
+                        p.field("air_temp_pred", float(row['air_temp_pred']))
+                    if 'humidity_pred' in row and pd.notna(row['humidity_pred']):
+                        p.field("humidity_pred", float(row['humidity_pred']))
+                        
                     cav_points.append(p)
                 if cav_points:
                     write_api.write(bucket=bucket_clean, org=influx_org, record=cav_points)
@@ -171,4 +180,4 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
             else:
                 print(f"[Sync {freq_minutes}m] No previous forecasting found in caveaux.")
         except Exception as e:
-            print(f"[Sync {freq_minutes}m] error while attemping import from caveaux: {e}")
+            print(f"[Sync {freq_minutes}m] Error while attempting import from caveaux: {e}")

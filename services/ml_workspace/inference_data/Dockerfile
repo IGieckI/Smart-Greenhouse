@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir pandas numpy cmdstanpy==1.2.0
 
 # 3. DOWNLOAD AND COMPILE THE ENGINE IN A FIXED ABSOLUTE PATH
-RUN install_cmdstan -d /opt/cmdstan
+RUN install_cmdstan -d /opt/cmdstan --version 2.33.1
 
 # 4. DECLARE THE ENVIRONMENT VARIABLE (So Prophet knows where to look)
 ENV CMDSTAN=/opt/cmdstan/cmdstan-2.33.1

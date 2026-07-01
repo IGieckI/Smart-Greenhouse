@@ -290,7 +290,7 @@ def _generate_global_feature_importance_grid(all_data, model_names, out_dir, fre
     rows = len(tasks)
     
     
-    fig, axes = plt.subplots(rows, cols, figsize=(10 * cols, 7 * rows))
+    fig, axes = plt.subplots(rows, cols, figsize=(8 * cols, 5 * rows))
     if rows == 1 and cols == 1:
         axes = np.array([[axes]])
     elif rows == 1:
