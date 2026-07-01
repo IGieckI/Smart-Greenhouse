@@ -41,6 +41,7 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
     else:
         time_filter = '|> range(start: 0)'
 
+    print(f"[Sync {freq_minutes}m] Querying RAW bucket (Time filter: {time_filter})...")
     query_raw = f'''
         from(bucket: "{BUCKET_RAW}")
           {time_filter}
@@ -52,11 +53,14 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
     
     if isinstance(df_raw, list):
         if len(df_raw) == 0: 
+            print(f"[Sync {freq_minutes}m] No new raw data found.")
             return
         df_raw = pd.concat(df_raw, ignore_index=True)
     if df_raw.empty:
+        print(f"[Sync {freq_minutes}m] No new raw data found.")
         return
     
+    print(f"[Sync {freq_minutes}m] Pre-processing {len(df_raw)} raw records (Standardizing column names)...")
     if 'tds_value' in df_raw.columns:
         if 'tds' in df_raw.columns: df_raw['tds'] = df_raw['tds'].combine_first(df_raw['tds_value'])
         else: df_raw.rename(columns={'tds_value': 'tds'}, inplace=True)
@@ -74,47 +78,29 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
         df_board.set_index('_time', inplace=True)
         df_board.sort_index(inplace=True)
 
-        # --- FIX 1: Applichiamo la pipeline sui dati RAW AD ALTA DENSITÀ ---
+        # --- FIX 1: Apply the pipeline on HIGH-DENSITY RAW data ---
         df_clean = apply_board_pipeline(df_board, board)
 
-        # --- FIX 1B: Il Resampling avviene DOPO la pulizia gaussiana ---
+        # --- FIX 1B: Resampling occurs AFTER Gaussian cleaning ---
         freq_str = f"{freq_minutes}min"
         df_clean = df_clean.resample(freq_str).mean(numeric_only=True)
         df_clean['id_board'] = board
 
-        # --- FIX 4: Lo "spazzino universale" lineare sui dati resamplati ---
+        # --- FIX 4: The linear "universal sweeper" on resampled data ---
         max_nans_to_fill = max(1, int(MAX_INTERPOLATION_GAP_MINUTES / freq_minutes))
         df_clean = df_clean.infer_objects(copy=False).interpolate(method='linear', limit=max_nans_to_fill)
         
         cols_to_drop = ['result', 'table', '_start', '_stop', '_measurement', 'block_id', 'leaf_weight']
         df_clean.drop(columns=[c for c in cols_to_drop if c in df_clean.columns], inplace=True)
 
-        # Togliamo i dati più vecchi di last_time (se esistono) perché li abbiamo già nel DB 
-        # (L'overlap serviva solo per la matematica, non vogliamo reinserirli tutti, 
-        # anche se InfluxDB gestisce bene le sovrascritture).
+        # Remove data older than last_time (if they exist) because we already have them in the DB
+        # (The overlap was only for math, we don't want to reinsert them all,
+        # even though InfluxDB handles overwrites well).
         if last_time:
             df_clean = df_clean[df_clean.index > last_time]
         
         df_clean.dropna(how='all', subset=[c for c in df_clean.columns if c != 'id_board'], inplace=True)
         
-        # freq_str = f"{freq_minutes}min"
-        # df_board = df_board.resample(freq_str).mean(numeric_only=True)
-        # df_board['id_board'] = board 
-
-        # df_clean = apply_board_pipeline(df_board, board)
-        
-        # max_nans_to_fill = max(1, int(MAX_INTERPOLATION_GAP_MINUTES / freq_minutes))
-        
-        # # Update: Inferred objects prevent Pandas future warnings
-        # df_clean = df_clean.infer_objects(copy=False).interpolate(method='linear', limit=max_nans_to_fill)
-
-        # # max_nans_to_fill = max(1, int(MAX_INTERPOLATION_GAP_MINUTES / freq_minutes))
-        # # df_clean = df_clean.interpolate(method='linear', limit=max_nans_to_fill)
-        # # --------------------------------------------------------
-        # cols_to_drop = ['result', 'table', '_start', '_stop', '_measurement', 'block_id', 'leaf_weight']
-        # df_clean.drop(columns=[c for c in cols_to_drop if c in df_clean.columns], inplace=True)
-        # df_clean.dropna(how='all', subset=[c for c in df_clean.columns if c != 'id_board'], inplace=True)
-
         points = []
         for timestamp, row in df_clean.iterrows():
             p = Point("sensor_measurements").tag("id_board", str(board)).time(timestamp)
@@ -125,4 +111,4 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
         
         if points:
             write_api.write(bucket=bucket_clean, org=influx_org, record=points)
-            print(f"[Sync {freq_minutes}m] Inserted {len(points)} records (Board {board})")
+            print(f"[Sync {freq_minutes}m] Inserted {len(points)} clean records for Board {board}")

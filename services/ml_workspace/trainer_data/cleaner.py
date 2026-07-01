@@ -15,5 +15,6 @@ if __name__ == "__main__":
     for freq in DEFAULT_FREQS:
         print(f"\n--- Synchronizing Bucket for {freq} min ---")
         sync_clean_bucket(INFLUX_URL, INFLUX_TOKEN, INFLUX_ORG, freq_minutes=freq)
+        print(f"[Cleaner] Synchronization for {freq} min bucket finished.")
         
     print("\n[Cleaner] Synchronization completed across all temporal scales.")

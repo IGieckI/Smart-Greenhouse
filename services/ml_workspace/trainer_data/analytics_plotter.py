@@ -7,29 +7,29 @@ import pandas as pd
 import seaborn as sns
 
 def clear_analytics_cache(task_dir: str):
-    """Elimina la cartella dei plot per invalidare la cache post-addestramento."""
+    """Deletes the plots folder to invalidate the cache post-training."""
     output_dir = os.path.join(task_dir, "analytics_plots")
     if os.path.exists(output_dir):
         shutil.rmtree(output_dir)
-        print(f"[Analytics] Cache invalidata per: {task_dir}")
+        print(f"[Analytics] Cache invalidated for: {task_dir}")
 
 def ensure_analytics_plots(task_dir: str, task_name: str) -> bool:
     """
-    Genera i plot analitici in modo idempotente. 
-    Ritorna True se i plot sono stati generati o erano già presenti, False in caso di errore.
+    Generates analytical plots idempotently. 
+    Returns True if plots were generated or already present, False in case of error.
     """
     archive_dir = os.path.join(task_dir, "models_archive")
     output_dir = os.path.join(task_dir, "analytics_plots")
     
-    # 1. La fonte di verità: Esistono i JSON?
+    # 1. The source of truth: Do the JSONs exist?
     if not os.path.exists(archive_dir):
         return False
         
     json_files = [f for f in os.listdir(archive_dir) if f.endswith("_metrics.json")]
     if not json_files:
-        return False # Nessun dato da plottare
+        return False # No data to plot
         
-    # 2. Controllo Idempotenza: I plot ci sono già?
+    # 2. Idempotency Check: Are the plots already there?
     if os.path.exists(os.path.join(output_dir, "metrics_comparison.png")):
         return True 
 
@@ -43,30 +43,30 @@ def ensure_analytics_plots(task_dir: str, task_name: str) -> bool:
 
     model_names = list(models_data.keys())
 
-    # Generazione dei plot specifici del task
+    # Generation of task-specific plots
     _plot_metrics_comparison(models_data, model_names, task_name, output_dir)
     _plot_timing_comparison(models_data, model_names, task_name, output_dir)
     _plot_hyperparameters_table(models_data, model_names, task_name, output_dir)
     _plot_feature_importance_grid(models_data, model_names, task_name, output_dir)
 
-    print(f"[Analytics] Plot analitici generati in {output_dir}")
+    print(f"[Analytics] Analytical plots generated in {output_dir}")
     return True
 
 def ensure_global_analytics(base_dir: str, freq_minutes: int) -> bool:
     """
-    Scansiona dinamicamente tutti i task presenti, estrae tutti i gruppi di metriche
-    e genera una matrice comparativa (Task vs Model) per ciascun gruppo di informazioni.
+    Dynamically scans all present tasks, extracts all metric groups,
+    and generates a comparative matrix (Task vs Model) for each information group.
     """
     global_dir = os.path.join(base_dir, "global_analytics")
     
-    # Scansioniamo tutte le cartelle che sembrano task (es. t1, t2...)
+    # Scan all folders that look like tasks (e.g., t1, t2...)
     tasks = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d)) and d.startswith("t")]
     if not tasks: return False
         
     all_data = {}
     all_models = set()
     
-    # 1. Parsing di tutti i JSON
+    # 1. Parsing all JSONs
     for task in tasks:
         archive_dir = os.path.join(base_dir, task, "models_archive")
         if not os.path.exists(archive_dir): continue
@@ -90,21 +90,21 @@ def ensure_global_analytics(base_dir: str, freq_minutes: int) -> bool:
     os.makedirs(global_dir, exist_ok=True)
     model_names = sorted(list(all_models))
     
-    # 2. Generazione Idempotente di 1 Immagine per ogni Gruppo di Informazione
+    # 2. Idempotent Generation of 1 Image for each Information Group
     _generate_global_heatmap(all_data, model_names, "MAE", "metrics", global_dir, freq_minutes)
     _generate_global_heatmap(all_data, model_names, "RMSE", "metrics", global_dir, freq_minutes)
     _generate_global_heatmap(all_data, model_names, "R_squared", "metrics", global_dir, freq_minutes, cmap="RdYlGn")
     _generate_global_heatmap(all_data, model_names, "training_time_seconds", "performance", global_dir, freq_minutes, cmap="Reds")
     _generate_global_heatmap(all_data, model_names, "inference_time_seconds", "performance", global_dir, freq_minutes, cmap="Reds")
     
-    # Griglia Testuale per gli Iperparametri
+    # Text Grid for Hyperparameters
     _generate_global_params_grid(all_data, model_names, global_dir, freq_minutes)
     
     return True
 
 def _generate_global_heatmap(all_data, model_names, key, category, out_dir, freq, cmap="YlGnBu"):
     file_path = os.path.join(out_dir, f"global_{key}.png")
-    if os.path.exists(file_path): return # Skip se esiste (Idempotenza)
+    if os.path.exists(file_path): return # Skip if it exists (Idempotency)
 
     df_dict = {}
     for task, models in all_data.items():
@@ -129,18 +129,18 @@ def _generate_global_heatmap(all_data, model_names, key, category, out_dir, freq
 
 def _generate_global_params_grid(all_data, model_names, out_dir, freq):
     file_path = os.path.join(out_dir, "global_best_params.png")
-    if os.path.exists(file_path): return # Skip se esiste
+    if os.path.exists(file_path): return # Skip if it exists
     
     tasks = sorted(list(all_data.keys()))
     cell_text = []
     
-    # Costruiamo la matrice bidimensionale di testi
+    # Build the two-dimensional matrix of texts
     for t in tasks:
         row = []
         for m in model_names:
             if m in all_data[t]:
                 params = all_data[t][m].get("best_params", {})
-                # Format: mandiamo a capo ogni iperparametro per adattarlo alla cella
+                # Format: wrap each hyperparameter to fit the cell
                 p_str = "\n".join([f"{k.split('__')[-1]}: {v}" for k, v in params.items()])
                 row.append(p_str if p_str else "Default")
             else:
@@ -149,14 +149,14 @@ def _generate_global_params_grid(all_data, model_names, out_dir, freq):
         
     if not cell_text: return
 
-    # Calcoliamo la dimensione dell'immagine per far respirare il testo
+    # Calculate the image size to let the text breathe
     fig, ax = plt.subplots(figsize=(max(8, 3 * len(model_names)), max(4, 1.5 * len(tasks))))
     ax.axis('off')
     
     table = ax.table(cellText=cell_text, rowLabels=[t.upper() for t in tasks], colLabels=model_names, loc='center', cellLoc='center')
     table.auto_set_font_size(False)
     table.set_fontsize(10)
-    table.scale(1, 4) # Aumentiamo l'altezza delle righe per il testo \n
+    table.scale(1, 4) # Increase the row height for the \n text
     
     plt.title(f"Global Matrix: BEST HYPERPARAMETERS ({freq}m)", pad=20, fontsize=14)
     plt.tight_layout()
@@ -180,8 +180,8 @@ def _plot_metrics_comparison(models_data, model_names, task_name, output_dir):
     ax.bar(x, rmses, width, label='RMSE', color='#66b3ff')
     ax.bar(x + width, r2s, width, label='R² (Scaled)', color='#99ff99')
 
-    ax.set_ylabel('Valore Metrica')
-    ax.set_title(f'[{task_name.upper()}] Confronto Metriche per Modello')
+    ax.set_ylabel('Metric Value')
+    ax.set_title(f'[{task_name.upper()}] Metrics Comparison per Model')
     ax.set_xticks(x)
     ax.set_xticklabels(model_names, rotation=45, ha="right")
     ax.legend()
@@ -196,7 +196,7 @@ def _plot_timing_comparison(models_data, model_names, task_name, output_dir):
     fig, ax1 = plt.subplots(figsize=(10, 5))
     
     color = 'tab:red'
-    ax1.set_xlabel('Modelli')
+    ax1.set_xlabel('Models')
     ax1.set_ylabel('Training Time (s)', color=color)
     ax1.bar(model_names, train_times, color=color, alpha=0.6, width=0.4, align='center', label='Training')
     ax1.tick_params(axis='y', labelcolor=color)
@@ -209,7 +209,7 @@ def _plot_timing_comparison(models_data, model_names, task_name, output_dir):
     ax2.bar(x_pos + 0.2, inf_times, color=color, alpha=0.8, width=0.4, align='edge', label='Inference')
     ax2.tick_params(axis='y', labelcolor=color)
 
-    plt.title(f'[{task_name.upper()}] Tempi di Training vs Inferenza')
+    plt.title(f'[{task_name.upper()}] Training vs Inference Times')
     fig.tight_layout()
     plt.savefig(os.path.join(output_dir, "timing_comparison.png"))
     plt.close()
@@ -226,7 +226,7 @@ def _plot_hyperparameters_table(models_data, model_names, task_name, output_dir)
             params_str = params_str[:77] + "..."
         cell_text.append([m, params_str, models_data[m]["metrics"].get("MAE", "")])
 
-    table = ax.table(cellText=cell_text, colLabels=['Modello', 'Migliori Iperparametri', 'MAE Result'], 
+    table = ax.table(cellText=cell_text, colLabels=['Model', 'Best Hyperparameters', 'MAE Result'], 
                      cellLoc='left', loc='center')
     table.auto_set_font_size(False)
     table.set_fontsize(10)

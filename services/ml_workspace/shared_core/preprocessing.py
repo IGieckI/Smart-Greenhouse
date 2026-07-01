@@ -13,15 +13,15 @@ def gaussian_weighted_interpolation(df: pd.DataFrame, target_col: str, weight_co
         before = valid_data.loc[:idx].iloc[-INTERPOLATION_WIN_BEFORE:] if not valid_data.loc[:idx].empty else pd.DataFrame()
         after = valid_data.loc[idx:].iloc[:INTERPOLATION_WIN_AFTER] if not valid_data.loc[idx:].empty else pd.DataFrame()
         
-        # --- NUOVA LOGICA: Controllo della grandezza del buco ---
+        # --- NEW LOGIC: Check hole size ---
         if not before.empty and not after.empty:
             gap_minutes = (after.index[0] - before.index[-1]).total_seconds() / 60.0
             if gap_minutes > MAX_INTERPOLATION_GAP_MINUTES:
-                continue # Buco troppo grande, non interpoliamo (lasciamo NaN)
-        elif not before.empty: # Caso ai bordi (fine dataset)
+                continue # Hole too large, do not interpolate (leave NaN)
+        elif not before.empty: # Edge case (end of dataset)
             if (idx - before.index[-1]).total_seconds() / 60.0 > MAX_INTERPOLATION_GAP_MINUTES:
                 continue
-        elif not after.empty: # Caso ai bordi (inizio dataset)
+        elif not after.empty: # Edge case (start of dataset)
             if (after.index[0] - idx).total_seconds() / 60.0 > MAX_INTERPOLATION_GAP_MINUTES:
                 continue
         # --------------------------------------------------------
@@ -48,7 +48,7 @@ def create_lagged_features(df: pd.DataFrame, target_col: str, feature_cols: list
     if lag_target: 
         cols_to_lag.append(target_col)
     
-    # Dizionario per accumulare le nuove colonne shifted senza frammentare la memoria
+    # Dictionary to accumulate new shifted columns without fragmenting memory
     lagged_data = {}
     
     for col in cols_to_lag:
@@ -56,13 +56,13 @@ def create_lagged_features(df: pd.DataFrame, target_col: str, feature_cols: list
             for i in range(1, lags + 1):
                 lagged_data[f'{col}_lag_{i}'] = df[col].shift(i * virtual_ratio)
                 
-    # Se sono state generate colonne, le uniamo al DataFrame originale in blocco
+    # If columns were generated, we merge them with the original DataFrame in bulk
     if lagged_data:
         df_lagged = pd.concat([df, pd.DataFrame(lagged_data, index=df.index)], axis=1)
     else:
         df_lagged = df.copy()
         
-    # Applichiamo il dropna sul DataFrame finale combinato
+    # Apply dropna on the final combined DataFrame
     df_lagged.dropna(inplace=True)
     return df_lagged
 

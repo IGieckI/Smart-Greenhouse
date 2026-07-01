@@ -8,7 +8,7 @@ import joblib
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# Solo pulizia cache! La generazione avviene Lazy in API
+# Cache clearing only! Generation occurs lazily in the API
 from analytics_plotter import clear_analytics_cache
 
 from influxdb_client import InfluxDBClient
@@ -28,12 +28,11 @@ from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import PolynomialFeatures
 
 import cmdstanpy
-import os        
 
 try:
     os.environ['CMDSTAN'] = cmdstanpy.cmdstan_path()
 except Exception as e:
-    print(f"[Warning] Impossibile settare CMDSTAN dinamicamente: {e}")
+    print(f"[Warning] Unable to dynamically set CMDSTAN: {e}")
 
 sys.path.append('/app')
 from shared_core.preprocessing import build_advanced_features, get_extended_features_list, create_lagged_features
@@ -42,10 +41,11 @@ from shared_core.tasks import TASKS
 import traceback
 
 # ==========================================
-# DATA FETCHING
+# 1. DATA FETCHING (Clean Data Only)
 # ==========================================
 
 def fetch_clean_data(freq_minutes: int):
+    print(f"[Data Fetch] Pulling clean data from bucket for {freq_minutes}m frequency...")
     bucket_clean = f"{BUCKET_CLEAN_PREFIX}{freq_minutes}m"
     client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
     query = f'''
@@ -56,45 +56,19 @@ def fetch_clean_data(freq_minutes: int):
     '''
     df = client.query_api().query_data_frame(query)
     if isinstance(df, list):
-        if len(df) == 0: return pd.DataFrame()
+        if len(df) == 0: 
+            print(f"[Data Fetch] Warning: No data found in bucket {bucket_clean}.")
+            return pd.DataFrame()
         df = pd.concat(df, ignore_index=True)
         
     if not df.empty:
         df.set_index('_time', inplace=True)
         df.sort_index(inplace=True)
-    return df
-
-def fetch_raw_training_data():
-    print("[Data] Fetching massive RAW dataset for point-wise tasks (T1/T4)...")
-    client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
-    query = f'''
-        from(bucket: "{BUCKET_RAW}")
-          |> range(start: {SYNC_LOOKBACK_DAYS})
-          |> filter(fn: (r) => r._measurement == "sensor_measurements")
-          |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
-    '''
-    df = client.query_api().query_data_frame(query)
-    if isinstance(df, list):
-        if len(df) == 0: return pd.DataFrame()
-        df = pd.concat(df, ignore_index=True)
-        
-    if not df.empty:
-        df.set_index('_time', inplace=True)
-        df.sort_index(inplace=True)
-        if 'tds_value' in df.columns:
-            if 'tds' in df.columns: df['tds'] = df['tds'].combine_first(df['tds_value'])
-            else: df.rename(columns={'tds_value': 'tds'}, inplace=True)
-            df.drop(columns=['tds_value'], inplace=True, errors='ignore')
-
-        if 'leaf_temperature' in df.columns:
-            if 'leaf_temp' in df.columns: df['leaf_temp'] = df['leaf_temp'].combine_first(df['leaf_temperature'])
-            else: df.rename(columns={'leaf_temperature': 'leaf_temp'}, inplace=True)
-            df.drop(columns=['leaf_temperature'], inplace=True, errors='ignore')
-            
+        print(f"[Data Fetch] Successfully retrieved {len(df)} records.")
     return df
 
 # ==========================================
-# EVALUATION & LOGGING (No plotting qui, solo test veri contro environment)
+# EVALUATION & LOGGING
 # ==========================================
 def log_and_evaluate(y_test, y_pred, features_names, model, model_name, task_name, training_time, inf_time, best_params, archive_dir):
     mae = mean_absolute_error(y_test, y_pred)
@@ -125,15 +99,14 @@ def log_and_evaluate(y_test, y_pred, features_names, model, model_name, task_nam
         "feature_importance": importance_dict
     }
     
-    # --- MODIFICA: Scrittura atomica per evitare JSONDecodeError nell'API ---
+    # Atomic write to prevent JSONDecodeError in the API
     temp_file = os.path.join(archive_dir, f"{model_name}_metrics.tmp")
     final_file = os.path.join(archive_dir, f"{model_name}_metrics.json")
     
     with open(temp_file, "w") as f:
         json.dump(report, f, indent=4)
         
-    os.rename(temp_file, final_file) # Operazione atomica garantita
-    # ------------------------------------------------------------------------
+    os.rename(temp_file, final_file)
         
     return report, mae
 
@@ -147,14 +120,19 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
     
     effective_days = ENV_ARIMA_TRAIN_DAYS if freq_minutes >= 6 else 3
     tail_samples = int((effective_days * 24 * 60) / freq_minutes)
+    print(f"[Prophet Setup] Target history: {effective_days} days ({tail_samples} tail samples).")
     
     for feat in features:
         try:
-            print(f"Training Prophet for: {feat}...")
-            if feat not in df_train.columns: continue
+            print(f"[Prophet Training] Initializing for feature: '{feat}'...")
+            if feat not in df_train.columns: 
+                print(f"[Prophet Warning] Feature '{feat}' not found in dataframe. Skipping.")
+                continue
 
             y = df_train[feat].dropna().tail(tail_samples) 
-            if len(y) < 100 or y.nunique() <= 1: continue
+            if len(y) < 100 or y.nunique() <= 1: 
+                print(f"[Prophet Warning] Insufficient variance or length for '{feat}'. Skipping.")
+                continue
             
             timestamps = y.index.tz_localize(None) if y.index.tz is not None else y.index
             df_prophet_full = pd.DataFrame({
@@ -162,27 +140,27 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
                 'y': pd.to_numeric(y.values, errors='coerce')
             }).dropna()
             
-            # --- NUOVO: Splitting Train / Test (80/20) ---
+            # Train / Test Split (80/20)
             split_idx = int(len(df_prophet_full) * 0.8)
             df_train_prophet = df_prophet_full.iloc[:split_idx]
             df_test_prophet = df_prophet_full.iloc[split_idx:]
             
-            # Addestramento sul set di Train
+            print(f"[Prophet - {feat}] Performing 80/20 Split (Train: {len(df_train_prophet)}, Test: {len(df_test_prophet)})")
+            
             final_model = Prophet(daily_seasonality=True, yearly_seasonality=False, weekly_seasonality=False, stan_backend='CMDSTANPY')
             final_model.fit(df_train_prophet)
             
-            # Valutazione sul set di Test
+            print(f"[Prophet - {feat}] Generating forecast for evaluation...")
             future = final_model.make_future_dataframe(periods=len(df_test_prophet), freq=f'{freq_minutes}min')
             forecast = final_model.predict(future)
             
-            # Estrazione predizioni relative al test set
             test_forecast = forecast.iloc[split_idx:]
             mae = mean_absolute_error(df_test_prophet['y'], test_forecast['yhat'])
             rmse = np.sqrt(mean_squared_error(df_test_prophet['y'], test_forecast['yhat']))
             
-            print(f"-> Model {feat} Evaluated - MAE: {mae:.2f}, RMSE: {rmse:.2f}")
+            print(f"[Prophet - {feat}] Evaluation Completed -> MAE: {mae:.2f}, RMSE: {rmse:.2f}")
 
-            # --- NUOVO: Generazione e salvataggio Grafici ---
+            # Generate and save plots
             plt.figure(figsize=(12, 6))
             plt.plot(df_train_prophet['ds'], df_train_prophet['y'], label='Train Data', color='blue', alpha=0.6)
             plt.plot(df_test_prophet['ds'], df_test_prophet['y'], label='Test Actual', color='black', alpha=0.8)
@@ -194,58 +172,21 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
             plt.savefig(os.path.join(output_dir, f"prophet_plot_{feat}.png"))
             plt.close()
 
-            # Riadattiamo il modello sull'intero dataset per l'inferenza futura
+            print(f"[Prophet - {feat}] Refitting on 100% of available data for production...")
             prod_model = Prophet(daily_seasonality=True, yearly_seasonality=False, weekly_seasonality=False, stan_backend='CMDSTANPY')
             prod_model.fit(df_prophet_full)
 
-            # Salvataggio artefatti
+            # Save artifacts
             with open(os.path.join(output_dir, f"prophet_{feat}.json"), 'w') as fout:
                 fout.write(model_to_json(prod_model)) 
             with open(os.path.join(output_dir, f"prophet_metrics_{feat}.json"), 'w') as fout:
                 json.dump({"MAE": mae, "RMSE": rmse}, fout)
+            
+            print(f"[Prophet - {feat}] Target successfully completed and saved.")
                 
         except Exception as e:
-            print(f"-> [ERRORE PROPHET] Addestramento interrotto per {feat}: {str(e)}")
+            print(f"-> [PROPHET ERROR] Training interrupted for {feat}: {str(e)}")
             continue
-
-# def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
-#     print(f"\n{'='*60}\n[Trainer {freq_minutes}m] INDEPENDENT ENVIRONMENTAL PROPHET TRAINING\n{'='*60}")
-#     os.makedirs(output_dir, exist_ok=True)
-#     df_train = df_clean[df_clean['id_board'].isin(ACTIVE_BOARDS)].copy()
-    
-#     effective_days = ENV_ARIMA_TRAIN_DAYS if freq_minutes >= 6 else 3
-#     tail_samples = int((effective_days * 24 * 60) / freq_minutes)
-    
-#     for feat in features:
-#         try:
-#             print(f"Training Prophet for: {feat} (last {tail_samples} samples = {effective_days} days)...")
-#             if feat not in df_train.columns: continue
-
-#             y = df_train[feat].dropna().tail(tail_samples) 
-#             if len(y) < 100 or y.nunique() <= 1: continue
-            
-#             timestamps = y.index.tz_localize(None) if y.index.tz is not None else y.index
-#             df_prophet_full = pd.DataFrame({
-#                 'ds': pd.to_datetime(timestamps),
-#                 'y': pd.to_numeric(y.values, errors='coerce')
-#             }).dropna()
-            
-#             final_model = Prophet(
-#                 daily_seasonality=True, 
-#                 yearly_seasonality=False, 
-#                 weekly_seasonality=False,
-#                 stan_backend='CMDSTANPY'
-#             )
-#             final_model.fit(df_prophet_full)
-            
-#             with open(os.path.join(output_dir, f"prophet_{feat}.json"), 'w') as fout:
-#                 fout.write(model_to_json(final_model)) 
-                
-#             print(f"-> Model for {feat} Saved & Evaluated")
-            
-#         except Exception as e:
-#             print(f"-> [ERRORE PROPHET] Addestramento interrotto per {feat}: {str(e)}")
-#             continue
 
 def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> dict:
     is_high_freq = freq_minutes < 6
@@ -304,19 +245,16 @@ def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> d
         },
     }
 
-def run_pipeline_for_task(task_name, config, df_data, freq_minutes, is_raw=False):
-    print(f"\n{'='*60}\n[Trainer {freq_minutes}m] STARTING PIPELINE: {task_name.upper()} (RAW Data Mode: {is_raw})\n{'='*60}")
+def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
+    print(f"\n{'='*60}\n[Trainer {freq_minutes}m] STARTING PIPELINE: {task_name.upper()}\n{'='*60}")
     
     target_col = config["target"]
     features_list = config["features"]
     use_lags = config.get("use_lags", False)
     lag_target = config.get("lag_target", True) 
-    
-    # --- MODIFICA 1: Leggiamo i lag specifici del task o usiamo il default ---
     task_lags = config.get("lags", DEFAULT_LAGS)
-    # -------------------------------------------------------------------------
 
-    virtual_ratio = 1 if is_raw else get_virtual_ratio(freq_minutes)
+    virtual_ratio = get_virtual_ratio(freq_minutes)
     task_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", task_name)
     archive_dir, best_dir = [os.path.join(task_dir, p) for p in ["models_archive", "best_model"]]
     
@@ -327,71 +265,78 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes, is_raw=False
     extended_features_list = get_extended_features_list(features_list, use_lags)
     df_train_final_list, df_test_final_list = [], []
 
+    print(f"[{task_name}] Target: '{target_col}' | Explicit Features Required: {features_list}")
+    print(f"[{task_name}] Lags Enabled: {use_lags} | Lag Target: {lag_target}")
+
     for board_id in ACTIVE_BOARDS:
         df_b = df_data[df_data['id_board'] == board_id].copy()
         if df_b.empty: 
+            print(f"[{task_name}] Warning: Board {board_id} dataset is empty. Skipping.")
             continue
         
-        # 1. Preparazione base (Resample crea i NaN dove ci sono buchi reali)
-        if is_raw:
-            df_b = df_b.resample('1min').mean(numeric_only=True)
-            df_b = df_b.ffill(limit=3)
-            if board_id == BOARD_944 and 'tds' in df_b.columns: 
-                df_b.loc[df_b['tds'] < 60, 'tds'] = np.nan
-            if 'water_temp' in df_b.columns: 
-                df_b.loc[df_b['water_temp'] < MIN_VALID_WATER_TEMP, 'water_temp'] = np.nan
-        
-        # 2. Generazione Features (Il momento magico in cui ogni riga diventa indipendente)
-        df_b = build_advanced_features(df_b, features_list, use_lags, virtual_ratio)
-        if use_lags:
-            # --- MODIFICA 2: Passiamo task_lags anziché DEFAULT_LAGS alla funzione ---
-            df_b = create_lagged_features(df_b, target_col, extended_features_list, virtual_ratio, lags=task_lags, lag_target=lag_target)
-            # -------------------------------------------------------------------------
-            # df_b = create_lagged_features(df_b, target_col, extended_features_list, virtual_ratio, lags=DEFAULT_LAGS, lag_target=lag_target)
-        
+        initial_len = len(df_b)
+        print(f"[{task_name}] Processing Board {board_id} (Initial Clean Rows: {initial_len})")
 
+        # 2. IMMEDIATE FEATURE ISOLATION (Crucial for decoupling tasks from missing irrelevant data)
+        cols_to_keep = features_list + [target_col]
+        available_cols = [c for c in cols_to_keep if c in df_b.columns]
+        
+        missing_cols = set(cols_to_keep) - set(available_cols)
+        if missing_cols:
+            print(f"[{task_name}] Warning: Board {board_id} is missing expected columns: {missing_cols}")
+        
+        # Drop everything else. df_b now strictly contains ONLY what is needed for THIS task.
+        df_b = df_b[available_cols].copy()
+        print(f"[{task_name}] Board {board_id}: Isolated {len(available_cols)} relevant columns. Dropped all unnecessary features.")
 
-        # Controllo di sicurezza
         if target_col not in df_b.columns:
             print(f"[{task_name}] Target '{target_col}' not found for board {board_id}. Skipping.")
             continue
+
+        # 3. APPLY AUGMENTATION
+        df_b = build_advanced_features(df_b, features_list, use_lags, virtual_ratio)
+        if use_lags:
+            print(f"[{task_name}] Generating lags (Depth: {task_lags}) for Board {board_id}...")
+            df_b = create_lagged_features(df_b, target_col, extended_features_list, virtual_ratio, lags=task_lags, lag_target=lag_target)
 
         if use_lags:
             model_features = [col for col in df_b.columns if ('lag' in col and (lag_target or target_col not in col)) or col in extended_features_list]
         else:
             model_features = [col for col in extended_features_list if col in df_b.columns] 
 
-        # 3. IL FILTRO: Rimuoviamo i buchi e le righe invalide (Come avevi intuito tu!)
-        # Tutto ciò che resta è una riga con un X completo e un Y completo.
+        # NaN Filtration (Will only drop rows if they are missing the explicitly requested features)
+        pre_drop_len = len(df_b)
         df_b.dropna(subset=model_features + [target_col], inplace=True)
+        dropped_rows = pre_drop_len - len(df_b)
+        print(f"[{task_name}] NaN Filtration for Board {board_id}: Removed {dropped_rows} rows due to incomplete temporal context.")
+
         if df_b.empty: 
+            print(f"[{task_name}] Board {board_id} dataset became empty after dropping NaNs. Skipping.")
             continue
 
-        # 4. LO SPLIT: Ora che abbiamo solo dati "buoni", prendiamo il primo 90% per il Train.
+        # Re-attach board ID for secure sorting
+        df_b['id_board'] = board_id
+
+        # Split
         split_idx = int(len(df_b) * TRAIN_SPLIT_PERCENTAGE)
         df_train_b, df_test_b = df_b.iloc[:split_idx], df_b.iloc[split_idx:]
-
-        df_b.to_csv(f"BOH_{task_name}_{board_id}.csv")
 
         df_train_final_list.append(df_train_b)
         df_test_final_list.append(df_test_b)
 
     if not df_train_final_list or not df_test_final_list:
-        print(f"[{task_name}] Error: Empty datasets after processing. Skipping.")
+        print(f"[{task_name}] Error: Empty datasets after processing all boards. Skipping task.")
         return
 
-    # 5. ORDINAMENTO SICURO: Evitiamo che il modello salti da una serra all'altra.
-    # Uniamo le liste e ordiniamo PRIMA per ID Board, poi per tempo.
+    # SAFE SORTING (Ensuring models do not learn jumps across different boards)
     df_train_final = pd.concat(df_train_final_list).sort_values(by=['id_board', '_time'])
     df_test_final = pd.concat(df_test_final_list).sort_values(by=['id_board', '_time'])
 
+    print(f"[{task_name}] Aggregation Complete | Final Valid Train Vol: {len(df_train_final)} | Test Vol: {len(df_test_final)}")
     
-    print(f"[{task_name}] Final Valid Train Vol: {len(df_train_final)} | Test Vol: {len(df_test_final)}")
-    
+    # 4. START TRAINING
     X_train, y_train = df_train_final[model_features], df_train_final[target_col]
     X_test, y_test = df_test_final[model_features], df_test_final[target_col]
-
-
 
     poly_transformer = ColumnTransformer(
         transformers=[('poly', PolynomialFeatures(degree=3, include_bias=False), features_list)],
@@ -407,12 +352,13 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes, is_raw=False
     best_model_name = ""
 
     for name, config in models_grids.items():
-        print(f"[{task_name}] Training {name}...")
+        print(f"[{task_name}] Initiating GridSearchCV Training for {name}...")
         grid_search = GridSearchCV(estimator=config["model"], param_grid=config["params"], cv=tscv, scoring='neg_mean_absolute_error', n_jobs=-1)
         
         start_time = time.time()
         grid_search.fit(X_train, y_train) 
         training_time = time.time() - start_time
+        print(f"[{task_name}] -> {name} Training finished in {training_time:.2f}s")
 
         best_model = grid_search.best_estimator_
         best_params = grid_search.best_params_
@@ -426,13 +372,14 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes, is_raw=False
             model=best_model, model_name=name, task_name=task_name, training_time=training_time, 
             inf_time=inf_time, best_params=best_params, archive_dir=archive_dir
         )
+        print(f"[{task_name}] -> {name} Evaluation | MAE: {mae:.3f} | Inference Time: {inf_time:.4f}s")
         
         if mae < best_overall_mae:
             best_overall_mae = mae
             best_overall_model = best_model
             best_model_name = name
 
-    print(f"\n[{task_name}] Best Model: {best_model_name} (MAE: {best_overall_mae:.3f})")
+    print(f"\n[{task_name}] Winner Selected: {best_model_name} (MAE: {best_overall_mae:.3f})")
     joblib.dump(best_overall_model, os.path.join(best_dir, "best_model.joblib"))
     with open(os.path.join(best_dir, "best_model_info.json"), "w") as f:
         json.dump({"best_model": best_model_name, "mae": best_overall_mae, "target": target_col}, f)
@@ -442,30 +389,25 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes, is_raw=False
 # ==========================================
 def main():
     print("[Trainer] Starting Multi-Frequency Global Pipeline...")
-    # df_raw = fetch_raw_training_data()
     
     for freq in DEFAULT_FREQS:
         print(f"\n=== BEGIN TRAINING FOR FREQUENCY {freq} MINUTES ===")
+        
+        # 1. Fetch Clean Data
         df_clean = fetch_clean_data(freq)
         
         if df_clean.empty:
-            print(f"[Trainer] Insufficient 6m data. Please run cleaner.py first.")
+            print(f"[Trainer] Insufficient data for {freq}m. Please run cleaner.py first.")
             continue
         
+        # Prophet Forecasters Training
         all_env_features = TASKS["t1"]["features"]
         env_output_dir = os.path.join(BASE_MODEL_DIR, f"{freq}m", "env_forecasters")
         train_environmental_prophet(df_clean, all_env_features, env_output_dir, freq)
 
-        # 3. Addestramento Task ML (La dropna() interna a run_pipeline assicura l'eliminazione dei buchi di leaf_temp)
+        # ML Tasks Training
         for task_name, config in TASKS.items():
-            # Passiamo sempre e solo df_clean. is_raw=False per tutti.
-            run_pipeline_for_task(task_name, config, df_clean, freq, is_raw=False)
-
-        # for task_name, config in TASKS.items():
-        #     if config.get("use_lags", False):
-        #         run_pipeline_for_task(task_name, config, df_clean, freq, is_raw=False)
-        #     else:
-        #         run_pipeline_for_task(task_name, config, df_raw, freq, is_raw=True)
+            run_pipeline_for_task(task_name, config, df_clean, freq)
                 
     print(f"\n[Trainer] Pipeline completed successfully! Artifacts & Visualizations saved in {BASE_MODEL_DIR}.")
 

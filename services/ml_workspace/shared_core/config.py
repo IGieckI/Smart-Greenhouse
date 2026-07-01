@@ -14,6 +14,9 @@ BOARD_324 = "3750846324"
 BOARD_944 = "3750866944"
 DEFAULT_BOARD_ID = BOARD_324
 ACTIVE_BOARDS = [BOARD_324, BOARD_944]
+# ACTIVE_BOARDS = [BOARD_324]
+INDOORS = [BOARD_324]
+OUTDOORS = [BOARD_944]
 TRAIN_SPLIT_PERCENTAGE = 0.90
 
 # DATA FREQUENCY & TIME HORIZONS
@@ -44,13 +47,9 @@ def get_virtual_ratio(freq_minutes: int) -> int:
     """Calculates the jump ratio to align data to the target frequency."""
     return max(1, int(TARGET_FREQ_MINUTES / freq_minutes))
 
-# def get_min_history_records(freq_minutes: int) -> int:
-#     """Calculates the minimum required historical records based on frequency."""
-#     return (DEFAULT_LAGS * get_virtual_ratio(freq_minutes)) + 2
-
 def get_min_history_records(freq_minutes: int) -> int:
     """Calculates the minimum required historical records based on frequency."""
-    # Impostiamo il max lag possibile (15) per accomodare t10 e t11
+    # Set the max possible lag (15) to accommodate t10 and t11
     max_possible_lags = 15
     return (max_possible_lags * get_virtual_ratio(freq_minutes)) + 2
 

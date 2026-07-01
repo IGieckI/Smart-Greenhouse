@@ -58,14 +58,12 @@ def run_full_pipeline_for_freq(freq_minutes: int):
             
         print(f"[Pipeline] Process for {freq_minutes}m completed successfully!")
         
-        # Elimina esplicitamente la matrice globale precedente
+        # Explicitly delete the previous global matrix
         global_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", "global_analytics")
         if os.path.exists(global_dir):
             shutil.rmtree(global_dir)
+            print(f"[Pipeline] Cleaned up previous global analytics for {freq_minutes}m.")
 
-        # global_matrix_path = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", "global_analytics", "global_mae_matrix.png")
-        # if os.path.exists(global_matrix_path): os.remove(global_matrix_path)
-        
         try:
             res = requests.post(f"{INFERENCE_API_URL}/reload-models", timeout=5)
             if res.status_code == 200:
@@ -106,7 +104,7 @@ def trigger_standard_training():
 @app.post("/train/custom/{freq_minutes}")
 def trigger_custom_training(freq_minutes: int):
     if freq_minutes <= 0 or freq_minutes > TARGET_FREQ_MINUTES or TARGET_FREQ_MINUTES % freq_minutes != 0:
-        raise HTTPException(status_code=400, detail="Frequenza invalida o non divisore del target.")
+        raise HTTPException(status_code=400, detail="Invalid frequency or not a divisor of the target.")
     training_queue.put(freq_minutes)
     return {"message": f"Custom training ({freq_minutes}m) queued.", "queue_size": training_queue.qsize()}
 
@@ -120,10 +118,10 @@ def get_queue_status():
 
 @app.get("/analytics/{freq_minutes}/summary")
 def get_global_summary(freq_minutes: int):
-    """Esplora dinamicamente la directory e restituisce tutti i task e i relativi modelli addestrati."""
+    """Dynamically explores the directory and returns all tasks and their trained models."""
     base_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m")
     if not os.path.exists(base_dir):
-        raise HTTPException(status_code=404, detail="Frequenza non trovata. Addestrare prima il sistema.")
+        raise HTTPException(status_code=404, detail="Frequency not found. Train the system first.")
         
     tasks = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d)) and d != "global_analytics" and d != "env_forecasters"]
     
@@ -146,12 +144,12 @@ def get_global_summary(freq_minutes: int):
 
 @app.get("/analytics/{freq_minutes}/global-matrix")
 def get_global_matrix(freq_minutes: int):
-    """Genera e restituisce la matrice comparativa (Heatmap) di tutti i task vs modelli."""
+    """Generates and returns the comparative matrix (Heatmap) of all tasks vs models."""
     base_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m")
     
     success = ensure_global_analytics(base_dir, freq_minutes)
     if not success:
-         raise HTTPException(status_code=404, detail="Dati insufficienti per generare la matrice globale.")
+         raise HTTPException(status_code=404, detail="Insufficient data to generate the global matrix.")
          
     file_path = os.path.join(base_dir, "global_analytics", "global_mae_matrix.png")
     return FileResponse(path=file_path, media_type="image/png", filename=f"global_matrix_{freq_minutes}m.png")
@@ -161,7 +159,7 @@ def list_analytics_plots(freq_minutes: int, task_name: str):
     task_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", task_name)
     success = ensure_analytics_plots(task_dir, task_name)
     if not success:
-        raise HTTPException(status_code=404, detail="Nessun dato JSON trovato. Addestrare prima il modello.")
+        raise HTTPException(status_code=404, detail="No JSON data found. Train the model first.")
 
     analytics_dir = os.path.join(task_dir, "analytics_plots")
     plots = [f for f in os.listdir(analytics_dir) if f.endswith(".png")]
@@ -169,7 +167,7 @@ def list_analytics_plots(freq_minutes: int, task_name: str):
     return {
         "freq_minutes": freq_minutes, "task": task_name,
         "available_plots": plots,
-        "download_url_template": f"/analytics/{freq_minutes}/{task_name}/plot/{{nome_file}}"
+        "download_url_template": f"/analytics/{freq_minutes}/{task_name}/plot/{{filename}}"
     }
 
 @app.get("/analytics/{freq_minutes}/{task_name}/plot/{filename}")
@@ -188,18 +186,16 @@ def get_analytics_plot(freq_minutes: int, task_name: str, filename: str):
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8001)
 
-
-
 @app.get("/analytics/global-grids")
 def generate_all_global_grids():
     """
-    API 100% Non-Parametrica e Autosufficiente: 
-    Scansiona tutte le frequenze elaborate e per ciascuna di esse esplora i task.
-    Sfrutta la cache: genera i plot mancanti in modo trasparente.
-    Restituisce un JSON organizzato con le URL di tutte le griglie generate.
+    100% Non-Parametric and Self-Sufficient API: 
+    Scans all processed frequencies and explores the tasks for each.
+    Leverages the cache: generates missing plots transparently.
+    Returns an organized JSON with the URLs of all generated grids.
     """
     if not os.path.exists(BASE_MODEL_DIR):
-        raise HTTPException(status_code=404, detail="Directory modelli non trovata. Avviare un training.")
+        raise HTTPException(status_code=404, detail="Models directory not found. Start a training.")
         
     freq_dirs = [d for d in os.listdir(BASE_MODEL_DIR) if d.endswith("m") and os.path.isdir(os.path.join(BASE_MODEL_DIR, d))]
     
@@ -208,7 +204,7 @@ def generate_all_global_grids():
         freq = int(d.replace("m", ""))
         base_dir = os.path.join(BASE_MODEL_DIR, d)
         
-        # Triggera l'esecuzione (Idempotente) per questa specifica frequenza
+        # Trigger execution (Idempotent) for this specific frequency
         ensure_global_analytics(base_dir, freq)
         
         global_dir = os.path.join(base_dir, "global_analytics")
@@ -223,8 +219,8 @@ def generate_all_global_grids():
 
 @app.get("/analytics/download-grid/{freq_minutes}/{filename}")
 def download_global_grid(freq_minutes: int, filename: str):
-    """Serve fisicamente l'immagine richiesta."""
+    """Physically serves the requested image."""
     file_path = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", "global_analytics", filename)
     if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Griglia non trovata. Chiama prima /analytics/global-grids")
+        raise HTTPException(status_code=404, detail="Grid not found. Call /analytics/global-grids first")
     return FileResponse(path=file_path, media_type="image/png", filename=filename)
