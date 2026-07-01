@@ -6,9 +6,10 @@ import time
 import requests
 import json
 import zipfile
+import io
 from fastapi import FastAPI, HTTPException
 import uvicorn
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 
 import shutil
 
@@ -58,6 +59,22 @@ def run_full_pipeline_for_freq(freq_minutes: int):
             
         print(f"[Pipeline] Process for {freq_minutes}m completed successfully!")
         
+        # Explicitly delete the previous global matrix (will be regenerated)
+        global_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", "global_analytics")
+        if os.path.exists(global_dir):
+            shutil.rmtree(global_dir)
+            
+        # --- NEW: Generate local PNG plots automatically after training ---
+        print(f"[Pipeline] Generating Local PNG Analytics for {freq_minutes}m...")
+        for task_name in TASKS.keys():
+            task_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", task_name)
+            generate_task_plots(task_dir, task_name)
+            
+        base_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m")
+        generate_global_plots(base_dir, freq_minutes)
+        print(f"[Pipeline] Local Analytics generated successfully.")
+        # ----------------------------------------------------------------
+
         try:
             res = requests.post(f"{INFERENCE_API_URL}/reload-models", timeout=5)
             if res.status_code == 200:
@@ -138,7 +155,7 @@ def get_global_summary(freq_minutes: int):
 
 @app.get("/analytics/{freq_minutes}/plots/global")
 def get_global_plots_zip(freq_minutes: int):
-    """Generates on-the-fly and returns a ZIP file containing all global comparison matrices."""
+    """Generates on-the-fly and returns an in-memory ZIP file containing all global comparison matrices."""
     base_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m")
     if not os.path.exists(base_dir):
         raise HTTPException(status_code=404, detail="Model directory not found.")
@@ -147,16 +164,22 @@ def get_global_plots_zip(freq_minutes: int):
     if not generated_files:
         raise HTTPException(status_code=404, detail="Insufficient data to generate global plots.")
         
-    zip_path = os.path.join(base_dir, f"global_plots_{freq_minutes}m.zip")
-    with zipfile.ZipFile(zip_path, 'w') as zipf:
+    # Create ZIP file in RAM
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
         for file in generated_files:
             zipf.write(file, os.path.basename(file))
             
-    return FileResponse(zip_path, media_type="application/zip", filename=f"global_plots_{freq_minutes}m.zip")
+    zip_buffer.seek(0)
+    return StreamingResponse(
+        zip_buffer, 
+        media_type="application/zip", 
+        headers={"Content-Disposition": f"attachment; filename=global_plots_{freq_minutes}m.zip"}
+    )
 
 @app.get("/analytics/{freq_minutes}/plots/task/{task_name}")
 def get_task_plots_zip(freq_minutes: int, task_name: str):
-    """Generates on-the-fly and returns a ZIP file containing plots for a specific task."""
+    """Generates on-the-fly and returns an in-memory ZIP file containing plots for a specific task."""
     task_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", task_name)
     if not os.path.exists(task_dir):
         raise HTTPException(status_code=404, detail="Task directory not found.")
@@ -165,12 +188,18 @@ def get_task_plots_zip(freq_minutes: int, task_name: str):
     if not generated_files:
         raise HTTPException(status_code=404, detail="No JSON data found. Train the model first.")
 
-    zip_path = os.path.join(task_dir, f"{task_name}_{freq_minutes}m_plots.zip")
-    with zipfile.ZipFile(zip_path, 'w') as zipf:
+    # Create ZIP file in RAM
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
         for file in generated_files:
             zipf.write(file, os.path.basename(file))
             
-    return FileResponse(zip_path, media_type="application/zip", filename=f"{task_name}_{freq_minutes}m_plots.zip")
+    zip_buffer.seek(0)
+    return StreamingResponse(
+        zip_buffer, 
+        media_type="application/zip", 
+        headers={"Content-Disposition": f"attachment; filename={task_name}_{freq_minutes}m_plots.zip"}
+    )
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8001)
