@@ -17,11 +17,11 @@ def gaussian_weighted_interpolation(df: pd.DataFrame, target_col: str, weight_co
         if not before.empty and not after.empty:
             gap_minutes = (after.index[0] - before.index[-1]).total_seconds() / 60.0
             if gap_minutes > MAX_INTERPOLATION_GAP_MINUTES:
-                continue # Hole too large, do not interpolate (leave NaN)
-        elif not before.empty: # Edge case (end of dataset)
+                continue 
+        elif not before.empty: 
             if (idx - before.index[-1]).total_seconds() / 60.0 > MAX_INTERPOLATION_GAP_MINUTES:
                 continue
-        elif not after.empty: # Edge case (start of dataset)
+        elif not after.empty: 
             if (after.index[0] - idx).total_seconds() / 60.0 > MAX_INTERPOLATION_GAP_MINUTES:
                 continue
         # --------------------------------------------------------
@@ -48,7 +48,6 @@ def create_lagged_features(df: pd.DataFrame, target_col: str, feature_cols: list
     if lag_target: 
         cols_to_lag.append(target_col)
     
-    # Dictionary to accumulate new shifted columns without fragmenting memory
     lagged_data = {}
     
     for col in cols_to_lag:
@@ -56,14 +55,11 @@ def create_lagged_features(df: pd.DataFrame, target_col: str, feature_cols: list
             for i in range(1, lags + 1):
                 lagged_data[f'{col}_lag_{i}'] = df[col].shift(i * virtual_ratio)
                 
-    # If columns were generated, we merge them with the original DataFrame in bulk
     if lagged_data:
         df_lagged = pd.concat([df, pd.DataFrame(lagged_data, index=df.index)], axis=1)
     else:
         df_lagged = df.copy()
         
-    # Apply dropna on the final combined DataFrame
-    df_lagged.dropna(inplace=True)
     return df_lagged
 
 def get_extended_features_list(base_features: list, use_lags: bool) -> list:
@@ -72,7 +68,6 @@ def get_extended_features_list(base_features: list, use_lags: bool) -> list:
     if use_lags:
         ext.extend([f"{col}_diff" for col in base_features])
     return ext
-
 
 def build_advanced_features(df: pd.DataFrame, base_features: list, use_lags: bool, virtual_ratio: int) -> pd.DataFrame:
     df_out : pd.DataFrame = df.copy()
@@ -96,9 +91,13 @@ def build_advanced_features(df: pd.DataFrame, base_features: list, use_lags: boo
                 
     return df_out
 
-
-
 # CLEANING FUNCTIONS
+def shift_leaf_temp_backward(df: pd.DataFrame) -> pd.DataFrame:
+    """Shifts leaf_temp backward by 1 resampled interval to align temporally delayed leaf data with environment."""
+    if 'leaf_temp' in df.columns:
+        df['leaf_temp'] = df['leaf_temp'].shift(-1)
+    return df
+
 def identify_leaf_steps(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or 'leaf_temp' not in df.columns:
         return df
@@ -139,11 +138,10 @@ def remove_tds_zero(df: pd.DataFrame) -> pd.DataFrame:
         df = gaussian_weighted_interpolation(df, 'tds')
     return df
 
-
-
 # BOARD PIPELINES
 BOARD_PIPELINES = {
-    BOARD_324: [identify_leaf_steps, apply_leaf_gaussian_interpolation, clean_anomalies],
+    # Added shift_leaf_temp_backward for Board 324 based on hardware delay behavior
+    BOARD_324: [shift_leaf_temp_backward, identify_leaf_steps, apply_leaf_gaussian_interpolation, clean_anomalies],
     BOARD_944: [remove_tds_zero, apply_leaf_gaussian_interpolation, clean_anomalies]
 }
 

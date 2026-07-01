@@ -14,10 +14,14 @@ BOARD_324 = "3750846324"
 BOARD_944 = "3750866944"
 DEFAULT_BOARD_ID = BOARD_324
 ACTIVE_BOARDS = [BOARD_324, BOARD_944]
-# ACTIVE_BOARDS = [BOARD_324]
-INDOORS = [BOARD_324]
-OUTDOORS = [BOARD_944]
 TRAIN_SPLIT_PERCENTAGE = 0.90
+
+# ENVIRONMENT METADATA (Boolean toggle for indoor/stable tracking)
+USE_INDOOR_FEATURE = True
+BOARD_ENV_MAP = {
+    BOARD_324: 0, # Unstable / Outdoor-like environment
+    BOARD_944: 1  # Stable / Indoor environment
+}
 
 # DATA FREQUENCY & TIME HORIZONS
 TARGET_FREQ_MINUTES = 6 
@@ -49,7 +53,6 @@ def get_virtual_ratio(freq_minutes: int) -> int:
 
 def get_min_history_records(freq_minutes: int) -> int:
     """Calculates the minimum required historical records based on frequency."""
-    # Set the max possible lag (15) to accommodate t10 and t11
     max_possible_lags = 15
     return (max_possible_lags * get_virtual_ratio(freq_minutes)) + 2
 

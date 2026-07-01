@@ -64,6 +64,12 @@ def fetch_clean_data(freq_minutes: int):
     if not df.empty:
         df.set_index('_time', inplace=True)
         df.sort_index(inplace=True)
+        
+        # --- NEW: Inject Environment Metadata ---
+        if USE_INDOOR_FEATURE:
+            df['is_indoor'] = df['id_board'].map(BOARD_ENV_MAP).fillna(0).astype(int)
+            print(f"[Data Fetch] Injected 'is_indoor' environmental toggle flag.")
+            
         print(f"[Data Fetch] Successfully retrieved {len(df)} records.")
     return df
 
@@ -99,7 +105,6 @@ def log_and_evaluate(y_test, y_pred, features_names, model, model_name, task_nam
         "feature_importance": importance_dict
     }
     
-    # Atomic write to prevent JSONDecodeError in the API
     temp_file = os.path.join(archive_dir, f"{model_name}_metrics.tmp")
     final_file = os.path.join(archive_dir, f"{model_name}_metrics.json")
     
@@ -120,63 +125,89 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
     
     effective_days = ENV_ARIMA_TRAIN_DAYS if freq_minutes >= 6 else 3
     tail_samples = int((effective_days * 24 * 60) / freq_minutes)
-    print(f"[Prophet Setup] Target history: {effective_days} days ({tail_samples} tail samples).")
+    print(f"[Prophet Setup] Target history per board: {effective_days} days ({tail_samples} tail samples).")
     
     for feat in features:
         try:
-            print(f"[Prophet Training] Initializing for feature: '{feat}'...")
-            if feat not in df_train.columns: 
-                print(f"[Prophet Warning] Feature '{feat}' not found in dataframe. Skipping.")
+            print(f"[Prophet Training] Constructing Panel Dataset for feature: '{feat}'...")
+            
+            # 1. Build a multi-board unified dataframe securely
+            df_prophet_full = pd.DataFrame()
+            for b_id in ACTIVE_BOARDS:
+                df_b = df_train[df_train['id_board'] == b_id]
+                if feat not in df_b.columns: continue
+                
+                cols_to_extract = [feat]
+                if USE_INDOOR_FEATURE and 'is_indoor' in df_b.columns:
+                    cols_to_extract.append('is_indoor')
+                    
+                # Take tail samples specifically PER board to maintain temporal balance
+                df_b = df_b[cols_to_extract].dropna().tail(tail_samples)
+                if len(df_b) < 100 or df_b[feat].nunique() <= 1: continue
+                
+                timestamps = df_b.index.tz_localize(None) if df_b.index.tz is not None else df_b.index
+                tmp = pd.DataFrame({
+                    'ds': pd.to_datetime(timestamps),
+                    'y': pd.to_numeric(df_b[feat].values, errors='coerce')
+                })
+                if USE_INDOOR_FEATURE and 'is_indoor' in df_b.columns:
+                    tmp['is_indoor'] = df_b['is_indoor'].values
+                
+                df_prophet_full = pd.concat([df_prophet_full, tmp], ignore_index=True)
+                
+            if df_prophet_full.empty: 
+                print(f"[Prophet Warning] Not enough data accumulated for '{feat}'. Skipping.")
                 continue
 
-            y = df_train[feat].dropna().tail(tail_samples) 
-            if len(y) < 100 or y.nunique() <= 1: 
-                print(f"[Prophet Warning] Insufficient variance or length for '{feat}'. Skipping.")
-                continue
+            df_prophet_full.dropna(inplace=True)
+            df_prophet_full.sort_values('ds', inplace=True) # Crucial for chronological split
             
-            timestamps = y.index.tz_localize(None) if y.index.tz is not None else y.index
-            df_prophet_full = pd.DataFrame({
-                'ds': pd.to_datetime(timestamps),
-                'y': pd.to_numeric(y.values, errors='coerce')
-            }).dropna()
+            # 2. Chronological Split based on Quantile
+            split_time = df_prophet_full['ds'].quantile(0.8)
+            df_train_prophet = df_prophet_full[df_prophet_full['ds'] <= split_time]
+            df_test_prophet = df_prophet_full[df_prophet_full['ds'] > split_time]
             
-            # Train / Test Split (80/20)
-            split_idx = int(len(df_prophet_full) * 0.8)
-            df_train_prophet = df_prophet_full.iloc[:split_idx]
-            df_test_prophet = df_prophet_full.iloc[split_idx:]
+            print(f"[Prophet - {feat}] Temporal 80/20 Split | Train: {len(df_train_prophet)} | Test: {len(df_test_prophet)}")
             
-            print(f"[Prophet - {feat}] Performing 80/20 Split (Train: {len(df_train_prophet)}, Test: {len(df_test_prophet)})")
-            
+            # 3. Model Definition and Fitting
             final_model = Prophet(daily_seasonality=True, yearly_seasonality=False, weekly_seasonality=False, stan_backend='CMDSTANPY')
+            if USE_INDOOR_FEATURE and 'is_indoor' in df_train_prophet.columns:
+                final_model.add_regressor('is_indoor')
+                print(f"[Prophet - {feat}] Using 'is_indoor' as an Extra Regressor.")
+            
             final_model.fit(df_train_prophet)
             
+            # 4. Evaluation 
             print(f"[Prophet - {feat}] Generating forecast for evaluation...")
-            future = final_model.make_future_dataframe(periods=len(df_test_prophet), freq=f'{freq_minutes}min')
+            future = df_test_prophet[['ds']].copy()
+            if USE_INDOOR_FEATURE and 'is_indoor' in df_test_prophet.columns:
+                future['is_indoor'] = df_test_prophet['is_indoor'].values
+                
             forecast = final_model.predict(future)
-            
-            test_forecast = forecast.iloc[split_idx:]
-            mae = mean_absolute_error(df_test_prophet['y'], test_forecast['yhat'])
-            rmse = np.sqrt(mean_squared_error(df_test_prophet['y'], test_forecast['yhat']))
+            mae = mean_absolute_error(df_test_prophet['y'], forecast['yhat'])
+            rmse = np.sqrt(mean_squared_error(df_test_prophet['y'], forecast['yhat']))
             
             print(f"[Prophet - {feat}] Evaluation Completed -> MAE: {mae:.2f}, RMSE: {rmse:.2f}")
 
-            # Generate and save plots
+            # 5. Scatter Plotting (Lines break when multiple points share a timestamp)
             plt.figure(figsize=(12, 6))
-            plt.plot(df_train_prophet['ds'], df_train_prophet['y'], label='Train Data', color='blue', alpha=0.6)
-            plt.plot(df_test_prophet['ds'], df_test_prophet['y'], label='Test Actual', color='black', alpha=0.8)
-            plt.plot(test_forecast['ds'], test_forecast['yhat'], label='Forecast', color='red')
-            plt.fill_between(test_forecast['ds'], test_forecast['yhat_lower'], test_forecast['yhat_upper'], color='red', alpha=0.2)
-            plt.title(f'Prophet Forecast vs Actuals: {feat.upper()} ({freq_minutes}m)')
+            plt.scatter(df_train_prophet['ds'], df_train_prophet['y'], label='Train Data', color='blue', alpha=0.3, s=5)
+            plt.scatter(df_test_prophet['ds'], df_test_prophet['y'], label='Test Actual', color='black', alpha=0.5, s=5)
+            plt.scatter(forecast['ds'], forecast['yhat'], label='Forecast', color='red', s=5)
+            plt.title(f'Prophet Global Forecast vs Actuals: {feat.upper()} ({freq_minutes}m)')
             plt.legend()
             plt.grid(True)
             plt.savefig(os.path.join(output_dir, f"prophet_plot_{feat}.png"))
             plt.close()
 
+            # 6. Final Production Refit
             print(f"[Prophet - {feat}] Refitting on 100% of available data for production...")
             prod_model = Prophet(daily_seasonality=True, yearly_seasonality=False, weekly_seasonality=False, stan_backend='CMDSTANPY')
+            if USE_INDOOR_FEATURE and 'is_indoor' in df_prophet_full.columns:
+                prod_model.add_regressor('is_indoor')
             prod_model.fit(df_prophet_full)
 
-            # Save artifacts
+            # 7. Save artifacts
             with open(os.path.join(output_dir, f"prophet_{feat}.json"), 'w') as fout:
                 fout.write(model_to_json(prod_model)) 
             with open(os.path.join(output_dir, f"prophet_metrics_{feat}.json"), 'w') as fout:
@@ -249,7 +280,12 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
     print(f"\n{'='*60}\n[Trainer {freq_minutes}m] STARTING PIPELINE: {task_name.upper()}\n{'='*60}")
     
     target_col = config["target"]
-    features_list = config["features"]
+    
+    # Securely copy list to prevent dictionary mutation across runs
+    features_list = config["features"].copy() 
+    if USE_INDOOR_FEATURE and 'is_indoor' not in features_list:
+        features_list.append('is_indoor')
+        
     use_lags = config.get("use_lags", False)
     lag_target = config.get("lag_target", True) 
     task_lags = config.get("lags", DEFAULT_LAGS)
@@ -277,7 +313,7 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
         initial_len = len(df_b)
         print(f"[{task_name}] Processing Board {board_id} (Initial Clean Rows: {initial_len})")
 
-        # 2. IMMEDIATE FEATURE ISOLATION (Crucial for decoupling tasks from missing irrelevant data)
+        # 2. IMMEDIATE FEATURE ISOLATION
         cols_to_keep = features_list + [target_col]
         available_cols = [c for c in cols_to_keep if c in df_b.columns]
         
@@ -285,7 +321,6 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
         if missing_cols:
             print(f"[{task_name}] Warning: Board {board_id} is missing expected columns: {missing_cols}")
         
-        # Drop everything else. df_b now strictly contains ONLY what is needed for THIS task.
         df_b = df_b[available_cols].copy()
         print(f"[{task_name}] Board {board_id}: Isolated {len(available_cols)} relevant columns. Dropped all unnecessary features.")
 
@@ -304,7 +339,7 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
         else:
             model_features = [col for col in extended_features_list if col in df_b.columns] 
 
-        # NaN Filtration (Will only drop rows if they are missing the explicitly requested features)
+        # NaN Filtration 
         pre_drop_len = len(df_b)
         df_b.dropna(subset=model_features + [target_col], inplace=True)
         dropped_rows = pre_drop_len - len(df_b)
@@ -314,7 +349,6 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
             print(f"[{task_name}] Board {board_id} dataset became empty after dropping NaNs. Skipping.")
             continue
 
-        # Re-attach board ID for secure sorting
         df_b['id_board'] = board_id
 
         # Split
@@ -328,7 +362,7 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
         print(f"[{task_name}] Error: Empty datasets after processing all boards. Skipping task.")
         return
 
-    # SAFE SORTING (Ensuring models do not learn jumps across different boards)
+    # SAFE SORTING
     df_train_final = pd.concat(df_train_final_list).sort_values(by=['id_board', '_time'])
     df_test_final = pd.concat(df_test_final_list).sort_values(by=['id_board', '_time'])
 
@@ -393,7 +427,6 @@ def main():
     for freq in DEFAULT_FREQS:
         print(f"\n=== BEGIN TRAINING FOR FREQUENCY {freq} MINUTES ===")
         
-        # 1. Fetch Clean Data
         df_clean = fetch_clean_data(freq)
         
         if df_clean.empty:

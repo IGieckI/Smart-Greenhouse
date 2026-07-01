@@ -9,49 +9,66 @@ from shared_core.preprocessing import build_advanced_features, get_extended_feat
 
 def recursive_multistep_inference(
     T_current_data: pd.DataFrame, 
-    env_models: dict, 
+    prophet_models: dict, 
     ml_model_pipeline, 
     task_config: dict, 
     freq_minutes: int
 ) -> list:
     
-    features = task_config["features"]
-    use_lags = task_config["use_lags"]
-    lag_target = task_config["lag_target"]
+    # --- FIX: INJECT is_indoor DYNAMICALLY ---
+    features = task_config["features"].copy()
+    if USE_INDOOR_FEATURE and 'is_indoor' not in features:
+        features.append('is_indoor')
+    # -----------------------------------------
+        
+    use_lags = task_config.get("use_lags", False)
+    lag_target = task_config.get("lag_target", True)
+    task_lags = task_config.get("lags", DEFAULT_LAGS)
     
     virtual_ratio = get_virtual_ratio(freq_minutes)
-    horizon_minutes = task_config.get("horizon_minutes", 0)
-    steps = max(1, horizon_minutes // freq_minutes) if horizon_minutes > 0 else 1
     
+    # 4. FIXED 3-HOUR FORECAST: If task uses lags, explicitly project 3 hours forward
+    if use_lags:
+        steps = int(180 / freq_minutes)
+    else:
+        steps = 1 # Point estimation (T1, T4)
+        
     last_time = T_current_data.index[-1]
     
-    # Generiamo le date future
+    # Generate future dates
     future_dates = [last_time + pd.Timedelta(minutes=freq_minutes * (i + 1)) for i in range(steps)]
     
-    # Prophet NON sopporta le date con fuso orario (tz-aware). Rimuoviamo il fuso per il calcolo.
+    # Prophet requires naive timestamps
     future_dates_naive = [t.tz_localize(None) if t.tz is not None else t for t in future_dates]
     df_prophet_future = pd.DataFrame({'ds': future_dates_naive})
     
-    # Generiamo i forecast ambientali usando Prophet
+    # Inject 'is_indoor' into Prophet future dataframe if required
+    if USE_INDOOR_FEATURE and 'is_indoor' in T_current_data.columns:
+        board_indoor_val = T_current_data['is_indoor'].iloc[-1]
+        df_prophet_future['is_indoor'] = board_indoor_val
+    
+    # Generate Environmental Forecasts using Prophet
     env_forecasts = {}
     for feat in features:
-        forecast = env_models[feat].predict(df_prophet_future)
-        env_forecasts[feat] = forecast['yhat'].values
-    
+        if feat in prophet_models:
+            forecast = prophet_models[feat].predict(df_prophet_future)
+            env_forecasts[feat] = forecast['yhat'].values
+        elif feat == 'is_indoor':
+            env_forecasts[feat] = [board_indoor_val] * steps
+            
     df_future_env = pd.DataFrame(env_forecasts)
     df_future_env.index = future_dates
     
     target_predictions = []
     
-    # 1. Filtriamo i dati isolando solo quelli pertinenti al task
+    # Isolate relevant history
     cols_to_keep = features + ['leaf_temp']
+    if 'is_indoor' in T_current_data.columns and 'is_indoor' not in cols_to_keep:
+        cols_to_keep.append('is_indoor')
+        
     history = T_current_data[cols_to_keep].copy()
 
-    # ==========================================
-    # FIX: RICAVIAMO LA FIRMA ESATTA DEL MODELLO
-    # Estraiamo l'ordine millimetrico delle colonne salvato 
-    # nel modello durante l'addestramento.
-    # ==========================================
+    # Extract exact feature signature expected by the ML model
     expected_features = list(ml_model_pipeline.feature_names_in_)
 
     for step_i in range(steps):
@@ -66,17 +83,16 @@ def recursive_multistep_inference(
             history_advanced = build_advanced_features(history_temp, features, use_lags, virtual_ratio)
             
             if not use_lags:
-                # Applichiamo il filtro 'expected_features' per garantire il match perfetto
                 X_infer = history_advanced[expected_features].iloc[-1:]
             else:
                 extended_features = get_extended_features_list(features, use_lags)
-                history_lagged = create_lagged_features(history_advanced, 'leaf_temp', extended_features, virtual_ratio, lags=DEFAULT_LAGS, lag_target=lag_target)
+                history_lagged = create_lagged_features(history_advanced, 'leaf_temp', extended_features, virtual_ratio, lags=task_lags, lag_target=lag_target)
                 
-                # Applichiamo il filtro 'expected_features' anche ai lag
+                # Apply expected_features filter to lags
                 X_infer = history_lagged[expected_features].iloc[-1:]
                 
                 if X_infer.empty:
-                    raise ValueError(f"Impossibile estrarre i lag al passo {step_i}. Il dataset si è svuotato.")
+                    raise ValueError(f"Unable to extract lags at step {step_i}. The dataset became empty.")
                     
             pred_leaf = ml_model_pipeline.predict(X_infer)[0]
 
@@ -88,7 +104,7 @@ def recursive_multistep_inference(
             })
             
         history = pd.concat([history, current_env_row])
-        max_history_needed = (DEFAULT_LAGS + 2) * virtual_ratio
+        max_history_needed = (task_lags + 2) * virtual_ratio
         history = history.tail(max_history_needed)
 
     return [p["value"] for p in target_predictions]
@@ -96,17 +112,16 @@ def recursive_multistep_inference(
 
 def ensemble_multistep_inference(
     T_current_data: pd.DataFrame,
-    arima_models: dict,
+    prophet_models: dict,
     ml_models: dict, 
     task_configs: dict, 
     freq_minutes: int,
-    # REMOVED soft_mae. We need the MAEs for env and auto to weight them fairly.
     mae_env: float = 0.5, 
     mae_auto: float = 0.5 
 ) -> dict:
     
     # 1. Inverse MAE Weighting Calibration
-    # The lower the MAE, the higher the weight.
+    # The lower the MAE, the higher the weight in the ensemble.
     inv_mae_env = 1.0 / (mae_env + 1e-6)
     inv_mae_auto = 1.0 / (mae_auto + 1e-6)
     total_inv = inv_mae_env + inv_mae_auto
@@ -120,9 +135,16 @@ def ensemble_multistep_inference(
     soft_cfg = task_configs["soft"]
     virtual_ratio = get_virtual_ratio(freq_minutes)
     
-    history_adv = build_advanced_features(df_patched, soft_cfg["features"], soft_cfg["use_lags"], virtual_ratio)
-    ext_feat_soft = get_extended_features_list(soft_cfg["features"], soft_cfg["use_lags"])
+    # --- FIX: INJECT is_indoor DYNAMICALLY ---
+    soft_features = soft_cfg["features"].copy()
+    if USE_INDOOR_FEATURE and 'is_indoor' not in soft_features:
+        soft_features.append('is_indoor')
+    # -----------------------------------------
     
+    history_adv = build_advanced_features(df_patched, soft_features, soft_cfg.get("use_lags", False), virtual_ratio)
+    ext_feat_soft = get_extended_features_list(soft_features, soft_cfg.get("use_lags", False))
+    
+    # Drop rows that don't have enough features to run the soft sensor
     X_soft = history_adv[ext_feat_soft].dropna()
     
     generated_history = []
@@ -132,8 +154,8 @@ def ensemble_multistep_inference(
         
         generated_leaf = ml_models["soft"].predict(X_soft)
         
-        # 3. FIX CHEATING: Explicitly overwrite the historical leaf_temp 
-        # with the soft sensor's estimation, so T3 doesn't see real data.
+        # 3. OVERWRITE CHEATING: Explicitly overwrite the historical leaf_temp 
+        # with the soft sensor's estimation, so T3/T6 doesn't see real sparse data.
         df_patched.loc[X_soft.index, 'leaf_temp'] = generated_leaf
         
         generated_history = [
@@ -144,13 +166,13 @@ def ensemble_multistep_inference(
     # Clean up any remaining NaNs (for rows before the soft sensor window)
     df_patched['leaf_temp'] = df_patched['leaf_temp'].ffill().bfill()
 
-    # 4. Generate Predictions
+    # 4. Generate Predictions (Auto uses the patched history, Env uses standard)
     preds_auto = recursive_multistep_inference(
-        df_patched, arima_models, ml_models["auto"], task_configs["auto"], freq_minutes
+        df_patched, prophet_models, ml_models["auto"], task_configs["auto"], freq_minutes
     )
 
     preds_env = recursive_multistep_inference(
-        T_current_data, arima_models, ml_models["env"], task_configs["env"], freq_minutes
+        T_current_data, prophet_models, ml_models["env"], task_configs["env"], freq_minutes
     )
 
     blended = [round(float(w_auto * p_a + w_env * p_e), 3) for p_a, p_e in zip(preds_auto, preds_env)]
