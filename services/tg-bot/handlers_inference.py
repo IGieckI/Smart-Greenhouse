@@ -37,6 +37,8 @@ async def handle_history_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
         finally:
             context.user_data['is_processing'] = False 
 
+
+
 async def handle_predict_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -74,6 +76,8 @@ async def handle_predict_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
             await _process_prediction(update, mode, param, BOARD_MAP[board_key], wait_msg)
         finally:
             context.user_data['is_processing'] = False
+
+
 
 async def _process_prediction(update: Update, mode: str, task_or_group: str, board_id: str, wait_message, freq_min: int = 6):
     endpoint = f"{INFERENCE_URL}/predict/{freq_min}m/{mode}/{task_or_group}/latest?board_id={board_id}"
@@ -127,7 +131,9 @@ async def _process_prediction(update: Update, mode: str, task_or_group: str, boa
     await update.get_bot().send_message(chat_id=wait_message.chat_id, text=summary, parse_mode='Markdown')
     await wait_message.delete()
 
-# --- WHAT-IF LOGIC ---
+
+
+
 async def start_whatif(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -138,6 +144,9 @@ async def start_whatif(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
     await query.edit_message_text("🧪 **What-If Simulation**\nSelect the engine type:", reply_markup=keyboard, parse_mode='Markdown')
     return AWAIT_WHATIF_MODE
+
+
+
 
 async def choose_whatif_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -167,6 +176,8 @@ async def choose_whatif_task(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.edit_message_text("Which configuration should we test?", reply_markup=keyboard)
     return AWAIT_WHATIF_TASK
 
+
+
 async def choose_whatif_board(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -178,6 +189,8 @@ async def choose_whatif_board(update: Update, context: ContextTypes.DEFAULT_TYPE
     buttons = [[(f"🌿 Board {k}", f"whatif_board_{k}")] for k in BOARD_MAP.keys()]
     await query.edit_message_text("Select the greenhouse to apply the context to:", reply_markup=build_keyboard(buttons, "whatif_cancel"))
     return AWAIT_WHATIF_BOARD
+
+
 
 async def whatif_ask_values(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -198,6 +211,8 @@ async def whatif_ask_values(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await query.edit_message_text(text, parse_mode='Markdown')
     return AWAIT_WHATIF_VALUES
+
+
 
 async def process_whatif_values(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -259,6 +274,8 @@ async def process_whatif_values(update: Update, context: ContextTypes.DEFAULT_TY
     await update.get_bot().send_message(chat_id=wait_msg.chat_id, text=caption, parse_mode='Markdown')
     await wait_msg.delete()
     return ConversationHandler.END
+
+
 
 async def cancel_whatif(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Simulation cancelled. Send /menu to restart.")

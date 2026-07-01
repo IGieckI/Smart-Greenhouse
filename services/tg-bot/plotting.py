@@ -1,7 +1,7 @@
 import io
 import pandas as pd
 import matplotlib
-matplotlib.use('Agg')  # CRITICAL FIX
+matplotlib.use('Agg')  
 import matplotlib.pyplot as plt
 from config import TZ_ROME
 
@@ -13,16 +13,23 @@ def _finalize_and_save_plot(title: str, xlabel: str = 'Time (Local)', ylabel: st
     plt.legend()
     plt.xticks(rotation=45)
     plt.tight_layout()
+
     buf = io.BytesIO()
+    
     plt.savefig(buf, format='png', dpi=100)
     buf.seek(0)
     plt.close()
+    
     return buf
+
+
+
+
 
 def create_series_plot(df_hist: pd.DataFrame, series_dict: dict, title: str, hide_real_history: bool = False) -> io.BytesIO:
     plt.figure(figsize=(10, 5))
     last_time = pd.Timestamp.now(tz=TZ_ROME)
-    last_val = None # FIX: Track safely to avoid UnboundLocalError
+    last_val = None 
     
     if not df_hist.empty and 'leaf_temp' in df_hist.columns:
         df_plot = df_hist.dropna(subset=['leaf_temp'])
@@ -48,7 +55,7 @@ def create_series_plot(df_hist: pd.DataFrame, series_dict: dict, title: str, hid
         times = [pd.to_datetime(d['timestamp']).astimezone(TZ_ROME) for d in data]
         vals = [d['value'] for d in data]
         
-        # FIX: Only connect if last_val is successfully extracted
+        
         if "History" not in label and "Forecast" not in label and last_val is not None:
             times = [last_time] + times
             vals = [last_val] + vals
@@ -59,10 +66,12 @@ def create_series_plot(df_hist: pd.DataFrame, series_dict: dict, title: str, hid
     plt.axvline(x=last_time, color='red', linestyle=':', alpha=0.6, label='Now')
     return _finalize_and_save_plot(title)
 
+
+
 def create_vpd_plot(df_hist: pd.DataFrame, future_vpd: list = None) -> io.BytesIO:
     plt.figure(figsize=(10, 5))
     last_time = pd.Timestamp.now(tz=TZ_ROME)
-    last_val = None # Track safely
+    last_val = None
     has_data = False
     
     if not df_hist.empty and 'vpd' in df_hist.columns:
@@ -90,6 +99,7 @@ def create_vpd_plot(df_hist: pd.DataFrame, future_vpd: list = None) -> io.BytesI
     plt.axvline(x=last_time, color='red', linestyle=':', alpha=0.6, label='Now')
     return _finalize_and_save_plot("Vapor Pressure Deficit (VPD)", ylabel="VPD (kPa)")
 
+
 def create_semantic_category_plots(df_hist: pd.DataFrame) -> list[io.BytesIO]:
     plots = []
     categories = {
@@ -102,12 +112,16 @@ def create_semantic_category_plots(df_hist: pd.DataFrame) -> list[io.BytesIO]:
     
     for title, (columns, colors) in categories.items():
         available_cols = [c for c in columns if c in df_hist.columns]
-        if not available_cols: continue
+        
+        if not available_cols: 
+            continue
+        
         plt.figure(figsize=(10, 4))
         for idx, col in enumerate(available_cols):
             df_plot = df_hist.dropna(subset=[col])
             if not df_plot.empty:
                 plt.plot(df_plot.index, df_plot[col], label=col, color=colors[idx % len(colors)], linewidth=2)
+        
         plots.append(_finalize_and_save_plot(title))
         
     plots.append(create_vpd_plot(df_hist))

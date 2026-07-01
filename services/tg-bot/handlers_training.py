@@ -23,6 +23,8 @@ async def show_training_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     else:
         await update.message.reply_text(text, reply_markup=keyboard, parse_mode='Markdown')
 
+
+
 async def handle_training_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -95,8 +97,13 @@ async def handle_training_menu(update: Update, context: ContextTypes.DEFAULT_TYP
         finally:
             context.user_data['is_processing'] = False
 
+
+
 async def _unzip_and_send(update: Update, wait_msg, zip_bytes: bytes, title: str):
-    """Unzips a byte payload in RAM and sends the images as an album to Telegram."""
+    """
+        Unzips a byte payload in RAM and sends the images as an album to Telegram.
+    """
+    
     try:
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
             media_group = []
@@ -109,11 +116,9 @@ async def _unzip_and_send(update: Update, wait_msg, zip_bytes: bytes, title: str
                 await wait_msg.edit_text("⚠️ The ZIP archive is empty or contains no PNGs.")
                 return
             
-            # Telegram accepts max 10 photos per MediaGroup. We chunk them securely.
             chunks = [media_group[i:i + 10] for i in range(0, len(media_group), 10)]
             for idx, chunk in enumerate(chunks):
                 if idx == 0:
-                    # FIX: Immutable class workaround. Recreate the object with the caption.
                     chunk[0] = InputMediaPhoto(
                         media=chunk[0].media,
                         caption=f"📊 **{title}**",

@@ -80,12 +80,12 @@ def main():
     if not TOKEN: return logger.error("TELEGRAM_BOT_TOKEN missing in .env file!")
     application = Application.builder().token(TOKEN).post_init(setup_commands).build()
     
-    # Core general commands
+    
     application.add_handler(CommandHandler(["start", "menu"], show_main_menu))
     application.add_handler(CommandHandler("info", handle_info_command))
     application.add_handler(CommandHandler("reload", handle_reload_command))
     
-    # What-If Conversation
+    
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_whatif, pattern='^menu_whatif$')],
         states={
@@ -98,18 +98,14 @@ def main():
     )
     application.add_handler(conv_handler)
     
-    # Inference routing
+    
     application.add_handler(CallbackQueryHandler(handle_main_menu, pattern="^menu_(predict|history|main)$"))
     application.add_handler(CallbackQueryHandler(handle_history_menu, pattern="^hist_"))
     application.add_handler(CallbackQueryHandler(handle_predict_menu, pattern="^pred_"))
-    
-    # NEW: Training routing
     application.add_handler(CallbackQueryHandler(handle_training_menu, pattern="^train_"))
-    
-    # NEW: Actuator routing
-    application.add_handler(CallbackQueryHandler(handle_actuator_routing, pattern="^act_")) # NUOVA ROTTA!
+    application.add_handler(CallbackQueryHandler(handle_actuator_routing, pattern="^act_")) 
 
-    logger.info("AgriBot initialized and listening...")
+    logger.info("GJGreenhousBot initialized and listening...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
