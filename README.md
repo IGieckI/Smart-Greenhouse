@@ -11,7 +11,7 @@ A distributed IoT system for monitoring greenhouse environments. Sensor nodes tr
                                        │                                                    CoAP  │
                                        └──CoAP Observe ──────────────────────────────────────────►│
                                        │
-                                       └──HTTP /dump ─────────────────────────────────►[operatorTools]
+                                       └──CoAP /dump ─────────────────────────────────►[operatorTools]
 
 ── Actuation (downlink) ──────────────────────────────────────────────────────────────────────────
 [services] ──MQTT──► [loraWANGateway] ──LoRa──► [greenhouseStar] ──ESP-NOW──► [Greenhouse Nodes]
@@ -104,7 +104,7 @@ The central ESP32 hub. Receives packets from all Nodes via ESP-NOW, then:
 - Transmits via **LoRa** (primary uplink, includes its own `star_id` in every payload)
 - Listens for **LoRa downlink commands** from the Gateway and forwards them to the target Node via ESP-NOW
 - Serves a **CoAP observable** endpoint for nearby operators
-- Maintains an in-RAM **ring buffer** accessible via HTTP
+- Maintains an in-RAM **ring buffer** downloadable over CoAP
 - Displays live data on the **OLED** (Heltec boards only)
 
 > **`star_id`** is derived from the last 4 bytes of the Star's Wi-Fi STA MAC address (same formula as `node_id` on Nodes). It is printed at boot: `Star ID: XXXXXXXX`. The backend uses this to route commands to the correct Star.
@@ -138,11 +138,15 @@ The operator laptop and the `cw-client` Docker container both use this AP.
 
 ### Endpoints
 
+All operator/backend access is over **CoAP** (UDP 5683); the Star runs no HTTP server.
+
 | Endpoint | Protocol | Description |
 |----------|----------|-------------|
-| `192.168.4.1/dump` | HTTP GET | Download ring buffer as JSON array |
-| `192.168.4.1/set_time` | HTTP POST | Sync RTC (sends Unix timestamp in body) |
-| `coap://192.168.4.1/telemetry` | CoAP Observe | Stream binary `TelemetryPacket` to subscribers |
+| `coap://192.168.4.1/telemetry` | CoAP Observe (GET) | Stream binary `TelemetryPacket` to subscribers |
+| `coap://192.168.4.1/dump` | CoAP GET | Download ring buffer as packed binary `TelemetryPacket` records (block-wise) |
+| `coap://192.168.4.1/info` | CoAP GET | Returns `{"star_id":…}` as JSON |
+| `coap://192.168.4.1/set_time` | CoAP POST | Sync RTC (Unix timestamp as ASCII in payload) |
+| `coap://192.168.4.1/command` | CoAP POST | Queue an actuation command (JSON) for a Node |
 
 ### Build & Flash
 
@@ -277,7 +281,7 @@ TELEGRAM_TOKEN=your_telegram_bot_token_here
 
 1. Connect your laptop to `GREENHOUSE_STAR` (password: `operator123`)
 2. The `cw-client` container will automatically reach `coap://192.168.4.1/telemetry`
-3. At startup, `cw-client` queries `http://192.168.4.1/info` to auto-discover the Star's `star_id` — no manual configuration needed
+3. At startup, `cw-client` queries `coap://192.168.4.1/info` to auto-discover the Star's `star_id` — no manual configuration needed
 
 > When connected to the Star's AP, your machine loses internet access. The LoRa path (via a gateway on your home LAN) is the better option for permanent deployments.
 
@@ -379,7 +383,7 @@ A GUI dashboard for direct interaction with the Star node while on-site (connect
 ### Requirements
 
 ```bash
-pip install requests
+pip install -r requirements.txt
 # tkinter is included in standard Python on most systems
 # If missing on Linux: sudo apt install python3-tk
 ```
@@ -391,14 +395,14 @@ cd operatorTools
 python StarInterface.py
 ```
 
-The tool auto-detects when the Star is reachable (checks port 80 every 3 seconds) and enables buttons accordingly.
+The tool auto-detects when the Star is reachable (probes `coap://192.168.4.1/info` every 3 seconds) and enables buttons accordingly.
 
 ### Features
 
 | Button | Action |
 |--------|--------|
-| Sync & Download Data | Pulls all records from the Star's RAM ring buffer |
-| Sync Device Time | Pushes current system time to the Star's RTC |
+| Sync & Download Data | Pulls all records from the Star's RAM ring buffer over CoAP (`/dump`, block-wise binary) |
+| Sync Device Time | Pushes current system time to the Star's RTC (`/set_time`) |
 | Export to CSV | Saves the downloaded table to a CSV file |
 
 ---

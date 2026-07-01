@@ -20,7 +20,6 @@
 #include "esp_mac.h"
 #include "nvs_flash.h"
 #include "esp_heap_caps.h"
-#include "esp_http_server.h"
 #include "coap3/coap.h"
 #include "cJSON.h"
 #include <RadioLib.h>
@@ -45,27 +44,37 @@ typedef struct {
     uint8_t sender_mac[6];
 } received_espnow_t;
 
-// Global Handles
+
 RingbufHandle_t telemetry_ringbuf = NULL;
-QueueHandle_t   telemetry_queue;   // carries received_espnow_t
-QueueHandle_t   display_mailbox;   // carries telemetry_packet_t
+
+// carries received_espnow_t
+QueueHandle_t   telemetry_queue;
+
+// carries telemetry_packet_t
+QueueHandle_t   display_mailbox;
 
 // CoAP
 telemetry_packet_t last_received_data;
 coap_resource_t *telemetry_resource = NULL;
+
+// Raised by reception_task when new telemetry is ready. The observe
+// notification itself is issued by coap_server_task, because this libcoap build
+// is not thread-safe (COAP_THREAD_SAFE=0): the CoAP context must only be
+// touched from the task that runs coap_io_process.
+static volatile bool telemetry_dirty = false;
 
 // RadioLib
 EspHal*  hal   = nullptr;
 Module*  mod   = nullptr;
 SX1262*  radio = nullptr;
 
-// Star identity (derived from own MAC, same formula as node_id on Nodes)
+// Star identity (derived from MAC)
 static uint32_t star_id = 0;
 
 // Mutex protecting SPI access to the LoRa radio (shared between lora_rx_task and reception_task)
 static SemaphoreHandle_t lora_mutex = NULL;
 
-// Set by DIO1 interrupt when a LoRa packet arrives; cleared after readData()
+// Set by DIO1 interrupt when a LoRa packet arrives and cleared after readData()
 static volatile bool lora_rx_flag = false;
 void IRAM_ATTR setLoraRxFlag() { lora_rx_flag = true; }
 
@@ -80,132 +89,146 @@ static std::map<uint32_t, std::array<uint8_t, 6>> node_macs;
 u8g2_t u8g2;
 #endif
 
-// LoRa Initialization
+/**
+ * LoRa Initialization (based on EspHal and RadioLib)
+ * Note: Radio init values are taken from Semtech's SX1262 datasheet
+ */
 void lora_init() {
     ESP_LOGI(TAG, "Initializing SPI for LoRa...");
-
-    // spi_bus_config_t buscfg = {};
-    // buscfg.mosi_io_num   = LORA_MOSI;
-    // buscfg.miso_io_num   = LORA_MISO;
-    // buscfg.sclk_io_num   = LORA_SCK;
-    // buscfg.quadwp_io_num = -1;
-    // buscfg.quadhd_io_num = -1;
-    // buscfg.max_transfer_sz = 0;
-
-    // // ESP_ERROR_CHECK(spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO));
-    // esp_err_t ret = spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO);
-    // if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
-    //     ESP_LOGE(TAG, "SPI init failed: %s", esp_err_to_name(ret));
-    //     return;
-    // }
-
-    // // gpio_set_pull_mode((gpio_num_t)LORA_BUSY, GPIO_PULLDOWN_ONLY);
 
     hal   = new EspHal(LORA_SCK, LORA_MISO, LORA_MOSI, SPI3_HOST, SPI_MASTER_FREQ_8M);
     mod   = new Module(hal, LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);
     radio = new SX1262(mod);
 
     ESP_LOGI(TAG, "Sensing presence of a LoRA module...");
+
     int state = radio->begin(868.0, 125.0, 9, 7, 0x12, 10, 8, 1.6, false);
+
     if (state == RADIOLIB_ERR_NONE) {
         ESP_LOGI(TAG, "LoRa initialized successfully!");
-        // Ripristina il pull a stato neutrale se il modulo esiste davvero
         gpio_set_pull_mode((gpio_num_t)LORA_BUSY, GPIO_FLOATING); 
     } else {
         ESP_LOGE(TAG, "LoRa module not present or broken, radio obj disabled. Error code: %d", state);
         delete radio; radio = nullptr;
         delete mod;   mod = nullptr;
         delete hal;   hal = nullptr;
-        
-        
     }
-
 }
 
-// HTTP Server Handlers
-
-esp_err_t download_data_handler(httpd_req_t *req) {
-    ESP_LOGI(TAG, "Operator requested data dump via Wi-Fi...");
-
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr_chunk(req, "[");
-
-    size_t item_size;
-    bool first = true;
-    int items_dumped = 0;
-    char json_buf[256];
-
-    while (true) {
-        telemetry_packet_t *item = (telemetry_packet_t *)xRingbufferReceive(telemetry_ringbuf, &item_size, 0);
-        if (item == NULL) break;
-
-        if (!first) httpd_resp_sendstr_chunk(req, ",");
-        first = false;
-
-        snprintf(json_buf, sizeof(json_buf),
-                 "{\"timestamp\":%lu,\"node_id\":%lu,\"pressure\":%.2f,\"water_temp\":%.2f,"
-                 "\"light_lux\":%.2f,\"tds_value\":%.2f,\"soil_moisture\":%.2f,"
-                 "\"air_temp\":%.2f,\"humidity\":%.2f,\"leaf_temp\":%.2f}",
-                 (unsigned long)item->timestamp, (unsigned long)item->node_id,
-                 item->pressure, item->water_temp, item->light_lux,
-                 item->tds_value, item->soil_moisture, item->air_temp,
-                 item->humidity, item->leaf_temp);
-
-        httpd_resp_sendstr_chunk(req, json_buf);
-        vRingbufferReturnItem(telemetry_ringbuf, (void *)item);
-        items_dumped++;
-    }
-
-    httpd_resp_sendstr_chunk(req, "]");
-    httpd_resp_sendstr_chunk(req, NULL);
-
-    ESP_LOGI(TAG, "Transmitted %d records to operator.", items_dumped);
-    return ESP_OK;
-}
-
-esp_err_t set_time_handler(httpd_req_t *req) {
+/**
+ * CoAP GET handler for /info, returns the star_id as JSON.
+ */
+static void hnd_get_info(coap_resource_t *resource, coap_session_t *session,
+                         const coap_pdu_t *request, const coap_string_t *query,
+                         coap_pdu_t *response) {
     char buf[32];
-    int ret, remaining = req->content_len;
+    int n = snprintf(buf, sizeof(buf), "{\"star_id\":%lu}", (unsigned long)star_id);
+    coap_pdu_set_code(response, COAP_RESPONSE_CODE_CONTENT);
+    coap_add_data_blocked_response(request, response,
+                                   COAP_MEDIATYPE_APPLICATION_JSON, 0,
+                                   (size_t)n, (const uint8_t *)buf);
+}
 
-    if (remaining >= (int)sizeof(buf)) {
-        httpd_resp_send_500(req);
-        return ESP_FAIL;
+/**
+ * Frees the heap snapshot handed to coap_add_data_large_response once libcoap
+ * has finished transmitting every block of a /dump transfer.
+ */
+static void free_dump_buf(coap_session_t *session, void *app_ptr) {
+    (void)session;
+    free(app_ptr);
+}
+
+/**
+ * CoAP GET handler for /dump. Drains the telemetry ring buffer once into a heap
+ * snapshot of packed telemetry_packet_t records and hands it to libcoap, which
+ * serves it (block-wise via RFC 7959 if it exceeds one block) without
+ * re-invoking this handler — so the destructive drain happens exactly once per
+ * transfer. The payload is raw little-endian telemetry_packet_t records, the
+ * same layout already streamed over /telemetry.
+ */
+static void hnd_get_dump(coap_resource_t *resource, coap_session_t *session,
+                         const coap_pdu_t *request, const coap_string_t *query,
+                         coap_pdu_t *response) {
+    ESP_LOGI(TAG, "Operator requested data dump via CoAP...");
+
+    uint8_t *buf = (uint8_t *)malloc(INTERNAL_BUFFER_SIZE);
+    size_t used = 0;
+    if (buf != NULL) {
+        size_t item_size;
+        while (used + sizeof(telemetry_packet_t) <= INTERNAL_BUFFER_SIZE) {
+            telemetry_packet_t *item =
+                (telemetry_packet_t *)xRingbufferReceive(telemetry_ringbuf, &item_size, 0);
+            if (item == NULL) break;
+            if (item_size == sizeof(telemetry_packet_t)) {
+                memcpy(buf + used, item, sizeof(telemetry_packet_t));
+                used += sizeof(telemetry_packet_t);
+            }
+            vRingbufferReturnItem(telemetry_ringbuf, item);
+        }
     }
 
-    ret = httpd_req_recv(req, buf, remaining);
-    if (ret <= 0) return ESP_FAIL;
-    buf[ret] = '\0';
-
-    long int epoch = atol(buf);
-    if (epoch > 0) {
-        struct timeval tv = { .tv_sec = epoch, .tv_usec = 0 };
-        settimeofday(&tv, NULL);
-        ESP_LOGI(TAG, "System time synced to epoch: %ld", epoch);
-        httpd_resp_sendstr(req, "Time synced");
+    coap_pdu_set_code(response, COAP_RESPONSE_CODE_CONTENT);
+    if (used == 0) {
+        free(buf);
     } else {
-        httpd_resp_send_500(req);
+        coap_add_data_large_response(resource, session, request, response, query,
+                                     COAP_MEDIATYPE_APPLICATION_OCTET_STREAM,
+                                     -1, 0, used, buf, free_dump_buf, buf);
     }
-    return ESP_OK;
+
+    ESP_LOGI(TAG, "Dumped %u records (%u bytes) to operator.",
+             (unsigned)(used / sizeof(telemetry_packet_t)), (unsigned)used);
 }
 
-esp_err_t info_handler(httpd_req_t *req) {
+/**
+ * CoAP POST handler for /set_time, sets the system clock from an epoch timestamp
+ * supplied as an ASCII string in the request payload.
+ */
+static void hnd_post_settime(coap_resource_t *resource, coap_session_t *session,
+                             const coap_pdu_t *request, const coap_string_t *query,
+                             coap_pdu_t *response) {
+    size_t size;
+    const uint8_t *data;
     char buf[32];
-    snprintf(buf, sizeof(buf), "{\"star_id\":%lu}", (unsigned long)star_id);
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, buf);
-    return ESP_OK;
+
+    if (coap_get_data(request, &size, &data) && size > 0 && size < sizeof(buf)) {
+        memcpy(buf, data, size);
+        buf[size] = '\0';
+        long int epoch = atol(buf);
+        if (epoch > 0) {
+            struct timeval tv = { .tv_sec = epoch, .tv_usec = 0 };
+            settimeofday(&tv, NULL);
+            ESP_LOGI(TAG, "System time synced to epoch: %ld", epoch);
+            coap_pdu_set_code(response, COAP_RESPONSE_CODE_CHANGED);
+            return;
+        }
+    }
+    coap_pdu_set_code(response, COAP_RESPONSE_CODE_BAD_REQUEST);
 }
 
-esp_err_t command_handler(httpd_req_t *req) {
+/**
+ * CoAP POST handler for /command, queues an actuation command for a node. The
+ * payload is the same JSON accepted by the former HTTP endpoint.
+ */
+static void hnd_post_command(coap_resource_t *resource, coap_session_t *session,
+                             const coap_pdu_t *request, const coap_string_t *query,
+                             coap_pdu_t *response) {
+    size_t size;
+    const uint8_t *data;
     char buf[128];
-    int ret, remaining = req->content_len;
-    if (remaining >= (int)sizeof(buf)) { httpd_resp_send_500(req); return ESP_FAIL; }
-    ret = httpd_req_recv(req, buf, remaining);
-    if (ret <= 0) return ESP_FAIL;
-    buf[ret] = '\0';
+
+    if (!coap_get_data(request, &size, &data) || size == 0 || size >= sizeof(buf)) {
+        coap_pdu_set_code(response, COAP_RESPONSE_CODE_BAD_REQUEST);
+        return;
+    }
+    memcpy(buf, data, size);
+    buf[size] = '\0';
 
     cJSON *json = cJSON_Parse(buf);
-    if (!json) { httpd_resp_send_500(req); return ESP_FAIL; }
+    if (!json) {
+        coap_pdu_set_code(response, COAP_RESPONSE_CODE_BAD_REQUEST);
+        return;
+    }
 
     cJSON *nid = cJSON_GetObjectItem(json, "nid");
     cJSON *act = cJSON_GetObjectItem(json, "act");
@@ -223,40 +246,23 @@ esp_err_t command_handler(httpd_req_t *req) {
         pending_cmds[cp.node_id] = cp;
         xSemaphoreGive(pending_cmds_mutex);
 
-        ESP_LOGI(TAG, "HTTP command queued for node %lu: %s val=%d dur=%ds",
+        ESP_LOGI(TAG, "CoAP command queued for node %lu: %s val=%d dur=%ds",
                  (unsigned long)cp.node_id, cp.actuator, cp.value, cp.duration_s);
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_sendstr(req, "{\"status\":\"queued\"}");
-    } else {
         cJSON_Delete(json);
-        httpd_resp_send_500(req);
-        return ESP_FAIL;
+
+        const char *ok = "{\"status\":\"queued\"}";
+        coap_pdu_set_code(response, COAP_RESPONSE_CODE_CHANGED);
+        coap_add_data(response, strlen(ok), (const uint8_t *)ok);
+        return;
     }
+
     cJSON_Delete(json);
-    return ESP_OK;
+    coap_pdu_set_code(response, COAP_RESPONSE_CODE_BAD_REQUEST);
 }
 
-static void start_webserver() {
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    httpd_handle_t server = NULL;
-
-    if (httpd_start(&server, &config) == ESP_OK) {
-        httpd_uri_t uri_dump = { "/dump",     HTTP_GET,  download_data_handler, NULL };
-        httpd_uri_t uri_time = { "/set_time", HTTP_POST, set_time_handler,      NULL };
-        httpd_uri_t uri_info = { "/info",     HTTP_GET,  info_handler,          NULL };
-        httpd_uri_t uri_cmd  = { "/command",  HTTP_POST, command_handler,       NULL };
-        httpd_register_uri_handler(server, &uri_dump);
-        httpd_register_uri_handler(server, &uri_time);
-        httpd_register_uri_handler(server, &uri_info);
-        httpd_register_uri_handler(server, &uri_cmd);
-        ESP_LOGI(TAG, "HTTP server ready at http://192.168.4.1  (/dump, /set_time, /info, /command)");
-    } else {
-        ESP_LOGE(TAG, "Failed to start HTTP server!");
-    }
-}
-
-// CoAP
-
+/**
+ * CoAP GET handler for /telemetry resource, returns the last received telemetry packet in binary format.
+ */
 static void hnd_get_telemetry(coap_resource_t *resource, coap_session_t *session,
                                const coap_pdu_t *request, const coap_string_t *query,
                                coap_pdu_t *response) {
@@ -267,6 +273,9 @@ static void hnd_get_telemetry(coap_resource_t *resource, coap_session_t *session
                                    (const uint8_t *)&last_received_data);
 }
 
+/**
+ * CoAP server task, runs in its own FreeRTOS task and handles incoming CoAP requests.
+ */
 static void coap_server_task(void *p) {
     coap_context_t  *ctx = NULL;
     coap_address_t   serv_addr;
@@ -283,22 +292,56 @@ static void coap_server_task(void *p) {
     }
     coap_new_endpoint(ctx, &serv_addr, COAP_PROTO_UDP);
 
+    // Let libcoap manage RFC 7959 block-wise transfers and reassemble whole
+    // bodies, so /dump can return payloads larger than a single block.
+    coap_context_set_block_mode(ctx, COAP_BLOCK_USE_LIBCOAP | COAP_BLOCK_SINGLE_BODY);
+
+    // /telemetry — observable live reading (binary telemetry_packet_t)
     telemetry_resource = coap_resource_init(coap_make_str_const("telemetry"), 0);
     coap_resource_set_get_observable(telemetry_resource, 1);
     coap_register_handler(telemetry_resource, COAP_REQUEST_GET, hnd_get_telemetry);
     coap_add_resource(ctx, telemetry_resource);
 
-    ESP_LOGI(TAG, "CoAP server listening on port 5683");
+    // /info — GET star_id as JSON
+    coap_resource_t *info_res = coap_resource_init(coap_make_str_const("info"), 0);
+    coap_register_handler(info_res, COAP_REQUEST_GET, hnd_get_info);
+    coap_add_resource(ctx, info_res);
 
-    while (1) coap_io_process(ctx, 1000);
+    // /dump — GET the ring-buffer history as packed binary records (block-wise)
+    coap_resource_t *dump_res = coap_resource_init(coap_make_str_const("dump"), 0);
+    coap_register_handler(dump_res, COAP_REQUEST_GET, hnd_get_dump);
+    coap_add_resource(ctx, dump_res);
+
+    // /set_time — POST an epoch string to set the RTC
+    coap_resource_t *time_res = coap_resource_init(coap_make_str_const("set_time"), 0);
+    coap_register_handler(time_res, COAP_REQUEST_POST, hnd_post_settime);
+    coap_add_resource(ctx, time_res);
+
+    // /command — POST a JSON actuation command to queue for a node
+    coap_resource_t *cmd_res = coap_resource_init(coap_make_str_const("command"), 0);
+    coap_register_handler(cmd_res, COAP_REQUEST_POST, hnd_post_command);
+    coap_add_resource(ctx, cmd_res);
+
+    ESP_LOGI(TAG, "CoAP server listening on port 5683 (/telemetry, /info, /dump, /set_time, /command)");
+
+    while (1) {
+        // Issue any pending observe notification from this task, which owns the
+        // CoAP context; coap_io_process() then flushes it to subscribers.
+        if (telemetry_dirty) {
+            telemetry_dirty = false;
+            coap_resource_notify_observers(telemetry_resource, NULL);
+        }
+        coap_io_process(ctx, 1000);
+    }
 
     coap_free_context(ctx);
     coap_cleanup();
     vTaskDelete(NULL);
 }
 
-// Wi-Fi + ESP-NOW
-
+/**
+ * Wi-Fi initialization in AP+STA mode, sets up an access point for operator connection and a station for upstream connectivity.
+ */
 static void wifi_init_ap() {
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -323,6 +366,9 @@ static void wifi_init_ap() {
 }
 
 #ifdef IS_HELTEC
+/**
+ * Initializes the OLED display using u8g2 library and sets up I2C communication.
+ */
 static void display_init() {
     gpio_set_direction((gpio_num_t)VEXT_PIN, GPIO_MODE_OUTPUT);
     gpio_set_level((gpio_num_t)VEXT_PIN, 0);
@@ -346,8 +392,9 @@ static void display_init() {
 }
 #endif
 
-// ESP-NOW receive callback — called from ISR context.
-// Saves the sender MAC alongside the packet so reception_task can reply.
+/**
+ * ESP-NOW receive callback, called from ISR context. Saves the sender MAC alongside the packet so reception_task can reply.
+ */
 void OnDataRecv(const esp_now_recv_info_t *esp_now_info, const uint8_t *incomingData, int len) {
     received_espnow_t item;
     if (len == sizeof(telemetry_packet_t)) {
@@ -359,9 +406,9 @@ void OnDataRecv(const esp_now_recv_info_t *esp_now_info, const uint8_t *incoming
     }
 }
 
-// Task: listen for LoRa downlink command frames from the Gateway.
-// Uses interrupt-driven continuous receive so the radio stays in RX at all times.
-// The mutex is held only for the brief readData() + startReceive() calls.
+/**
+ * LoRa RX task, listens for downlink command frames from the Gateway. Uses interrupt-driven continuous receive so the radio stays in RX at all times. The mutex is held only for the brief readData() + startReceive() calls.
+ */
 static void lora_rx_task(void *p) {
     if (radio == nullptr) {
         ESP_LOGW(TAG, "Modulo LoRa disabilitato. Terminazione preventiva del task lora_rx_task.");
@@ -382,7 +429,7 @@ static void lora_rx_task(void *p) {
                 lora_rx_flag = false;
                 memset(buf, 0, sizeof(buf));
                 int state = radio->readData(buf, sizeof(buf) - 1);
-                // Do not re-arm yet: valid commands need to TX an ACK first
+
                 xSemaphoreGive(lora_mutex);
 
                 if (state == RADIOLIB_ERR_NONE) {
@@ -419,12 +466,8 @@ static void lora_rx_task(void *p) {
                     }
 
                     if (valid) {
-                        // ACK before re-arming RX; include nid so the backend can correlate
                         char ack[32];
                         snprintf(ack, sizeof(ack), "{\"ack\":1,\"nid\":%lu}", (unsigned long)acked_nid);
-                        // The gateway flips TX->RX exactly when this command finishes on air;
-                        // its receiver hasn't settled yet. Wait so the ACK preamble arrives
-                        // after the gateway is fully listening (LoRaWAN-style RX window).
                         vTaskDelay(pdMS_TO_TICKS(50));
                         xSemaphoreTake(lora_mutex, portMAX_DELAY);
                         radio->transmit((uint8_t *)ack, strlen(ack));
@@ -449,7 +492,9 @@ static void lora_rx_task(void *p) {
     }
 }
 
-// Task: receive telemetry from Nodes, relay upstream, deliver pending commands.
+/**
+ * Reception task, runs in its own FreeRTOS task. Receives telemetry packets from ESP-NOW, timestamps them, learns the node's MAC for future replies, forwards the data to LoRa, updates the CoAP observable resource, pushes to the ring buffer for /dump, updates the display, and dispatches any pending commands to the node.
+ */
 void reception_task(void *pvParameters) {
     ESP_LOGI(TAG, "Reception Task running on Core %d", xPortGetCoreID());
     received_espnow_t incoming;
@@ -462,7 +507,6 @@ void reception_task(void *pvParameters) {
             time(&now);
             pkt.timestamp = (uint32_t)now;
 
-            // Learn this node's MAC so we can reply later
             std::array<uint8_t, 6> mac;
             memcpy(mac.data(), incoming.sender_mac, 6);
             node_macs[pkt.node_id] = mac;
@@ -475,7 +519,6 @@ void reception_task(void *pvParameters) {
                 esp_now_add_peer(&peer);
             }
 
-            // Serialize and TX via LoRa (abbreviated keys + star_id)
             char lora_payload[256];
             snprintf(lora_payload, sizeof(lora_payload),
                      "{\"sid\":%lu,\"ts\":%lu,\"id\":%lu,\"p\":%.2f,\"wt\":%.2f,"
@@ -489,8 +532,8 @@ void reception_task(void *pvParameters) {
             if (radio != nullptr) {
                 xSemaphoreTake(lora_mutex, portMAX_DELAY);
                 int state = radio->transmit(lora_payload);
-                lora_rx_flag = false;       // discard any spurious flag raised during TX
-                radio->startReceive();      // re-arm continuous RX after TX
+                lora_rx_flag = false;
+                radio->startReceive();
                 xSemaphoreGive(lora_mutex);
                 if (state == RADIOLIB_ERR_NONE) {
                     ESP_LOGI(TAG, "LoRa TX OK: %s", lora_payload);
@@ -499,13 +542,10 @@ void reception_task(void *pvParameters) {
                 }
             }
 
-            // Update CoAP observable resource
             memcpy(&last_received_data, &pkt, sizeof(telemetry_packet_t));
-            if (telemetry_resource != NULL) {
-                coap_resource_notify_observers(telemetry_resource, NULL);
-            }
+            // Hand the observe notification off to coap_server_task (see telemetry_dirty).
+            telemetry_dirty = true;
 
-            // Push to ring buffer for HTTP /dump
             if (xRingbufferSend(telemetry_ringbuf, &pkt, sizeof(telemetry_packet_t), 0) != pdTRUE) {
                 size_t dummy;
                 void *old = xRingbufferReceive(telemetry_ringbuf, &dummy, 0);
@@ -515,10 +555,8 @@ void reception_task(void *pvParameters) {
                 }
             }
 
-            // Update display
             xQueueOverwrite(display_mailbox, &pkt);
 
-            // Deliver a pending command to this node if one is queued
             xSemaphoreTake(pending_cmds_mutex, portMAX_DELAY);
             auto it = pending_cmds.find(pkt.node_id);
             if (it != pending_cmds.end()) {
@@ -544,7 +582,9 @@ void reception_task(void *pvParameters) {
     }
 }
 
-// Task: update OLED (Heltec) or log data (generic board)
+/**
+ * Data manager task, runs in its own FreeRTOS task. Receives telemetry packets from the display mailbox and updates the OLED display (if present) or logs the data to the console.
+ */
 void data_manager_task(void *pvParameters) {
     ESP_LOGI(TAG, "Display Task running on Core %d", xPortGetCoreID());
     telemetry_packet_t displayData;
@@ -585,7 +625,6 @@ extern "C" void app_main(void) {
         nvs_flash_init();
     }
 
-    // Allocate ring buffer
     uint8_t *ringbuf_storage = (uint8_t *)heap_caps_malloc(INTERNAL_BUFFER_SIZE, MALLOC_CAP_INTERNAL);
     StaticRingbuffer_t *ringbuf_struct = (StaticRingbuffer_t *)heap_caps_malloc(sizeof(StaticRingbuffer_t), MALLOC_CAP_8BIT);
     telemetry_ringbuf = xRingbufferCreateStatic(INTERNAL_BUFFER_SIZE, RINGBUF_TYPE_NOSPLIT, ringbuf_storage, ringbuf_struct);
@@ -600,10 +639,8 @@ extern "C" void app_main(void) {
     #endif
 
     wifi_init_ap();
-    start_webserver();
     lora_init();
 
-    // Derive star_id from own MAC (last 4 bytes, same formula as node_id on Nodes)
     uint8_t mac[6];
     ret = esp_read_mac(mac, ESP_MAC_WIFI_STA);
     if (ret == ESP_OK) {

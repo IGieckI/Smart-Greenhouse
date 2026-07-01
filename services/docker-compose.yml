@@ -105,8 +105,8 @@ services:
     command: python client_coap.py
     environment:
       - CONTROLLER_URL=http://localhost:3001/api/data
+      - STAR_COAP_BASE=coap://192.168.4.1
       - STAR_COAP_URI=coap://192.168.4.1/telemetry
-      - STAR_HTTP_BASE=http://192.168.4.1
       - MQTT_BROKER=localhost
       - MQTT_PORT=1883
     depends_on:
