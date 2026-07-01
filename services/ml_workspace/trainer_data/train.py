@@ -8,8 +8,8 @@ import joblib
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# Cache clearing only! Generation occurs lazily in the API
-from analytics_plotter import clear_analytics_cache
+# # Cache clearing only! Generation occurs lazily in the API
+# from analytics_plotter import clear_analytics_cache
 
 from influxdb_client import InfluxDBClient
 from sklearn.preprocessing import MinMaxScaler
@@ -294,7 +294,7 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
     task_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", task_name)
     archive_dir, best_dir = [os.path.join(task_dir, p) for p in ["models_archive", "best_model"]]
     
-    clear_analytics_cache(task_dir)
+    
     for d in [archive_dir, best_dir]: 
         os.makedirs(d, exist_ok=True)
 

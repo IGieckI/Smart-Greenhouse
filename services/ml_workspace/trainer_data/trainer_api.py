@@ -5,14 +5,14 @@ import queue
 import time
 import requests
 import json
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+import zipfile
+from fastapi import FastAPI, HTTPException
 import uvicorn
 from fastapi.responses import FileResponse
-from fastapi import Path
 
 import shutil
 
-from analytics_plotter import ensure_analytics_plots, ensure_global_analytics
+from analytics_plotter import generate_task_plots, generate_global_plots
 
 from shared_core.data_sync import sync_clean_bucket
 from train import fetch_clean_data, train_environmental_prophet, run_pipeline_for_task
@@ -58,12 +58,6 @@ def run_full_pipeline_for_freq(freq_minutes: int):
             
         print(f"[Pipeline] Process for {freq_minutes}m completed successfully!")
         
-        # Explicitly delete the previous global matrix
-        global_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", "global_analytics")
-        if os.path.exists(global_dir):
-            shutil.rmtree(global_dir)
-            print(f"[Pipeline] Cleaned up previous global analytics for {freq_minutes}m.")
-
         try:
             res = requests.post(f"{INFERENCE_API_URL}/reload-models", timeout=5)
             if res.status_code == 200:
@@ -91,7 +85,6 @@ def bootstrap_check():
 
 @app.post("/train/standard")
 def trigger_standard_training():
-    
     tmp = ','.join([f"{i}" for i in DEFAULT_FREQS])
     for freq in DEFAULT_FREQS: 
         training_queue.put(freq)
@@ -112,13 +105,14 @@ def trigger_custom_training(freq_minutes: int):
 def get_queue_status():
     return {"tasks_in_queue": training_queue.qsize()}
 
+
 # ==========================================
-# ANALYTICS & PLOTTING API
+# ANALYTICS & PLOTTING API (Simplified for Chatbots)
 # ==========================================
 
 @app.get("/analytics/{freq_minutes}/summary")
 def get_global_summary(freq_minutes: int):
-    """Dynamically explores the directory and returns all tasks and their trained models."""
+    """Returns a JSON summary of all trained models and their MAE/metrics."""
     base_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m")
     if not os.path.exists(base_dir):
         raise HTTPException(status_code=404, detail="Frequency not found. Train the system first.")
@@ -142,85 +136,41 @@ def get_global_summary(freq_minutes: int):
             
     return {"freq_minutes": freq_minutes, "tasks_available": list(summary.keys()), "details": summary}
 
-@app.get("/analytics/{freq_minutes}/global-matrix")
-def get_global_matrix(freq_minutes: int):
-    """Generates and returns the comparative matrix (Heatmap) of all tasks vs models."""
+@app.get("/analytics/{freq_minutes}/plots/global")
+def get_global_plots_zip(freq_minutes: int):
+    """Generates on-the-fly and returns a ZIP file containing all global comparison matrices."""
     base_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m")
-    
-    success = ensure_global_analytics(base_dir, freq_minutes)
-    if not success:
-         raise HTTPException(status_code=404, detail="Insufficient data to generate the global matrix.")
-         
-    file_path = os.path.join(base_dir, "global_analytics", "global_mae_matrix.png")
-    return FileResponse(path=file_path, media_type="image/png", filename=f"global_matrix_{freq_minutes}m.png")
+    if not os.path.exists(base_dir):
+        raise HTTPException(status_code=404, detail="Model directory not found.")
+        
+    generated_files = generate_global_plots(base_dir, freq_minutes)
+    if not generated_files:
+        raise HTTPException(status_code=404, detail="Insufficient data to generate global plots.")
+        
+    zip_path = os.path.join(base_dir, f"global_plots_{freq_minutes}m.zip")
+    with zipfile.ZipFile(zip_path, 'w') as zipf:
+        for file in generated_files:
+            zipf.write(file, os.path.basename(file))
+            
+    return FileResponse(zip_path, media_type="application/zip", filename=f"global_plots_{freq_minutes}m.zip")
 
-@app.get("/analytics/{freq_minutes}/{task_name}/plots")
-def list_analytics_plots(freq_minutes: int, task_name: str):
+@app.get("/analytics/{freq_minutes}/plots/task/{task_name}")
+def get_task_plots_zip(freq_minutes: int, task_name: str):
+    """Generates on-the-fly and returns a ZIP file containing plots for a specific task."""
     task_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", task_name)
-    success = ensure_analytics_plots(task_dir, task_name)
-    if not success:
+    if not os.path.exists(task_dir):
+        raise HTTPException(status_code=404, detail="Task directory not found.")
+        
+    generated_files = generate_task_plots(task_dir, task_name)
+    if not generated_files:
         raise HTTPException(status_code=404, detail="No JSON data found. Train the model first.")
 
-    analytics_dir = os.path.join(task_dir, "analytics_plots")
-    plots = [f for f in os.listdir(analytics_dir) if f.endswith(".png")]
-    
-    return {
-        "freq_minutes": freq_minutes, "task": task_name,
-        "available_plots": plots,
-        "download_url_template": f"/analytics/{freq_minutes}/{task_name}/plot/{{filename}}"
-    }
-
-@app.get("/analytics/{freq_minutes}/{task_name}/plot/{filename}")
-def get_analytics_plot(freq_minutes: int, task_name: str, filename: str):
-    task_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", task_name)
-    file_path = os.path.join(task_dir, "analytics_plots", filename)
-    
-    if not os.path.exists(file_path): 
-        ensure_analytics_plots(task_dir, task_name)
-    
-    if not os.path.exists(file_path): 
-        raise HTTPException(status_code=404, detail="Graph not found")
-        
-    return FileResponse(path=file_path, media_type="image/png", filename=f"{task_name}_{freq_minutes}m_{filename}")
+    zip_path = os.path.join(task_dir, f"{task_name}_{freq_minutes}m_plots.zip")
+    with zipfile.ZipFile(zip_path, 'w') as zipf:
+        for file in generated_files:
+            zipf.write(file, os.path.basename(file))
+            
+    return FileResponse(zip_path, media_type="application/zip", filename=f"{task_name}_{freq_minutes}m_plots.zip")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8001)
-
-@app.get("/analytics/global-grids")
-def generate_all_global_grids():
-    """
-    100% Non-Parametric and Self-Sufficient API: 
-    Scans all processed frequencies and explores the tasks for each.
-    Leverages the cache: generates missing plots transparently.
-    Returns an organized JSON with the URLs of all generated grids.
-    """
-    if not os.path.exists(BASE_MODEL_DIR):
-        raise HTTPException(status_code=404, detail="Models directory not found. Start a training.")
-        
-    freq_dirs = [d for d in os.listdir(BASE_MODEL_DIR) if d.endswith("m") and os.path.isdir(os.path.join(BASE_MODEL_DIR, d))]
-    
-    result = {}
-    for d in freq_dirs:
-        freq = int(d.replace("m", ""))
-        base_dir = os.path.join(BASE_MODEL_DIR, d)
-        
-        # Trigger execution (Idempotent) for this specific frequency
-        ensure_global_analytics(base_dir, freq)
-        
-        global_dir = os.path.join(base_dir, "global_analytics")
-        if os.path.exists(global_dir):
-            plots = [f for f in os.listdir(global_dir) if f.endswith(".png")]
-            result[d] = {
-                "available_grids": plots,
-                "download_urls": [f"/analytics/download-grid/{freq}/{p}" for p in plots]
-            }
-            
-    return {"status": "success", "data": result}
-
-@app.get("/analytics/download-grid/{freq_minutes}/{filename}")
-def download_global_grid(freq_minutes: int, filename: str):
-    """Physically serves the requested image."""
-    file_path = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", "global_analytics", filename)
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Grid not found. Call /analytics/global-grids first")
-    return FileResponse(path=file_path, media_type="image/png", filename=filename)
