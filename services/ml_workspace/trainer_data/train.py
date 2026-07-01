@@ -249,22 +249,22 @@ def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> d
             "model": Pipeline(scaler_and_poly + [('regressor', Ridge())]),
             "params": {"regressor__alpha": [0.01, 0.1, 1.0, 10.0, 100.0]}
         },
-        # "RandomForest": {
-        #     "model": Pipeline(scaler_only + [('regressor', RandomForestRegressor(random_state=42, n_jobs=1))]),
-        #     "params": {
-        #         "regressor__n_estimators": [100, 300, 500], 
-        #         "regressor__max_depth": [10, 20, None], 
-        #         "regressor__min_samples_split": [2, 5, 10]
-        #     }
-        # },
-        # "LightGBM": {
-        #     "model": Pipeline(scaler_only + [('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
-        #     "params": {
-        #         "regressor__n_estimators": [100, 300, 500],
-        #         "regressor__learning_rate": [0.01, 0.05, 0.1],
-        #         "regressor__num_leaves": [31, 63, 127]
-        #     }
-        # },
+        "RandomForest": {
+            "model": Pipeline(scaler_only + [('regressor', RandomForestRegressor(random_state=42, n_jobs=1))]),
+            "params": {
+                "regressor__n_estimators": [100, 300, 500], 
+                "regressor__max_depth": [10, 20, None], 
+                "regressor__min_samples_split": [2, 5, 10]
+            }
+        },
+        "LightGBM": {
+            "model": Pipeline(scaler_only + [('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
+            "params": {
+                "regressor__n_estimators": [100, 300, 500],
+                "regressor__learning_rate": [0.01, 0.05, 0.1],
+                "regressor__num_leaves": [31, 63, 127]
+            }
+        },
         "SVR": {
             "model": Pipeline(scaler_only + [('regressor', SVR())]),
             "params": {

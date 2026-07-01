@@ -282,6 +282,7 @@ def _run_ensemble_inference(freq_minutes: int, group: str, board_id: str,
     group = group.upper()
     if group == 'A': t_soft, t_env, t_auto = "t1", "t2", "t3"
     elif group == 'B': t_soft, t_env, t_auto = "t4", "t5", "t6"
+    elif group == 'C': t_soft, t_env, t_auto = "t4", "t8", "t9"
     else: raise HTTPException(status_code=400, detail="Group must be 'A' or 'B'.")
 
     for t in [t_soft, t_env, t_auto]:
