@@ -7,8 +7,11 @@ from shared_core.config import *
 from shared_core.preprocessing import apply_board_pipeline 
 
 def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
-    """Synchronizes and processes RAW data into a dynamically sampled clean bucket."""
+    """
+        Synchronizes and processes RAW data into a dynamically sampled clean bucket.
+    """
     
+    # check existance of the bucket
     bucket_clean = f"{BUCKET_CLEAN_PREFIX}{freq_minutes}m"
     client = InfluxDBClient(url=influx_url, token=influx_token, org=influx_org)
     
@@ -18,6 +21,8 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
         buckets_api.create_bucket(bucket_name=bucket_clean, org=influx_org)
 
     query_api = client.query_api()
+
+    # pick last data cleaned
     query_last = f'''
         from(bucket: "{bucket_clean}")
           |> range(start: {SYNC_LOOKBACK_DAYS})
@@ -36,11 +41,13 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
         pass
 
     if last_time:
+        #ensure a bit of historicity usefull for cleaning procedures
         overlap_time = last_time - pd.Timedelta(minutes=60)
         time_filter = f"|> range(start: {overlap_time.isoformat()})"
     else:
         time_filter = '|> range(start: 0)'
 
+    # get raw data starting by previous result
     print(f"[Sync {freq_minutes}m] Querying RAW bucket (Time filter: {time_filter})...")
     query_raw = f'''
         from(bucket: "{BUCKET_RAW}")
@@ -60,7 +67,10 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
         print(f"[Sync {freq_minutes}m] No new raw data found.")
         return
     
+    ### Apply preprocessing pipeline
     print(f"[Sync {freq_minutes}m] Pre-processing {len(df_raw)} raw records (Standardizing column names)...")
+
+    # ensure normalization of values
     if 'tds_value' in df_raw.columns:
         if 'tds' in df_raw.columns: df_raw['tds'] = df_raw['tds'].combine_first(df_raw['tds_value'])
         else: df_raw.rename(columns={'tds_value': 'tds'}, inplace=True)
@@ -78,24 +88,31 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
         df_board.set_index('_time', inplace=True)
         df_board.sort_index(inplace=True)
 
-        # --- FIX 1: Apply the pipeline on HIGH-DENSITY RAW data ---
         df_clean = apply_board_pipeline(df_board, board)
 
-        # --- FIX 1B: Resampling occurs AFTER Gaussian cleaning ---
         freq_str = f"{freq_minutes}min"
         df_clean = df_clean.resample(freq_str).mean(numeric_only=True)
         df_clean['id_board'] = board
 
-        # --- FIX 4: The linear "universal sweeper" on resampled data ---
         max_nans_to_fill = max(1, int(MAX_INTERPOLATION_GAP_MINUTES / freq_minutes))
-        df_clean = df_clean.infer_objects(copy=False).interpolate(method='linear', limit=max_nans_to_fill)
         
+        numeric_cols = df_clean.select_dtypes(include='number').columns
+        
+        df_clean_interp = df_clean.copy()
+        
+        for col in numeric_cols:
+            is_na = df_clean[col].isna()
+        
+            gap_sizes = is_na.groupby((~is_na).cumsum()).transform('sum')
+            
+            df_clean_interp[col] = df_clean_interp[col].interpolate(method='linear')
+            df_clean[col] = df_clean_interp[col].mask(is_na & (gap_sizes > max_nans_to_fill))
+        
+        # pick only our features
         cols_to_drop = ['result', 'table', '_start', '_stop', '_measurement', 'block_id', 'leaf_weight']
         df_clean.drop(columns=[c for c in cols_to_drop if c in df_clean.columns], inplace=True)
 
-        # Remove data older than last_time (if they exist) because we already have them in the DB
-        # (The overlap was only for math, we don't want to reinsert them all,
-        # even though InfluxDB handles overwrites well).
+        # ensure to have back very new data
         if last_time:
             df_clean = df_clean[df_clean.index > last_time]
         
@@ -113,8 +130,8 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
             write_api.write(bucket=bucket_clean, org=influx_org, record=points)
             print(f"[Sync {freq_minutes}m] Inserted {len(points)} clean records for Board {board}")
 
-        # --- NUOVO: IMPORT DAL CAVEAUX ---
-        print(f"[Sync {freq_minutes}m] Importazione previsioni storiche dal Caveaux...")
+        # ensure presence of older forecasted values
+        print(f"[Sync {freq_minutes}m] Import historical forecast from caveaux bucket...")
         if buckets_api.find_bucket_by_name(BUCKET_CAVEAUX) is None:
             buckets_api.create_bucket(bucket_name=BUCKET_CAVEAUX, org=influx_org)
             
@@ -141,8 +158,8 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
                     cav_points.append(p)
                 if cav_points:
                     write_api.write(bucket=bucket_clean, org=influx_org, record=cav_points)
-                    print(f"[Sync {freq_minutes}m] Recuperate e integrate {len(cav_points)} previsioni dal Caveaux in {bucket_clean}.")
+                    print(f"[Sync {freq_minutes}m] Re-integrated {len(cav_points)} forecasting by caveaux into {bucket_clean}.")
             else:
-                print(f"[Sync {freq_minutes}m] Nessuna previsione storica trovata nel Caveaux.")
+                print(f"[Sync {freq_minutes}m] No previous forecasting found in caveaux.")
         except Exception as e:
-            print(f"[Sync {freq_minutes}m] Errore nell'importazione dal Caveaux: {e}")
+            print(f"[Sync {freq_minutes}m] error while attemping import from caveaux: {e}")

@@ -39,6 +39,8 @@ def worker_daemon():
             training_queue.task_done()
             print(f"[Worker Daemon] Task {freq_minutes}m completed. Awaiting new tasks...")
 
+
+
 def run_full_pipeline_for_freq(freq_minutes: int):
     try:
         print(f"[Pipeline] Starting process for frequency {freq_minutes}m...")
@@ -85,6 +87,9 @@ def run_full_pipeline_for_freq(freq_minutes: int):
     except Exception as e:
         print(f"[Pipeline] Critical error during {freq_minutes}m training: {e}")
 
+
+
+
 @app.on_event("startup")
 def bootstrap_check():
     threading.Thread(target=worker_daemon, daemon=True).start()
@@ -129,7 +134,9 @@ def get_queue_status():
 
 @app.get("/analytics/{freq_minutes}/summary")
 def get_global_summary(freq_minutes: int):
-    """Returns a JSON summary of all trained models and their MAE/metrics."""
+    """
+        Returns a JSON summary of all trained models and their MAE/metrics.
+    """
     base_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m")
     if not os.path.exists(base_dir):
         raise HTTPException(status_code=404, detail="Frequency not found. Train the system first.")
@@ -155,7 +162,9 @@ def get_global_summary(freq_minutes: int):
 
 @app.get("/analytics/{freq_minutes}/plots/global")
 def get_global_plots_zip(freq_minutes: int):
-    """Generates on-the-fly and returns an in-memory ZIP file containing all global comparison matrices."""
+    """
+        Generates on-the-fly and returns an in-memory ZIP file containing all global comparison matrices.
+    """
     base_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m")
     if not os.path.exists(base_dir):
         raise HTTPException(status_code=404, detail="Model directory not found.")
@@ -179,7 +188,9 @@ def get_global_plots_zip(freq_minutes: int):
 
 @app.get("/analytics/{freq_minutes}/plots/task/{task_name}")
 def get_task_plots_zip(freq_minutes: int, task_name: str):
-    """Generates on-the-fly and returns an in-memory ZIP file containing plots for a specific task."""
+    """
+        Generates on-the-fly and returns an in-memory ZIP file containing plots for a specific task.
+    """
     task_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", task_name)
     if not os.path.exists(task_dir):
         raise HTTPException(status_code=404, detail="Task directory not found.")

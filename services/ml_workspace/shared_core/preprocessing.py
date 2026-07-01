@@ -3,7 +3,7 @@ import numpy as np
 from shared_core.config import *
 
 
-# CORE UTILITIES
+# general gaussian definition
 def gaussian_weighted_interpolation(df: pd.DataFrame, target_col: str, weight_col: str = None) -> pd.DataFrame:
     df_out = df.copy()
     nan_indices = df_out[df_out[target_col].isna()].index
@@ -13,7 +13,6 @@ def gaussian_weighted_interpolation(df: pd.DataFrame, target_col: str, weight_co
         before = valid_data.loc[:idx].iloc[-INTERPOLATION_WIN_BEFORE:] if not valid_data.loc[:idx].empty else pd.DataFrame()
         after = valid_data.loc[idx:].iloc[:INTERPOLATION_WIN_AFTER] if not valid_data.loc[idx:].empty else pd.DataFrame()
         
-        # --- NEW LOGIC: Check hole size ---
         if not before.empty and not after.empty:
             gap_minutes = (after.index[0] - before.index[-1]).total_seconds() / 60.0
             if gap_minutes > MAX_INTERPOLATION_GAP_MINUTES:
@@ -24,8 +23,7 @@ def gaussian_weighted_interpolation(df: pd.DataFrame, target_col: str, weight_co
         elif not after.empty: 
             if (after.index[0] - idx).total_seconds() / 60.0 > MAX_INTERPOLATION_GAP_MINUTES:
                 continue
-        # --------------------------------------------------------
-
+        
         neighbors = pd.concat([before, after])
         if neighbors.empty: continue
 
@@ -43,61 +41,8 @@ def gaussian_weighted_interpolation(df: pd.DataFrame, target_col: str, weight_co
 
     return df_out
 
-def create_lagged_features(df: pd.DataFrame, target_col: str, feature_cols: list, virtual_ratio: int, lags: int = DEFAULT_LAGS, lag_target: bool = True) -> pd.DataFrame:
-    cols_to_lag = feature_cols.copy()
-    if lag_target: 
-        cols_to_lag.append(target_col)
-    
-    lagged_data = {}
-    
-    for col in cols_to_lag:
-        if col in df.columns:
-            for i in range(1, lags + 1):
-                lagged_data[f'{col}_lag_{i}'] = df[col].shift(i * virtual_ratio)
-                
-    if lagged_data:
-        df_lagged = pd.concat([df, pd.DataFrame(lagged_data, index=df.index)], axis=1)
-    else:
-        df_lagged = df.copy()
-        
-    return df_lagged
 
-def get_extended_features_list(base_features: list, use_lags: bool) -> list:
-    ext = base_features.copy()
-    ext.extend(['time_sin', 'time_cos'])
-    if use_lags:
-        ext.extend([f"{col}_diff" for col in base_features])
-    return ext
-
-def build_advanced_features(df: pd.DataFrame, base_features: list, use_lags: bool, virtual_ratio: int) -> pd.DataFrame:
-    df_out : pd.DataFrame = df.copy()
-    
-    if not isinstance(df_out.index, pd.DatetimeIndex):
-        try:
-            df_out.index = pd.to_datetime(df_out.index)
-        except Exception as e:
-            print(f"Error converting index to datetime: {e}")
-            return df_out
-
-    minutes = df_out.index.hour * 60 + df_out.index.minute
-    df_out['time_sin'] = np.sin(2 * np.pi * minutes / 1440)
-    df_out['time_cos'] = np.cos(2 * np.pi * minutes / 1440)
-    
-    if use_lags:
-        for col in base_features:
-            if col in df_out.columns:
-                temp_series = df_out[col].ffill()
-                df_out[f'{col}_diff'] = temp_series.diff(virtual_ratio)
-                
-    return df_out
-
-# CLEANING FUNCTIONS
-def shift_leaf_temp_backward(df: pd.DataFrame) -> pd.DataFrame:
-    """Shifts leaf_temp backward by 1 resampled interval to align temporally delayed leaf data with environment."""
-    if 'leaf_temp' in df.columns:
-        df['leaf_temp'] = df['leaf_temp'].shift(-1)
-    return df
-
+#preprocessing atomic operation
 def identify_leaf_steps(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or 'leaf_temp' not in df.columns:
         return df
@@ -132,17 +77,16 @@ def clean_anomalies(df: pd.DataFrame) -> pd.DataFrame:
         df = gaussian_weighted_interpolation(df, 'tds')
     return df
 
-def remove_tds_zero(df: pd.DataFrame) -> pd.DataFrame:
+def remove_erroneus_tds(df: pd.DataFrame) -> pd.DataFrame:
     if 'tds' in df.columns:
-        df.loc[df['tds'] < 60, 'tds'] = np.nan
+        df.loc[df['tds'] < 30, 'tds'] = np.nan
         df = gaussian_weighted_interpolation(df, 'tds')
     return df
 
-# BOARD PIPELINES
+# board preprocessing pipeline definition 
 BOARD_PIPELINES = {
-    # Added shift_leaf_temp_backward for Board 324 based on hardware delay behavior
-    BOARD_324: [shift_leaf_temp_backward, identify_leaf_steps, apply_leaf_gaussian_interpolation, clean_anomalies],
-    BOARD_944: [remove_tds_zero, apply_leaf_gaussian_interpolation, clean_anomalies]
+    BOARD_324: [identify_leaf_steps, apply_leaf_gaussian_interpolation, clean_anomalies],
+    BOARD_944: [remove_erroneus_tds, apply_leaf_gaussian_interpolation, clean_anomalies]
 }
 
 def apply_board_pipeline(df: pd.DataFrame, board_id: str) -> pd.DataFrame:
@@ -151,3 +95,62 @@ def apply_board_pipeline(df: pd.DataFrame, board_id: str) -> pd.DataFrame:
     for step_function in pipeline:
         df_processed = step_function(df_processed)
     return df_processed
+
+
+
+##################################
+
+#Other preprocessing operation
+
+def build_advanced_features(df: pd.DataFrame, base_features: list, use_lags: bool, virtual_ratio: int) -> pd.DataFrame:
+    df_out : pd.DataFrame = df.copy()
+    
+    if not isinstance(df_out.index, pd.DatetimeIndex):
+        try:
+            df_out.index = pd.to_datetime(df_out.index)
+        except Exception as e:
+            print(f"Error converting index to datetime: {e}")
+            return df_out
+
+    minutes = df_out.index.hour * 60 + df_out.index.minute
+    df_out['time_sin'] = np.sin(2 * np.pi * minutes / 1440)
+    df_out['time_cos'] = np.cos(2 * np.pi * minutes / 1440)
+    
+    if use_lags:
+        for col in base_features:
+            if col in df_out.columns:
+                temp_series = df_out[col].ffill()
+                df_out[f'{col}_diff'] = temp_series.diff(virtual_ratio)
+                
+    return df_out
+
+
+
+def get_extended_features_list(base_features: list, use_lags: bool) -> list:
+    ext = base_features.copy()
+    ext.extend(['time_sin', 'time_cos'])
+    if use_lags:
+        ext.extend([f"{col}_diff" for col in base_features])
+    return ext
+
+
+
+def create_lagged_features(df: pd.DataFrame, target_col: str, feature_cols: list, virtual_ratio: int, lags: int = DEFAULT_LAGS, lag_target: bool = True) -> pd.DataFrame:
+    cols_to_lag = feature_cols.copy()
+    if lag_target: 
+        cols_to_lag.append(target_col)
+    
+    lagged_data = {}
+    
+    for col in cols_to_lag:
+        if col in df.columns:
+            for i in range(1, lags + 1):
+                lagged_data[f'{col}_lag_{i}'] = df[col].shift(i * virtual_ratio)
+                
+    if lagged_data:
+        df_lagged = pd.concat([df, pd.DataFrame(lagged_data, index=df.index)], axis=1)
+    else:
+        df_lagged = df.copy()
+        
+    return df_lagged
+

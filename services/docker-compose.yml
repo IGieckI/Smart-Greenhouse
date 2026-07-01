@@ -53,6 +53,7 @@ services:
       - INFLUX_ORG=iot_org
       - INFLUX_BUCKET=sensor_data
       - LEAF_TEMP_LABEL=leaf_temp
+      - CONTROLLER_URL=http://controller:3001
     depends_on:
       - influxdb
     devices:
