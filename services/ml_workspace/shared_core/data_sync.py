@@ -112,3 +112,37 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
         if points:
             write_api.write(bucket=bucket_clean, org=influx_org, record=points)
             print(f"[Sync {freq_minutes}m] Inserted {len(points)} clean records for Board {board}")
+
+        # --- NUOVO: IMPORT DAL CAVEAUX ---
+        print(f"[Sync {freq_minutes}m] Importazione previsioni storiche dal Caveaux...")
+        if buckets_api.find_bucket_by_name(BUCKET_CAVEAUX) is None:
+            buckets_api.create_bucket(bucket_name=BUCKET_CAVEAUX, org=influx_org)
+            
+        query_caveaux = f'''
+            from(bucket: "{BUCKET_CAVEAUX}")
+            |> range(start: 0)
+            |> filter(fn: (r) => r._measurement == "sensor_measurements")
+            |> filter(fn: (r) => r.freq == "{freq_minutes}m")
+        '''
+        try:
+            df_caveaux = query_api.query_data_frame(query_caveaux)
+            if isinstance(df_caveaux, list) and len(df_caveaux) > 0:
+                df_caveaux = pd.concat(df_caveaux, ignore_index=True)
+                
+            if df_caveaux is not None and not df_caveaux.empty:
+                cav_points = []
+                for _, row in df_caveaux.iterrows():
+                    p = Point(row['_measurement']) \
+                        .tag("id_board", str(row.get('id_board', ''))) \
+                        .tag("model_source", str(row.get('model_source', ''))) \
+                        .tag("freq", str(row.get('freq', f'{freq_minutes}m'))) \
+                        .field(row['_field'], float(row['_value'])) \
+                        .time(row['_time'])
+                    cav_points.append(p)
+                if cav_points:
+                    write_api.write(bucket=bucket_clean, org=influx_org, record=cav_points)
+                    print(f"[Sync {freq_minutes}m] Recuperate e integrate {len(cav_points)} previsioni dal Caveaux in {bucket_clean}.")
+            else:
+                print(f"[Sync {freq_minutes}m] Nessuna previsione storica trovata nel Caveaux.")
+        except Exception as e:
+            print(f"[Sync {freq_minutes}m] Errore nell'importazione dal Caveaux: {e}")

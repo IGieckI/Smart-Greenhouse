@@ -43,14 +43,19 @@ async def handle_predict_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
     data = query.data
     
     if data == "pred_ens":
-        keyboard = build_keyboard([[("Group A (Uses TDS)", "pred_sel_ens_A")], [("Group B (No TDS)", "pred_sel_ens_B")]], "menu_predict")
+        keyboard = build_keyboard([
+            [("Group A (Uses TDS)", "pred_sel_ens_A")], 
+            [("Group B (No TDS)", "pred_sel_ens_B")],
+            [("Group C (No TDS, Lags 15)", "pred_sel_ens_C")]
+        ], "menu_predict")
         await query.edit_message_text("Select the strategy:", reply_markup=keyboard)
 
     elif data == "pred_std":
         keyboard = build_keyboard([
             [("T1 (Now)", "pred_sel_std_t1"), ("T4 (No TDS)", "pred_sel_std_t4")],
             [("T2 (Env. 3h)", "pred_sel_std_t2"), ("T5 (Env. No TDS)", "pred_sel_std_t5")],
-            [("T3 (Auto 3h)", "pred_sel_std_t3"), ("T6 (Auto No TDS)", "pred_sel_std_t6")]
+            [("T3 (Auto 3h)", "pred_sel_std_t3"), ("T6 (Auto No TDS)", "pred_sel_std_t6")],
+            [("T8 (Env. Lags 15)", "pred_sel_std_t8"), ("T9 (Auto Lags 15)", "pred_sel_std_t9")]
         ], "menu_predict")
         await query.edit_message_text("Choose a specific Task:", reply_markup=keyboard)
 
@@ -82,7 +87,7 @@ async def _process_prediction(update: Update, mode: str, task_or_group: str, boa
     
     historical_api = data.get("historical", {})
     predictions_api = data.get("predictions", {})
-    arima_proj = data.get("prophet_projections", {}) # Renamed to match API output
+    arima_proj = data.get("prophet_projections", {}) 
     
     series_temp = {}
     arima_series = {}
@@ -139,7 +144,6 @@ async def choose_whatif_task(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     
     if query.data == "whatif_cancel":
-        # Cannot easily call show_main_menu due to circular deps, just instruct user
         await query.edit_message_text("❌ Simulation cancelled. Send /menu to restart.")
         return ConversationHandler.END
 
@@ -147,12 +151,17 @@ async def choose_whatif_task(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data['wi_mode'] = mode
     
     if mode == "ensemble":
-        keyboard = build_keyboard([[("Group A (Uses TDS)", "whatif_task_A")], [("Group B (No TDS)", "whatif_task_B")]], "whatif_cancel")
+        keyboard = build_keyboard([
+            [("Group A (Uses TDS)", "whatif_task_A")], 
+            [("Group B (No TDS)", "whatif_task_B")],
+            [("Group C (No TDS, Lags 15)", "whatif_task_C")]
+        ], "whatif_cancel")
     else:
         keyboard = build_keyboard([
             [("T1", "whatif_task_t1"), ("T4", "whatif_task_t4")],
             [("T2", "whatif_task_t2"), ("T5", "whatif_task_t5")],
-            [("T3", "whatif_task_t3"), ("T6", "whatif_task_t6")]
+            [("T3", "whatif_task_t3"), ("T6", "whatif_task_t6")],
+            [("T8", "whatif_task_t8"), ("T9", "whatif_task_t9")]
         ], "whatif_cancel")
         
     await query.edit_message_text("Which configuration should we test?", reply_markup=keyboard)

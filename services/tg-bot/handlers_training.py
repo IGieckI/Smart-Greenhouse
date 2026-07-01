@@ -74,7 +74,8 @@ async def handle_training_menu(update: Update, context: ContextTypes.DEFAULT_TYP
         buttons = [
             [(f"T1", f"train_task_run_{freq}_t1"), (f"T4", f"train_task_run_{freq}_t4")],
             [(f"T2", f"train_task_run_{freq}_t2"), (f"T5", f"train_task_run_{freq}_t5")],
-            [(f"T3", f"train_task_run_{freq}_t3"), (f"T6", f"train_task_run_{freq}_t6")]
+            [(f"T3", f"train_task_run_{freq}_t3"), (f"T6", f"train_task_run_{freq}_t6")],
+            [(f"T8", f"train_task_run_{freq}_t8"), (f"T9", f"train_task_run_{freq}_t9")]
         ]
         await query.edit_message_text("Select the Task:", reply_markup=build_keyboard(buttons, "train_task_freq"))
 

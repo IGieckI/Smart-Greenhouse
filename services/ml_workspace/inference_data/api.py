@@ -22,6 +22,9 @@ from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
+from influxdb_client import InfluxDBClient, Point
+from influxdb_client.client.write_api import SYNCHRONOUS
+
 sys.path.append('/app')
 from shared_core.data_sync import sync_clean_bucket
 from shared_core.tasks import TASKS
@@ -60,8 +63,40 @@ def get_soft_task(task_or_group: str) -> str:
     """Maps a task or group to its corresponding soft sensor task for leaf_temp imputation."""
     task_or_group = task_or_group.upper()
     if task_or_group in ['T1', 'T2', 'T3', 'A']: return 't1'
-    if task_or_group in ['T4', 'T5', 'T6', 'B']: return 't4'
+    if task_or_group in ['T4', 'T5', 'T6', 'T8', 'T9', 'B' 'C']: return 't4'
     return 't4' 
+
+def save_predictions_to_influx(board_id: str, freq_minutes: int, source_name: str, timestamps: list, values: list):
+    """Salva le previsioni future sia sul bucket clean operativo sia nel Caveaux."""
+    client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
+    write_api = client.write_api(write_options=SYNCHRONOUS)
+    
+    bucket_clean = f"{BUCKET_CLEAN_PREFIX}{freq_minutes}m"
+    bucket_caveaux = BUCKET_CAVEAUX
+    
+    # Assicura che il Caveaux esista
+    buckets_api = client.buckets_api()
+    if buckets_api.find_bucket_by_name(bucket_caveaux) is None:
+        buckets_api.create_bucket(bucket_name=bucket_caveaux, org=INFLUX_ORG)
+
+    points = []
+    for t, v in zip(timestamps, values):
+        p = Point("sensor_measurements") \
+            .tag("id_board", board_id) \
+            .tag("model_source", source_name) \
+            .tag("freq", f"{freq_minutes}m") \
+            .field("leaf_temp_pred", float(v)) \
+            .time(t.isoformat() if hasattr(t, 'isoformat') else t)
+        points.append(p)
+
+    if points:
+        try:
+            write_api.write(bucket=bucket_clean, org=INFLUX_ORG, record=points)
+            write_api.write(bucket=bucket_caveaux, org=INFLUX_ORG, record=points)
+            print(f"[Inference API] Salvati {len(points)} punti (Modello: {source_name}) su {bucket_clean} e {bucket_caveaux}")
+        except Exception as e:
+            print(f"[Inference API] Errore di salvataggio previsioni: {e}")
+    client.close()
 
 # ---
 
@@ -244,6 +279,11 @@ def _run_standard_inference(freq_minutes: int, task: str, board_id: str,
         air_preds = local_prophets["air_temp"].predict(df_future)['yhat'].values
         hum_preds = local_prophets["humidity"].predict(df_future)['yhat'].values
         future_vpd = [calculate_vpd(lt, at, rh) for lt, at, rh in zip(pred_list, air_preds, hum_preds)]
+    
+    # --- NUOVO: Salvataggio previsioni ---
+    if len(pred_list) > 0:
+        save_predictions_to_influx(board_id, freq_minutes, task.upper(), future_timestamps, pred_list)
+    # -------------------------------------
 
     return {
         "task": task, 
@@ -320,9 +360,14 @@ def _run_ensemble_inference(freq_minutes: int, group: str, board_id: str,
     future_vpd = [calculate_vpd(lt, at, rh) for lt, at, rh in zip(result["forecast_blended"], air_preds, hum_preds)]
 
     mae_soft = loaded_info.get(freq_key, {}).get(t_soft, {}).get("mae", 1.0) 
+    
+    # --- NUOVO: Salvataggio previsioni (salviamo il risultato finale blended) ---
+    if len(result["forecast_blended"]) > 0:
+        save_predictions_to_influx(board_id, freq_minutes, f"ENSEMBLE_{group}", future_timestamps, result["forecast_blended"])
+    # ----------------------------------------------------------------------------
 
     return {
-        "group": group, 
+        "group": group,
         "frequency": f"{freq_minutes}m", 
         "soft_sensor_mae": round(mae_soft, 3),
         "historical": {

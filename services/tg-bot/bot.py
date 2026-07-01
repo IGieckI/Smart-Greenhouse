@@ -5,6 +5,7 @@ from telegram.ext import (
     MessageHandler, filters, ContextTypes, ConversationHandler
 )
 
+from handlers_actuator import handle_actuator_routing
 from config import TOKEN, INFERENCE_URL, AWAIT_WHATIF_MODE, AWAIT_WHATIF_TASK, AWAIT_WHATIF_BOARD, AWAIT_WHATIF_VALUES, logger
 from utils import build_keyboard, fetch_api
 
@@ -27,7 +28,8 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [("🔮 Start ML Prediction", "menu_predict")],
         [("📊 View History", "menu_history")],
         [("🧪 What-If Simulation", "menu_whatif")],
-        [("⚙️ Training Center", "train_menu")] # NEW BUTTON!
+        [("⚙️ Training Center", "train_menu")],
+        [("🚰 Actuator Control", "act_menu")]
     ])
 
     text = "🤖 **GJ greenhouse - Control Center**\nSelect an operation:"
@@ -103,6 +105,9 @@ def main():
     
     # NEW: Training routing
     application.add_handler(CallbackQueryHandler(handle_training_menu, pattern="^train_"))
+    
+    # NEW: Actuator routing
+    application.add_handler(CallbackQueryHandler(handle_actuator_routing, pattern="^act_")) # NUOVA ROTTA!
 
     logger.info("AgriBot initialized and listening...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)

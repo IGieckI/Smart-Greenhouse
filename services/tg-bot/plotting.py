@@ -22,7 +22,7 @@ def _finalize_and_save_plot(title: str, xlabel: str = 'Time (Local)', ylabel: st
 def create_series_plot(df_hist: pd.DataFrame, series_dict: dict, title: str, hide_real_history: bool = False) -> io.BytesIO:
     plt.figure(figsize=(10, 5))
     last_time = pd.Timestamp.now(tz=TZ_ROME)
-    last_val = None # FIX: Track safely
+    last_val = None # FIX: Track safely to avoid UnboundLocalError
     
     if not df_hist.empty and 'leaf_temp' in df_hist.columns:
         df_plot = df_hist.dropna(subset=['leaf_temp'])
@@ -62,7 +62,7 @@ def create_series_plot(df_hist: pd.DataFrame, series_dict: dict, title: str, hid
 def create_vpd_plot(df_hist: pd.DataFrame, future_vpd: list = None) -> io.BytesIO:
     plt.figure(figsize=(10, 5))
     last_time = pd.Timestamp.now(tz=TZ_ROME)
-    last_val = None
+    last_val = None # Track safely
     has_data = False
     
     if not df_hist.empty and 'vpd' in df_hist.columns:
