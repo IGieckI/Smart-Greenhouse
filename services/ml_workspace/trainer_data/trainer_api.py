@@ -79,12 +79,15 @@ def run_full_pipeline_for_freq(freq_minutes: int):
 @app.on_event("startup")
 def bootstrap_check():
     threading.Thread(target=worker_daemon, daemon=True).start()
+
     needs_training = not os.path.exists(BASE_MODEL_DIR) or not [
         d for d in os.listdir(BASE_MODEL_DIR) if os.path.isdir(os.path.join(BASE_MODEL_DIR, d))
     ]
+    
     if needs_training:
         print("\n[Trainer API] No models found at boot (Cold Start).")
-        for freq in DEFAULT_FREQS: training_queue.put(freq)
+        for freq in DEFAULT_FREQS: 
+            training_queue.put(freq)
     else:
         print("\n[Trainer API] Existing models detected. System ready for on-demand requests.")
 

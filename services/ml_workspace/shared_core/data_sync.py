@@ -35,23 +35,38 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
     except Exception:
         pass
 
-    time_filter = f"|> range(start: {last_time.isoformat()})" if last_time else '|> range(start: 0)'
+    if last_time:
+        overlap_time = last_time - pd.Timedelta(minutes=60)
+        time_filter = f"|> range(start: {overlap_time.isoformat()})"
+    else:
+        time_filter = '|> range(start: 0)'
+
     query_raw = f'''
         from(bucket: "{BUCKET_RAW}")
           {time_filter}
           |> filter(fn: (r) => r._measurement == "sensor_measurements")
           |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
     '''
+    
     df_raw = query_api.query_data_frame(query_raw)
     
     if isinstance(df_raw, list):
-        if len(df_raw) == 0: return # No new data
+        if len(df_raw) == 0: 
+            return
         df_raw = pd.concat(df_raw, ignore_index=True)
-    if df_raw.empty: return
+    if df_raw.empty:
+        return
+    
+    if 'tds_value' in df_raw.columns:
+        if 'tds' in df_raw.columns: df_raw['tds'] = df_raw['tds'].combine_first(df_raw['tds_value'])
+        else: df_raw.rename(columns={'tds_value': 'tds'}, inplace=True)
+        df_raw.drop(columns=['tds_value'], inplace=True, errors='ignore')
 
-    # print("aaaaaaaaaaaa")
-    df_raw.to_csv("uffa.csv")
-    # print("aaaaaaaaaaaa")
+    if 'leaf_temperature' in df_raw.columns:
+        if 'leaf_temp' in df_raw.columns: df_raw['leaf_temp'] = df_raw['leaf_temp'].combine_first(df_raw['leaf_temperature'])
+        else: df_raw.rename(columns={'leaf_temperature': 'leaf_temp'}, inplace=True)
+        df_raw.drop(columns=['leaf_temperature'], inplace=True, errors='ignore')
+    
 
     write_api = client.write_api(write_options=SYNCHRONOUS)
     for board in df_raw['id_board'].unique():
@@ -59,27 +74,46 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
         df_board.set_index('_time', inplace=True)
         df_board.sort_index(inplace=True)
 
-        freq_str = f"{freq_minutes}min"
-        df_board = df_board.resample(freq_str).mean(numeric_only=True)
-        df_board['id_board'] = board 
-
-        # Corretto dff_clean in df_clean
+        # --- FIX 1: Applichiamo la pipeline sui dati RAW AD ALTA DENSITÀ ---
         df_clean = apply_board_pipeline(df_board, board)
-        
-        # --- MODIFICA: repair eventually micro-holes limitato ---
-        # Calcoliamo quanti "step" corrispondono a 30 minuti (es: a 6m freq sono 5 step)
-        # Calcoliamo quanti "step" corrispondono a 30 minuti (es: a 6m freq sono 5 step)
-        max_nans_to_fill = max(1, int(MAX_INTERPOLATION_GAP_MINUTES / freq_minutes))
-        
-        # Update: Inferred objects prevent Pandas future warnings
-        df_clean = df_clean.infer_objects(copy=False).interpolate(method='linear', limit=max_nans_to_fill)
 
-        # max_nans_to_fill = max(1, int(MAX_INTERPOLATION_GAP_MINUTES / freq_minutes))
-        # df_clean = df_clean.interpolate(method='linear', limit=max_nans_to_fill)
-        # --------------------------------------------------------
+        # --- FIX 1B: Il Resampling avviene DOPO la pulizia gaussiana ---
+        freq_str = f"{freq_minutes}min"
+        df_clean = df_clean.resample(freq_str).mean(numeric_only=True)
+        df_clean['id_board'] = board
+
+        # --- FIX 4: Lo "spazzino universale" lineare sui dati resamplati ---
+        max_nans_to_fill = max(1, int(MAX_INTERPOLATION_GAP_MINUTES / freq_minutes))
+        df_clean = df_clean.infer_objects(copy=False).interpolate(method='linear', limit=max_nans_to_fill)
+        
         cols_to_drop = ['result', 'table', '_start', '_stop', '_measurement', 'block_id', 'leaf_weight']
         df_clean.drop(columns=[c for c in cols_to_drop if c in df_clean.columns], inplace=True)
+
+        # Togliamo i dati più vecchi di last_time (se esistono) perché li abbiamo già nel DB 
+        # (L'overlap serviva solo per la matematica, non vogliamo reinserirli tutti, 
+        # anche se InfluxDB gestisce bene le sovrascritture).
+        if last_time:
+            df_clean = df_clean[df_clean.index > last_time]
+        
         df_clean.dropna(how='all', subset=[c for c in df_clean.columns if c != 'id_board'], inplace=True)
+        
+        # freq_str = f"{freq_minutes}min"
+        # df_board = df_board.resample(freq_str).mean(numeric_only=True)
+        # df_board['id_board'] = board 
+
+        # df_clean = apply_board_pipeline(df_board, board)
+        
+        # max_nans_to_fill = max(1, int(MAX_INTERPOLATION_GAP_MINUTES / freq_minutes))
+        
+        # # Update: Inferred objects prevent Pandas future warnings
+        # df_clean = df_clean.infer_objects(copy=False).interpolate(method='linear', limit=max_nans_to_fill)
+
+        # # max_nans_to_fill = max(1, int(MAX_INTERPOLATION_GAP_MINUTES / freq_minutes))
+        # # df_clean = df_clean.interpolate(method='linear', limit=max_nans_to_fill)
+        # # --------------------------------------------------------
+        # cols_to_drop = ['result', 'table', '_start', '_stop', '_measurement', 'block_id', 'leaf_weight']
+        # df_clean.drop(columns=[c for c in cols_to_drop if c in df_clean.columns], inplace=True)
+        # df_clean.dropna(how='all', subset=[c for c in df_clean.columns if c != 'id_board'], inplace=True)
 
         points = []
         for timestamp, row in df_clean.iterrows():
