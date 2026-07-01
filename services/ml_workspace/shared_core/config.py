@@ -1,6 +1,18 @@
 import os
 
-# DATABASE variables
+##### Config variables. Respectevely:
+### DATABASE variables
+### BOARDS CONFIGURATION
+### ENVIRONMENT METADATA (to eventually enrich data)
+#in case True:
+# 0 -> Unstable / Outdoor-like environment
+# 1 -> Stable / Indoor environment
+### DATA FREQUENCY 
+### Horizon in DAYS for environmental indipendent forecaster
+### PREPROCESSING & INTERPOLATION
+### ANOMALY DETECTION variables
+### Frequencies used as default to populate clean and trained models on startup
+
 INFLUX_URL = os.getenv("INFLUX_URL", "http://influxdb:8086")
 INFLUX_TOKEN = os.getenv("INFLUX_TOKEN")
 INFLUX_ORG = os.getenv("INFLUX_ORG", "iot_org")
@@ -10,7 +22,9 @@ BUCKET_CAVEAUX = "caveaux_leaf_temp"
 BUCKET_CLEAN_PREFIX = "sensor_data_clean_" 
 BASE_MODEL_DIR = "/app/shared_core/models"
 
-# BOARDS CONFIGURATION
+
+
+
 BOARD_324 = "3750846324"
 BOARD_944 = "3750866944"
 DEFAULT_BOARD_ID = BOARD_324
@@ -19,25 +33,29 @@ ACTIVE_BOARDS = [BOARD_324, BOARD_944]
 TRAIN_SPLIT_PERCENTAGE = 0.90
 
 
-# ENVIRONMENT METADATA (to eventually enrich data)
+
 USE_INDOOR_FEATURE = False
-#in case True:
-# 0 -> Unstable / Outdoor-like environment
-# 1 -> Stable / Indoor environment
+
 BOARD_ENV_MAP = {
     BOARD_324: 0, 
     BOARD_944: 1 
 }
 
-# DATA FREQUENCY 
+
+
+
 TARGET_FREQ_MINUTES = 6 
 SYNC_LOOKBACK_DAYS = "-30d"
 INFERENCE_LOOKBACK_DAYS = "-7d"
 
-# Horizon in DAYS for environmental indipendent forecaster
+
+
+
 ENV_ARIMA_TRAIN_DAYS = 14
 
-# PREPROCESSING & INTERPOLATION
+
+
+
 DEFAULT_LAGS = 6
 INTERPOLATION_WIN_BEFORE = 5
 INTERPOLATION_WIN_AFTER = 2
@@ -45,17 +63,22 @@ INTERPOLATION_SIGMA_MIN = 15.0
 LEAF_MAX_GAP_MINUTES = 12
 MAX_INTERPOLATION_GAP_MINUTES = 42 
 
-# ANOMALY DETECTION variables
+
+
 MIN_VALID_WATER_TEMP = 10.0
 TDS_ROLLING_WINDOW = 10
 TDS_SPIKE_THRESHOLD = 1.3
 
-# Frequencies used as default to populate clean and trained models on startup
+
+
+
+
 DEFAULT_FREQS = [6]
 
 
 
-# Other helper function to hold dynamic definitions
+
+
 def get_virtual_ratio(freq_minutes: int) -> int:
     """
         Calculates the jump ratio to align data to the target frequency.

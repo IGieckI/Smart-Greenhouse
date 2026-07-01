@@ -45,7 +45,9 @@ LAST_SYNC_TIME = {}
 SYNC_COOLDOWN_SECONDS = 30.0  
 
 
-# Helper Functions for VPD and formatting
+
+
+
 
 def calculate_vpd(t_leaf: float, t_air: float, rh: float) -> float:
     """
@@ -116,13 +118,14 @@ def save_predictions_to_influx(board_id: str, freq_minutes: int, source_name: st
     client.close()
 
 
-# Other helper functions
+
+
+
 
 def fetch_historical_data(board_id: str, limit: int, freq_minutes: int) -> pd.DataFrame:
     
     global LAST_SYNC_TIME
     
-    # make sure the clean bucket is up to date with RAW
     with sync_lock:
         current_time = time.time()
         last_sync = LAST_SYNC_TIME.get(freq_minutes, 0.0)
@@ -133,7 +136,9 @@ def fetch_historical_data(board_id: str, limit: int, freq_minutes: int) -> pd.Da
             except Exception as e:
                 print(f"[API] Error during Sync ({freq_minutes}m): {e}")
 
-    # fetch required window
+    
+
+
     client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
     bucket_clean = f"{BUCKET_CLEAN_PREFIX}{freq_minutes}m"
     query = f'''
@@ -175,7 +180,9 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
     if len(df_history) < get_min_history_records(freq_minutes):
         raise HTTPException(status_code=400, detail=f"Insufficient historical data for board {board_id}.")
 
-    # WHAT-IF Injection (Manual override)
+    
+
+
     if custom_data:
         last_idx = df_history.index[-1]
         custom_values = custom_data.dict(exclude_none=True)
@@ -183,7 +190,9 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
             if k in df_history.columns:
                 df_history.loc[last_idx, k] = v
 
-    # apply soft sensor for historical data (needed for forecasting cases)
+    
+
+
     soft_task = get_soft_task(task_or_group)
     soft_model = loaded_models.get(freq_key, {}).get(soft_task)
     
@@ -223,7 +232,9 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
     return df_history, local_env_prophets
 
 
-### APIs
+
+
+
 
 @app.on_event("startup")
 def load_assets():
@@ -273,7 +284,9 @@ def reload_models():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {e}")
 
-### ### ###
+
+
+
 
 def _run_standard_inference(freq_minutes: int, task: str, board_id: str, 
                             custom_data: Optional[SensorData] = None, 
@@ -310,11 +323,15 @@ def _run_standard_inference(freq_minutes: int, task: str, board_id: str,
         if "humidity" in local_prophets:
             hum_preds = local_prophets["humidity"].predict(df_future)['yhat'].values
 
-        # Calcolo VPD solo se stiamo prevedendo la temperatura fogliare
+        
+
+
         if TASKS[task]["target"] == "leaf_temp" and len(air_preds) > 0 and len(hum_preds) > 0:
             future_vpd = [calculate_vpd(lt, at, rh) for lt, at, rh in zip(pred_list, air_preds, hum_preds)]
     
-        # Salvataggio cumulativo
+        
+
+
         save_predictions_to_influx(
             board_id, freq_minutes, task.upper(), future_timestamps, pred_list,
             air_preds if len(air_preds) > 0 else None,
@@ -348,7 +365,9 @@ def predict_manual(freq_minutes: int, task: str, custom_data: SensorData, board_
     return _run_standard_inference(freq_minutes, task, board_id, custom_data, use_real_leaf_temp)
 
 
-### ### ###
+
+
+
 
 
 def _run_ensemble_inference(freq_minutes: int, group: str, board_id: str, 
@@ -453,5 +472,3 @@ def predict_ensemble(freq_minutes: int, group: str = "B", board_id: str = DEFAUL
 def predict_ensemble_manual(freq_minutes: int, group: str, custom_data: SensorData, board_id: str = DEFAULT_BOARD_ID,
                             use_real_leaf_temp: bool = Query(False, description="Set True to use physical sensor historical data instead of Soft Sensor")):
     return _run_ensemble_inference(freq_minutes, group, board_id, custom_data, use_real_leaf_temp)
-
-### ### ###

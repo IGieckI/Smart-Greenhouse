@@ -3,7 +3,7 @@ import numpy as np
 from shared_core.config import *
 
 
-# general gaussian definition
+
 def gaussian_weighted_interpolation(df: pd.DataFrame, target_col: str, weight_col: str = None) -> pd.DataFrame:
     df_out = df.copy()
     nan_indices = df_out[df_out[target_col].isna()].index
@@ -42,7 +42,7 @@ def gaussian_weighted_interpolation(df: pd.DataFrame, target_col: str, weight_co
     return df_out
 
 
-#preprocessing atomic operation
+
 def identify_leaf_steps(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or 'leaf_temp' not in df.columns:
         return df
@@ -83,7 +83,12 @@ def remove_erroneus_tds(df: pd.DataFrame) -> pd.DataFrame:
         df = gaussian_weighted_interpolation(df, 'tds')
     return df
 
-# board preprocessing pipeline definition 
+
+
+
+
+
+
 BOARD_PIPELINES = {
     BOARD_324: [identify_leaf_steps, apply_leaf_gaussian_interpolation, clean_anomalies],
     BOARD_944: [remove_erroneus_tds, apply_leaf_gaussian_interpolation, clean_anomalies]
@@ -98,9 +103,10 @@ def apply_board_pipeline(df: pd.DataFrame, board_id: str) -> pd.DataFrame:
 
 
 
-##################################
 
-#Other preprocessing operation
+
+
+
 
 def build_advanced_features(df: pd.DataFrame, base_features: list, use_lags: bool, virtual_ratio: int) -> pd.DataFrame:
     df_out : pd.DataFrame = df.copy()

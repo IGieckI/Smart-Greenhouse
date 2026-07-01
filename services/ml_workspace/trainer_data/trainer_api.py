@@ -23,7 +23,7 @@ from shared_core.tasks import TASKS
 app = FastAPI(title="ML Trainer API Worker")
 INFERENCE_API_URL = "http://ml-inference:8000"
 
-# TRAINING QUEUE MANAGEMENT
+
 training_queue = queue.Queue()
 
 def worker_daemon():
@@ -61,12 +61,12 @@ def run_full_pipeline_for_freq(freq_minutes: int):
             
         print(f"[Pipeline] Process for {freq_minutes}m completed successfully!")
         
-        # Explicitly delete the previous global matrix (will be regenerated)
+        
         global_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", "global_analytics")
         if os.path.exists(global_dir):
             shutil.rmtree(global_dir)
             
-        # --- NEW: Generate local PNG plots automatically after training ---
+        
         print(f"[Pipeline] Generating Local PNG Analytics for {freq_minutes}m...")
         for task_name in TASKS.keys():
             task_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", task_name)
@@ -75,7 +75,7 @@ def run_full_pipeline_for_freq(freq_minutes: int):
         base_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m")
         generate_global_plots(base_dir, freq_minutes)
         print(f"[Pipeline] Local Analytics generated successfully.")
-        # ----------------------------------------------------------------
+        
 
         try:
             res = requests.post(f"{INFERENCE_API_URL}/reload-models", timeout=5)
@@ -128,9 +128,9 @@ def get_queue_status():
     return {"tasks_in_queue": training_queue.qsize()}
 
 
-# ==========================================
-# ANALYTICS & PLOTTING API (Simplified for Chatbots)
-# ==========================================
+
+
+
 
 @app.get("/analytics/{freq_minutes}/summary")
 def get_global_summary(freq_minutes: int):
@@ -173,7 +173,7 @@ def get_global_plots_zip(freq_minutes: int):
     if not generated_files:
         raise HTTPException(status_code=404, detail="Insufficient data to generate global plots.")
         
-    # Create ZIP file in RAM
+    
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
         for file in generated_files:
@@ -199,7 +199,7 @@ def get_task_plots_zip(freq_minutes: int, task_name: str):
     if not generated_files:
         raise HTTPException(status_code=404, detail="No JSON data found. Train the model first.")
 
-    # Create ZIP file in RAM
+    
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
         for file in generated_files:

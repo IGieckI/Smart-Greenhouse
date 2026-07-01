@@ -11,7 +11,7 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
         Synchronizes and processes RAW data into a dynamically sampled clean bucket.
     """
     
-    # check existance of the bucket
+    
     bucket_clean = f"{BUCKET_CLEAN_PREFIX}{freq_minutes}m"
     client = InfluxDBClient(url=influx_url, token=influx_token, org=influx_org)
     
@@ -22,7 +22,7 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
 
     query_api = client.query_api()
 
-    # pick last data cleaned
+    
     query_last = f'''
         from(bucket: "{bucket_clean}")
           |> range(start: {SYNC_LOOKBACK_DAYS})
@@ -47,7 +47,7 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
     else:
         time_filter = '|> range(start: 0)'
 
-    # get raw data starting by previous result
+    
     print(f"[Sync {freq_minutes}m] Querying RAW bucket (Time filter: {time_filter})...")
     query_raw = f'''
         from(bucket: "{BUCKET_RAW}")
@@ -67,10 +67,13 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
         print(f"[Sync {freq_minutes}m] No new raw data found.")
         return
     
-    ### Apply preprocessing pipeline
+    
+
     print(f"[Sync {freq_minutes}m] Pre-processing {len(df_raw)} raw records (Standardizing column names)...")
 
-    # ensure normalization of values
+    
+
+
     if 'tds_value' in df_raw.columns:
         if 'tds' in df_raw.columns: df_raw['tds'] = df_raw['tds'].combine_first(df_raw['tds_value'])
         else: df_raw.rename(columns={'tds_value': 'tds'}, inplace=True)
@@ -108,11 +111,15 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
             df_clean_interp[col] = df_clean_interp[col].interpolate(method='linear')
             df_clean[col] = df_clean_interp[col].mask(is_na & (gap_sizes > max_nans_to_fill))
         
-        # pick only our features
+        
+
+
         cols_to_drop = ['result', 'table', '_start', '_stop', '_measurement', 'block_id', 'leaf_weight']
         df_clean.drop(columns=[c for c in cols_to_drop if c in df_clean.columns], inplace=True)
 
-        # ensure to have back very new data
+        
+
+
         if last_time:
             df_clean = df_clean[df_clean.index > last_time]
         
@@ -130,7 +137,9 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
             write_api.write(bucket=bucket_clean, org=influx_org, record=points)
             print(f"[Sync {freq_minutes}m] Inserted {len(points)} clean records for Board {board}")
 
-        # ensure presence of older forecasted values
+        
+
+
         print(f"[Sync {freq_minutes}m] Import historical forecast from caveaux bucket...")
         if buckets_api.find_bucket_by_name(BUCKET_CAVEAUX) is None:
             buckets_api.create_bucket(bucket_name=BUCKET_CAVEAUX, org=influx_org)

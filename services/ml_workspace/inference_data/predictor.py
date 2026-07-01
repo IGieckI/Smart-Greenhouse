@@ -15,11 +15,9 @@ def recursive_multistep_inference(
     freq_minutes: int
 ) -> list:
     
-    # --- FIX: INJECT is_indoor DYNAMICALLY ---
     features = task_config["features"].copy()
     if USE_INDOOR_FEATURE and 'is_indoor' not in features:
         features.append('is_indoor')
-    # -----------------------------------------
         
     use_lags = task_config.get("use_lags", False)
     lag_target = task_config.get("lag_target", True)
@@ -27,27 +25,27 @@ def recursive_multistep_inference(
     
     virtual_ratio = get_virtual_ratio(freq_minutes)
     
-    # 4. FIXED 3-HOUR FORECAST: If task uses lags, explicitly project 3 hours forward
     if use_lags:
         steps = int(180 / freq_minutes)
     else:
-        steps = 1 # Point estimation (T1, T4)
+        steps = 1 
         
     last_time = T_current_data.index[-1]
     
-    # Generate future dates
+    
     future_dates = [last_time + pd.Timedelta(minutes=freq_minutes * (i + 1)) for i in range(steps)]
     
-    # Prophet requires naive timestamps
+    
+
+
     future_dates_naive = [t.tz_localize(None) if t.tz is not None else t for t in future_dates]
     df_prophet_future = pd.DataFrame({'ds': future_dates_naive})
     
-    # Inject 'is_indoor' into Prophet future dataframe if required
+
     if USE_INDOOR_FEATURE and 'is_indoor' in T_current_data.columns:
         board_indoor_val = T_current_data['is_indoor'].iloc[-1]
         df_prophet_future['is_indoor'] = board_indoor_val
     
-    # Generate Environmental Forecasts using Prophet
     env_forecasts = {}
     for feat in features:
         if feat in prophet_models:
@@ -61,14 +59,14 @@ def recursive_multistep_inference(
     
     target_predictions = []
     
-    # Isolate relevant history
     cols_to_keep = features + ['leaf_temp']
     if 'is_indoor' in T_current_data.columns and 'is_indoor' not in cols_to_keep:
         cols_to_keep.append('is_indoor')
         
     history = T_current_data[cols_to_keep].copy()
 
-    # Extract exact feature signature expected by the ML model
+
+
     expected_features = list(ml_model_pipeline.feature_names_in_)
 
     for step_i in range(steps):
@@ -88,7 +86,6 @@ def recursive_multistep_inference(
                 extended_features = get_extended_features_list(features, use_lags)
                 history_lagged = create_lagged_features(history_advanced, 'leaf_temp', extended_features, virtual_ratio, lags=task_lags, lag_target=lag_target)
                 
-                # Apply expected_features filter to lags
                 X_infer = history_lagged[expected_features].iloc[-1:]
                 
                 if X_infer.empty:
@@ -108,6 +105,8 @@ def recursive_multistep_inference(
         history = history.tail(max_history_needed)
 
     return [p["value"] for p in target_predictions]
+
+
 
 
 def ensemble_multistep_inference(
