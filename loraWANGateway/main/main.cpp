@@ -16,10 +16,12 @@
 
 static const char *TAG = "LORA_GATEWAY";
 
+// RadioLib objects
 EspHal*  hal   = nullptr;
 Module*  mod   = nullptr;
 SX1262*  radio = nullptr;
 
+// MQTT client handle
 static esp_mqtt_client_handle_t mqtt_client = NULL;
 static EventGroupHandle_t wifi_event_group;
 const int WIFI_CONNECTED_BIT = BIT0;
@@ -31,7 +33,9 @@ static QueueHandle_t lora_tx_queue = NULL;
 static volatile bool lora_rx_flag = false;
 void IRAM_ATTR setRxFlag() { lora_rx_flag = true; }
 
-
+/**
+ * MQTT event handler, handles connection, disconnection, and incoming messages.
+ */
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
     switch (event_id) {
         case MQTT_EVENT_CONNECTED:
@@ -72,6 +76,9 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     }
 }
 
+/**
+ * WiFi event handler, handles connection and disconnection events.
+ */
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
     if (event_id == WIFI_EVENT_STA_START || event_id == WIFI_EVENT_STA_DISCONNECTED) {
         esp_wifi_connect();
@@ -80,6 +87,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
     }
 }
 
+/**
+ * Initialize WiFi in station mode and connect to the specified SSID and password.
+ */
 static void wifi_init_sta(void) {
     wifi_event_group = xEventGroupCreate();
     ESP_ERROR_CHECK(esp_netif_init());
@@ -99,6 +109,9 @@ static void wifi_init_sta(void) {
     ESP_ERROR_CHECK(esp_wifi_start());
 }
 
+/**
+ * LoRa RX task, listens for downlink command frames from the Gateway. Uses interrupt-driven continuous receive so the radio stays in RX at all times. The mutex is held only for the brief readData() + startReceive() calls.
+ */
 static void lora_rx_task(void *pvParameters) {
     uint8_t buf[256] = {0};
     char    tx_payload[LORA_TX_PAYLOAD_SIZE];
@@ -143,6 +156,7 @@ static void lora_rx_task(void *pvParameters) {
     }
 }
 
+
 extern "C" void app_main(void) {
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -167,7 +181,8 @@ extern "C" void app_main(void) {
     mod   = new Module(hal, LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);
     radio = new SX1262(mod);
 
-    // Must match greenhouseStar exactly
+    
+    // Radio init values are taken from Semtech's SX1262 datasheet    
     if (radio->begin(868.0, 125.0, 9, 7, 0x12, 10, 8, 1.6, false) == RADIOLIB_ERR_NONE) {
         ESP_LOGI(TAG, "LoRa initialized successfully");
         xTaskCreatePinnedToCore(lora_rx_task, "lora_rx", 4096, NULL, 5, NULL, 1);

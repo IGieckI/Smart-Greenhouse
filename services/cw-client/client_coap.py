@@ -6,11 +6,11 @@ import os
 import signal
 import struct
 import paho.mqtt.client as mqtt_paho
-from aiocoap import Context, Message, GET
+from aiocoap import Context, Message, GET, POST
 
 CONTROLLER_URL = os.getenv("CONTROLLER_URL", "http://localhost:3001/api/data")
-STAR_COAP_URI  = os.getenv("STAR_COAP_URI",  "coap://192.168.4.1/telemetry")
-STAR_HTTP_BASE = os.getenv("STAR_HTTP_BASE",  "http://192.168.4.1")
+STAR_COAP_BASE = os.getenv("STAR_COAP_BASE", "coap://192.168.4.1")
+STAR_COAP_URI  = os.getenv("STAR_COAP_URI",  f"{STAR_COAP_BASE}/telemetry")
 MQTT_BROKER    = os.getenv("MQTT_BROKER",    "localhost")
 MQTT_PORT      = int(os.getenv("MQTT_PORT",  "1883"))
 TIMEOUT_SECONDS = 180.0
@@ -26,16 +26,17 @@ _STRUCT_FMT = '<IIffffffff'
 _STRUCT_SIZE = struct.calcsize(_STRUCT_FMT)
 
 
-async def fetch_star_id(session: aiohttp.ClientSession) -> str:
-    """Query the Star's /info endpoint to get its star_id."""
-    url = f"{STAR_HTTP_BASE}/info"
+async def fetch_star_id(context: Context) -> str:
+    """Query the Star's /info CoAP resource to get its star_id."""
+    uri = f"{STAR_COAP_BASE}/info"
     for attempt in range(5):
         try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                data = await resp.json()
-                star_id = str(data["star_id"])
-                logger.info(f"Discovered star_id={star_id} from {url}")
-                return star_id
+            request = Message(code=GET, uri=uri)
+            response = await asyncio.wait_for(context.request(request).response, timeout=5)
+            data = json.loads(response.payload.decode())
+            star_id = str(data["star_id"])
+            logger.info(f"Discovered star_id={star_id} from {uri}")
+            return star_id
         except Exception as e:
             logger.warning(f"Could not reach Star /info (attempt {attempt+1}/5): {e}")
             await asyncio.sleep(5)
@@ -43,51 +44,51 @@ async def fetch_star_id(session: aiohttp.ClientSession) -> str:
     return ""
 
 
-def _start_command_listener(star_id: str, loop: asyncio.AbstractEventLoop):
-    """Subscribe to MQTT commands for this star, forward to Star HTTP, and ACK back."""
-    async def _post_to_star(payload: bytes):
-        async with aiohttp.ClientSession() as s:
-            try:
-                async with s.post(f"{STAR_HTTP_BASE}/command", data=payload,
-                                  headers={"Content-Type": "application/json"},
-                                  timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                    if resp.status == 200:
-                        nid = json.loads(payload).get("nid")
-                        mqtt_client.publish("greenhouse/acks",
-                                            json.dumps({"ack": 1, "nid": nid}))
-                        logger.info(f"Command forwarded and ACK published for node {nid}")
-                    else:
-                        logger.error(f"Star returned HTTP {resp.status}, no ACK sent")
-            except Exception as e:
-                logger.error(f"Failed to forward command to Star: {e}")
-
-    def on_connect(client, userdata, flags, rc):
-        if rc == 0:
-            client.subscribe(f"greenhouse/commands/{star_id}")
-            logger.info(f"MQTT subscribed to greenhouse/commands/{star_id}")
-        else:
-            logger.error(f"MQTT connect failed rc={rc}")
-
-    def on_message(client, userdata, msg):
-        asyncio.run_coroutine_threadsafe(_post_to_star(msg.payload), loop)
-
-    mqtt_client = mqtt_paho.Client()
-    mqtt_client.on_connect = on_connect
-    mqtt_client.on_message = on_message
-    try:
-        mqtt_client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
-        mqtt_client.loop_start()
-        logger.info(f"Command listener started ({MQTT_BROKER}:{MQTT_PORT})")
-    except Exception as e:
-        logger.error(f"Command listener could not connect to MQTT: {e}")
-
-
 class TelemetryObserver:
     def __init__(self):
         self.context = None
         self.http_session = None
+        self.mqtt_client = None
         self.keep_running = True
         self.star_id = ""
+
+    def _start_command_listener(self, star_id: str, loop: asyncio.AbstractEventLoop):
+        """Subscribe to MQTT commands for this star, forward to the Star over CoAP, and ACK back."""
+        async def _post_to_star(payload: bytes):
+            try:
+                request = Message(code=POST, uri=f"{STAR_COAP_BASE}/command", payload=payload)
+                # aiocoap sends Confirmable requests by default, so delivery is
+                # retransmitted/acknowledged at the CoAP layer.
+                response = await asyncio.wait_for(self.context.request(request).response, timeout=5)
+                if response.code.is_successful():
+                    nid = json.loads(payload).get("nid")
+                    self.mqtt_client.publish("greenhouse/acks",
+                                             json.dumps({"ack": 1, "nid": nid}))
+                    logger.info(f"Command forwarded and ACK published for node {nid}")
+                else:
+                    logger.error(f"Star returned CoAP {response.code}, no ACK sent")
+            except Exception as e:
+                logger.error(f"Failed to forward command to Star: {e}")
+
+        def on_connect(client, userdata, flags, rc):
+            if rc == 0:
+                client.subscribe(f"greenhouse/commands/{star_id}")
+                logger.info(f"MQTT subscribed to greenhouse/commands/{star_id}")
+            else:
+                logger.error(f"MQTT connect failed rc={rc}")
+
+        def on_message(client, userdata, msg):
+            asyncio.run_coroutine_threadsafe(_post_to_star(msg.payload), loop)
+
+        self.mqtt_client = mqtt_paho.Client()
+        self.mqtt_client.on_connect = on_connect
+        self.mqtt_client.on_message = on_message
+        try:
+            self.mqtt_client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
+            self.mqtt_client.loop_start()
+            logger.info(f"Command listener started ({MQTT_BROKER}:{MQTT_PORT})")
+        except Exception as e:
+            logger.error(f"Command listener could not connect to MQTT: {e}")
 
     async def _forward(self, payload: dict):
         try:
@@ -138,12 +139,13 @@ class TelemetryObserver:
 
     async def start_observing(self):
         self.context = await Context.create_client_context()
+        # aiohttp is still used to forward decoded telemetry to the controller.
         self.http_session = aiohttp.ClientSession()
 
-        self.star_id = await fetch_star_id(self.http_session)
+        self.star_id = await fetch_star_id(self.context)
 
         if self.star_id:
-            _start_command_listener(self.star_id, asyncio.get_event_loop())
+            self._start_command_listener(self.star_id, asyncio.get_event_loop())
 
         while self.keep_running:
             observation = None
@@ -170,6 +172,8 @@ class TelemetryObserver:
 
     async def shutdown(self):
         self.keep_running = False
+        if self.mqtt_client:
+            self.mqtt_client.loop_stop()
         if self.http_session:
             await self.http_session.close()
         if self.context:
