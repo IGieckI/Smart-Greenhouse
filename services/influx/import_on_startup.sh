@@ -16,7 +16,6 @@ else
     echo "No dump of raw data found. Influx database will be empty."
 fi
 
-
 if [ -f "$FILE_CSV_CAVEAUX" ]; then
     echo "Automatic import of forecast freeze dump from $FILE_CSV_CAVEAUX..."
 

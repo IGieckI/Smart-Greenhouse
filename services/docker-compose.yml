@@ -4,11 +4,11 @@ services:
     image: influxdb:2.7
     container_name: influxdb
     ports:
-      - "8086:8086"
+      - "${INFLUX_PORT}:8086"
     environment:
       - DOCKER_INFLUXDB_INIT_MODE=setup
-      - DOCKER_INFLUXDB_INIT_USERNAME=${INFLUX_USER:-adminadmin}
-      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUX_PASSWORD:-adminadmin}
+      - DOCKER_INFLUXDB_INIT_USERNAME=${INFLUX_USER}
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUX_PASSWORD}
       - DOCKER_INFLUXDB_INIT_ORG=${INFLUX_ORG}
       - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUX_BUCKET_RAW}
       - DOCKER_INFLUXDB_CAVEAUX_BUCKET=${INFLUX_BUCKET_CAVEAUX}
@@ -17,6 +17,12 @@ services:
       - influxdb-data:/var/lib/influxdb2
       - ./influx/import_on_startup.sh:/docker-entrypoint-initdb.d/import_on_startup.sh:ro
       - ./influx/cumulative_dump.csv:/docker-entrypoint-initdb.d/cumulative_dump.csv:ro
+      - ./influx/caveaux.csv:/docker-entrypoint-initdb.d/caveaux.csv:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     restart: unless-stopped
 
 
@@ -24,9 +30,8 @@ services:
     image: grafana/grafana:latest
     container_name: grafana
     ports:
-      - "3030:3000"
+      - "${GRAFANA_PORT}:3000"
     environment:
-      # QUESTE SONO FONDAMENTALI PER IL DATASOURCE.YML
       - INFLUX_TOKEN=${INFLUX_TOKEN}
       - INFLUX_ORG=${INFLUX_ORG}
       - INFLUX_BUCKET=${INFLUX_BUCKET_RAW}
@@ -36,48 +41,42 @@ services:
       - ./grafana/provisioning/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
       - ./grafana/provisioning/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
     depends_on:
-      - influxdb
+      influxdb:
+        condition: service_healthy
     restart: unless-stopped
     
-  # Core Controller
   controller:
     build: ./controller
     container_name: controller
     ports:
-      - "3001:3001"
+      - "${CONTROLLER_PORT}:3001"
     volumes:
       - ./controller:/app
       - /app/node_modules
     environment:
       - INFLUX_URL=http://influxdb:8086
       - INFLUX_TOKEN=${INFLUX_TOKEN}
-      - INFLUX_ORG=iot_org
-      - INFLUX_BUCKET=sensor_data
-      - LEAF_TEMP_LABEL=leaf_temp
+      - INFLUX_ORG=${INFLUX_ORG}
+      - INFLUX_BUCKET=${INFLUX_BUCKET_RAW}
+      - LEAF_TEMP_LABEL=${LEAF_TEMP_LABEL}
       - CONTROLLER_URL=http://controller:3001
     depends_on:
-      - influxdb
+      influxdb:
+        condition: service_healthy
     devices:
       - "/dev/snd:/dev/snd"
     group_add:
       - audio
 
-  # Local MQTT Broker
-  # Note: To use this in the system it is needed to set USE_LOCAL_BROKER in 
-  # loraWANGateway/main/config.hpp and point to this machine's LAN IP 
-  # so the gateway can reach it.
   mosquitto:
     image: eclipse-mosquitto:2
     container_name: mosquitto
     ports:
-      - "1883:1883"
+      - "${MQTT_PORT}:1883"
     volumes:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
     restart: unless-stopped
 
-  # Data Ingestion Clients
-
-  # lw-client: receives LoRa data forwarded by the gateway via MQTT
   lw-client:
     build: ./lw-client
     container_name: lw-client
@@ -94,9 +93,6 @@ services:
       - mosquitto
     restart: unless-stopped
 
-  # cw-client: receives data from a nearby Star via CoAP Observe.
-  # The host machine must be connected to the GREENHOUSE_STAR WiFi AP
-  # (192.168.4.1) for this container to reach the Star.
   cw-client:
     build: ./cw-client
     container_name: cw-client
@@ -114,44 +110,50 @@ services:
       - controller
     restart: unless-stopped
 
-  # Machine Learning
   ml-trainer:
     build: ./ml_workspace/trainer_data
     container_name: ml-trainer
     shm_size: '2gb'
     ports:
-      - "8001:8001" 
+      - "${ML_TRAINER_PORT}:8001" 
     volumes:
       - ./ml_workspace/trainer_data:/app/trainer
       - ./ml_workspace/shared_core:/app/shared_core
-    # MODIFICA QUI: Entriamo in /app/trainer prima di lanciare uvicorn
     command: /bin/bash -c "cd /app/trainer && uvicorn trainer_api:app --host 0.0.0.0 --port 8001"
     environment:
       - INFLUX_URL=http://influxdb:8086
       - INFLUX_TOKEN=${INFLUX_TOKEN}
-      - INFLUX_ORG=iot_org
+      - INFLUX_ORG=${INFLUX_ORG}
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
     depends_on:
-      - influxdb
+      influxdb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/docs"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
     
   ml-inference:
     build: ./ml_workspace/inference_data
     container_name: ml-inference
     ports:
-      - "8000:8000"
+      - "${ML_INFERENCE_PORT}:8000"
     volumes:
       - ./ml_workspace/inference_data:/app/inference
       - ./ml_workspace/shared_core:/app/shared_core
     environment:
       - INFLUX_URL=http://influxdb:8086
       - INFLUX_TOKEN=${INFLUX_TOKEN}
-      - INFLUX_ORG=iot_org
+      - INFLUX_ORG=${INFLUX_ORG}
       - PYTHONPATH=/app
     depends_on:
-      - ml-trainer
+      influxdb:
+        condition: service_healthy
+      ml-trainer:
+        condition: service_healthy
 
-  # Telegram Bot
   tg-bot:
     build: ./tg-bot
     container_name: tg-bot
@@ -163,7 +165,7 @@ services:
       - INFERENCE_URL=http://ml-inference:8000
       - INFLUX_URL=http://influxdb:8086
       - INFLUX_TOKEN=${INFLUX_TOKEN}
-      - INFLUX_ORG=iot_org
+      - INFLUX_ORG=${INFLUX_ORG}
     depends_on:
       - ml-inference
 

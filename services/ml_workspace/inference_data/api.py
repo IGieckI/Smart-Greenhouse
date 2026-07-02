@@ -8,6 +8,8 @@ import threading
 import numpy as np
 import pandas as pd
 
+from apscheduler.schedulers.background import BackgroundScheduler
+
 from influxdb_client import InfluxDBClient
 
 import cmdstanpy
@@ -237,9 +239,21 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
 
 
 
+def scheduled_inference_job():
+    print("[Scheduler] Starting hourly automatic inference...")
+    for board in ACTIVE_BOARDS:
+        try:
+            _run_ensemble_inference(
+                freq_minutes=6, 
+                group="B", 
+                board_id=board, 
+                custom_data=None, 
+                use_real_leaf_temp=False, 
+                save_to_db=True
+            )
+        except Exception as e:
+            print(f"[Scheduler] Error running inference on board {board}: {e}")
 
-
-@app.on_event("startup")
 def load_assets():
     if not os.path.exists(BASE_MODEL_DIR): return
     for freq_folder in os.listdir(BASE_MODEL_DIR):
@@ -277,6 +291,16 @@ def load_assets():
             if missing_feats:
                 print(f"[RAM {freq_folder}] WARNING! Missing Prophet models for: {missing_feats}")
             print(f"[RAM {freq_folder}] Prophet models loaded for: {loaded_feats}")
+
+
+@app.on_event("startup")
+def start_scheduler():
+    load_assets()
+    
+    scheduler = BackgroundScheduler()
+    
+    scheduler.add_job(scheduled_inference_job, 'cron', minute=0)
+    scheduler.start()
 
 @app.get("/info/{freq_minutes}m/{task}")
 def get_task_info(freq_minutes: int, task: str):
