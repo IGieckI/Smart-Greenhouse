@@ -27,11 +27,17 @@ _KEY_MAP = {
 }
 
 def _normalize(raw: dict) -> dict:
+    """
+    Normalize the keys of the incoming telemetry payload to match the controller's expected format.
+    """
     return {_KEY_MAP.get(k, k): v for k, v in raw.items()}
 
 _subscribed_stars = set()
 
 def on_connect(client, userdata, flags, rc):
+    """
+    Callback for MQTT connection. Subscribes to the telemetry topic.
+    """
     if rc == 0:
         logger.info(f"Connected to MQTT broker at {BROKER}, subscribing to '{TOPIC}'")
         client.subscribe(TOPIC)
@@ -39,10 +45,16 @@ def on_connect(client, userdata, flags, rc):
         logger.error(f"MQTT connection refused, rc={rc}")
 
 def on_disconnect(client, userdata, rc):
+    """
+    Callback for MQTT disconnection. Logs the event and attempts to reconnect.
+    """
     if rc != 0:
         logger.warning(f"Unexpected disconnect (rc={rc}), will auto-reconnect")
 
 def on_message(client, userdata, msg):
+    """
+    Callback for incoming MQTT messages. Processes the telemetry data and forwards it to the controller.
+    """
     if msg.topic.startswith("greenhouse/commands/"):
         client.publish("greenhouse/gateway/commands", msg.payload)
         logger.info(f"Forwarded command to Gateway: {msg.payload.decode()}")
