@@ -3,7 +3,7 @@ import logging
 from zoneinfo import ZoneInfo
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logger = logging.getLogger("AgriBot")
+logger = logging.getLogger("GJGreenHouse")
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 INFERENCE_URL = os.getenv("INFERENCE_URL", "http://ml-inference:8000")

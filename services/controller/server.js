@@ -123,13 +123,14 @@ const playBeeps = async (times) => {
 app.post('/api/data', async (req, res) => {
     let data = req.body;
 
-    console.log(data)
+    const timestamp = new Date().toISOString();
+
+    console.log(`[${timestamp}] Incoming data:`, data);
 
     if (!data.node_id) {
         return res.status(400).send({ error: "Missing node_id" });
     }
 
-    // Keep topology file up-to-date so commands can be routed to the right Star
     if (data.star_id) {
         const key = String(data.node_id);
         if (topology[key] !== String(data.star_id)) {
@@ -139,7 +140,6 @@ app.post('/api/data', async (req, res) => {
         }
     }
 
-    // Gestione File TXT per Temperatura Fogliare
     if ((data[LEAF_TEMP_LABEL] === undefined) || (data[LEAF_TEMP_LABEL] < 5.0)) {
         try {
             if (fs.existsSync(FALLBACK_FILE_PATH)) {
@@ -150,13 +150,11 @@ app.post('/api/data', async (req, res) => {
                     const tempVal = parseFloat(parts[0].replace(',', '.'));
                     const tempId = parts[1];
 
-                    // Reset counter if a new ID transition is detected in the fallback schema
                     if (currentFallbackId !== tempId) {
                         currentFallbackId = tempId;
                         fallbackUsageCount[tempId] = 0; 
                     }
 
-                    // Strict Usage Threshold Validation
                     if (fallbackUsageCount[tempId] < FALLBACK_THR) {
                         data[LEAF_TEMP_LABEL] = tempVal;
 
@@ -171,11 +169,10 @@ app.post('/api/data', async (req, res) => {
                         }
                     } else {
                         console.log(`[Controller] WARNING: ID '${tempId}' has been used ${FALLBACK_THR} times. Leaf data DISCARDED. Update the txt file!`);
-                        // CRITICAL EMERGENCY ALARM: 5 sequential notice alerts
                         playBeeps(5);
                     }
                 } else {
-                    console.error("[Controller] Invalid txt format. Use layout: 21.5/A");
+                    console.error("[Controller] leaf_temp will be undefined -> invalid txt format (Use layout: 21.5/A)");
                     data[LEAF_TEMP_LABEL] = undefined
                 }
             }
@@ -184,26 +181,22 @@ app.post('/api/data', async (req, res) => {
         }
     }
 
-    // Dynamic Database Pipeline Execution
     try {
         const point = new Point('sensor_measurements').tag('id_board', String(data.node_id));
-            
-        // Map available numerical fields dynamically from payload
+
         for (const field of NUMERIC_FIELDS) {
             if (data[field] !== undefined && !isNaN(data[field])) {
                 point.floatField(field, Number(data[field]));
             }
         }
 
-        console.log(point);
-
         writeApi.writePoint(point);
         await writeApi.flush(); 
 
-        console.log(`[Controller] Data successfully written to Influx for board: ${data.node_id}`);
+        console.log(`[Controller] - ${timestamp} - Data successfully written to Influx for board: ${data.node_id}`);
         res.status(200).send({ status: "success" });
     } catch (error) {
-        console.error("[Controller] Influx write error:", error);
+        console.error(`[Controller] - ${timestamp} - Influx write error:`, error);
         res.status(500).send({ error: "Database error" });
     }
 });

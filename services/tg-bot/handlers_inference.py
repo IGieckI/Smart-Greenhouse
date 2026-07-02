@@ -87,12 +87,10 @@ async def _send_prediction_results(update: Update, wait_msg, df_hist: pd.DataFra
     arima_series = {}
 
     if est_hist := leaf_data.get("historical", []):
-        series_temp["T1/T4 Est. History (Soft Sensor)"] = est_hist
-
-    future_vpd = vpd_data.get("forecast", [])
+        series_temp["Est. History (Soft Sensor)"] = est_hist
 
     proj_name = "What-If Projection" if is_whatif else ("Blended (Final)" if mode == "ensemble" else "Standard Prediction")
-
+    
     if mode == "ensemble":
         if p := leaf_data.get("forecast", []): series_temp[proj_name] = p
         if p := ens_details.get("forecast_env", []): series_temp["Environment (Env)"] = p
@@ -100,20 +98,40 @@ async def _send_prediction_results(update: Update, wait_msg, df_hist: pd.DataFra
     elif mode == "standard":
         if p := leaf_data.get("forecast", []): series_temp[proj_name] = p
 
-    if env_forecast := env_data.get("forecast", {}):
-        if air := env_forecast.get("air_temp", []): arima_series["Air Temp Forecast (°C)"] = air
-        if hum := env_forecast.get("humidity", []): arima_series["Humidity Forecast (%)"] = hum
 
+
+    if env_hist := env_data.get("historical", {}):
+        if air_h := env_hist.get("air_temp", []): arima_series["Air Temp History (°C)"] = air_h
+        if hum_h := env_hist.get("humidity", []): arima_series["Humidity History (%)"] = hum_h
+        
+    if env_forecast := env_data.get("forecast", {}):
+        if air_f := env_forecast.get("air_temp", []): arima_series["Air Temp Forecast (°C)"] = air_f
+        if hum_f := env_forecast.get("humidity", []): arima_series["Humidity Forecast (%)"] = hum_f
+
+    if leaf_h := leaf_data.get("historical", []): arima_series["Leaf Temp History (°C)"] = leaf_h
+    if leaf_f := leaf_data.get("forecast", []): arima_series["Leaf Temp Forecast (°C)"] = leaf_f
+
+
+
+
+    historical_vpd = vpd_data.get("historical", [])
+    future_vpd = vpd_data.get("forecast", [])
+
+
+    
     plots = []
     
-    hide_real = bool(series_temp.get("T1/T4 Est. History (Soft Sensor)"))
+    hide_real = bool(series_temp.get("Est. History (Soft Sensor)"))
     title_prefix = "What-If Simulation" if is_whatif else "Temp. Prediction"
-    
-    plots.append(InputMediaPhoto(media=create_series_plot(df_hist, series_temp, f"{title_prefix}: {task.upper()}", hide_real)))
-    if arima_series: plots.append(InputMediaPhoto(media=create_series_plot(pd.DataFrame(), arima_series, f"{title_prefix} Prophet Forecast")))
-    if future_vpd: plots.append(InputMediaPhoto(media=create_vpd_plot(df_hist, future_vpd)))
 
+    plots.append(InputMediaPhoto(media=create_series_plot(df_hist, series_temp, f"{title_prefix}: {task.upper()}", hide_real_history = hide_real)))
     
+    if arima_series:
+        plots.append(InputMediaPhoto(media=create_series_plot(pd.DataFrame(), arima_series, f"{title_prefix} Prophet Forecast", hide_real_history = True)))
+
+    if historical_vpd or future_vpd: 
+        plots.append(InputMediaPhoto(media=create_vpd_plot(df_hist, future_vpd, historical_vpd)))
+
     action_type = "What-If Simulation" if is_whatif else "ML Prediction"
     summary = (
         f"✅ **Request Completed**\n"
@@ -144,7 +162,6 @@ async def _send_prediction_results(update: Update, wait_msg, df_hist: pd.DataFra
     await wait_msg.delete()
 
 
-
 async def _process_prediction(update: Update, mode: str, task_or_group: str, board_id: str, wait_message, freq_min: int = 6):
     endpoint = f"{INFERENCE_URL}/predict/{freq_min}m/{mode}/{task_or_group}/latest?board_id={board_id}"
     data = await fetch_api(endpoint)
@@ -154,55 +171,7 @@ async def _process_prediction(update: Update, mode: str, task_or_group: str, boa
         return
 
     df_hist = await asyncio.to_thread(fetch_history_data, board_id, 3)
-    
-    leaf_data = data.get("leaf_temperature", {})
-    env_data = data.get("environmental_data", {})
-    vpd_data = data.get("vpd", {})
-    ens_details = data.get("ensemble_details", {})
-    
-    series_temp = {}
-    arima_series = {}
-    
-    
-    if est_hist := leaf_data.get("historical", []): 
-        series_temp["T1/T4 Est. History (Soft Sensor)"] = est_hist
-        
-    future_vpd = vpd_data.get("forecast", [])
-    
-    if mode == "ensemble":
-        if p := leaf_data.get("forecast", []): 
-            series_temp["Blended (Final)"] = p
-        if p := ens_details.get("forecast_env", []): 
-            series_temp["Environment (Env)"] = p
-        if p := ens_details.get("forecast_auto", []): 
-            series_temp["Autoregressive (Auto)"] = p
-        
-    elif mode == "standard":
-        if p := leaf_data.get("forecast", []): 
-            series_temp["Standard Prediction"] = p
-
-    if env_forecast := env_data.get("forecast", {}):
-        if air := env_forecast.get("air_temp", []): arima_series["Air Temp Forecast (°C)"] = air
-        if hum := env_forecast.get("humidity", []): arima_series["Humidity Forecast (%)"] = hum
-
-    plots = []
-    hide_real = bool(series_temp.get("T1/T4 Est. History (Soft Sensor)"))
-    plots.append(InputMediaPhoto(media=create_series_plot(df_hist, series_temp, f"Temp. Prediction: {task_or_group.upper()}", hide_real)))
-    
-    if arima_series: plots.append(InputMediaPhoto(media=create_series_plot(pd.DataFrame(), arima_series, "Prophet Environment Forecast")))
-    plots.append(InputMediaPhoto(media=create_vpd_plot(df_hist, future_vpd)))
-
-    summary = (
-        f"✅ **Request Completed**\n"
-        f"**Action:** ML Prediction ({mode.capitalize()})\n"
-        f"**Target:** {REVERSE_BOARD_MAP[board_id]}\n"
-        f"**Task/Group:** {task_or_group.upper()}\n"
-    )
-
-    await update.get_bot().send_media_group(chat_id=wait_message.chat_id, media=plots)
-    await update.get_bot().send_message(chat_id=wait_message.chat_id, text=summary, parse_mode='Markdown')
-    await wait_message.delete()
-
+    await _send_prediction_results(update, wait_message, df_hist, data, mode, task_or_group, board_id, is_whatif=False)
 
 
 
@@ -310,43 +279,7 @@ async def process_whatif_values(update: Update, context: ContextTypes.DEFAULT_TY
         return ConversationHandler.END
 
     df_hist = await asyncio.to_thread(fetch_history_data, board_id, 3)
-    
-    leaf_data = data.get("leaf_temperature", {})
-    env_data = data.get("environmental_data", {})
-    vpd_data = data.get("vpd", {})
-    ens_details = data.get("ensemble_details", {})
-
-    series_temp, arima_series = {}, {}
-
-    if est_hist := leaf_data.get("historical", []): 
-        series_temp["T1/T4 Est. History (Soft Sensor)"] = est_hist
-
-    if mode == "ensemble":
-        if blended := leaf_data.get("forecast", []): series_temp["What-If Projection"] = blended
-    elif mode == "standard":
-        if raw_preds := leaf_data.get("forecast", []): series_temp["What-If Projection"] = raw_preds
-
-    if env_forecast := env_data.get("forecast", {}):
-        if air := env_forecast.get("air_temp", []): arima_series["Air Temp Forecast (°C)"] = air
-        if hum := env_forecast.get("humidity", []): arima_series["Humidity Forecast (%)"] = hum
-            
-    future_vpd = vpd_data.get("forecast", [])
-
-    plots = []
-    hide_real = bool(mode == "ensemble" and series_temp.get("T1/T4 Est. History (Soft Sensor)"))
-    plots.append(InputMediaPhoto(media=create_series_plot(df_hist, series_temp, f"What-If Simulation: {task.upper()}", hide_real)))
-    
-    if arima_series: plots.append(InputMediaPhoto(media=create_series_plot(pd.DataFrame(), arima_series, "What-If Prophet Forecast")))
-    if future_vpd: plots.append(InputMediaPhoto(media=create_vpd_plot(df_hist, future_vpd)))
-
-    target_series = series_temp.get("What-If Projection", [])
-    summary_lines = [f"🕒 {pd.to_datetime(p['timestamp']).astimezone(TZ_ROME).strftime('%H:%M')} ➔ **{p['value']:.2f}°C**" for i, p in enumerate(target_series) if (i+1) % 5 == 0]
-
-    caption = f"🧪 **Simulation Result ({mode.upper()} {task.upper()})**\n\n_Future snapshots (every 30m):_\n" + "\n".join(summary_lines)
-
-    await update.get_bot().send_media_group(chat_id=wait_msg.chat_id, media=plots)
-    await update.get_bot().send_message(chat_id=wait_msg.chat_id, text=caption, parse_mode='Markdown')
-    await wait_msg.delete()
+    await _send_prediction_results(update, wait_msg, df_hist, data, mode, task, board_id, is_whatif=True)
     return ConversationHandler.END
 
 

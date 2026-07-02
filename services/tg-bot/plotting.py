@@ -46,15 +46,19 @@ def create_series_plot(df_hist: pd.DataFrame, series_dict: dict, title: str, hid
         "T1/T4 Est. History (Soft Sensor)": {"color": "purple", "linewidth": 2.5, "linestyle": "-", "alpha": 0.8},
         "Standard Prediction": {"color": "red", "linewidth": 2.0, "linestyle": "--", "marker": "o", "markersize": 5},
         "What-If Projection": {"color": "orange", "linewidth": 2.0, "linestyle": "dashed", "marker": "o", "markersize": 5},
-        "Air Temp Forecast (°C)": {"color": "red", "linewidth": 1.5, "linestyle": ":", "marker": "."},
-        "Humidity Forecast (%)": {"color": "cyan", "linewidth": 1.5, "linestyle": ":", "marker": "."}
+
+        "Air Temp History (°C)": {"color": "red", "linewidth": 1.5, "linestyle": "-", "alpha": 0.6},
+        "Air Temp Forecast (°C)": {"color": "red", "linewidth": 1.5, "linestyle": "--", "marker": "."},
+        "Humidity History (%)": {"color": "cyan", "linewidth": 1.5, "linestyle": "-", "alpha": 0.6},
+        "Humidity Forecast (%)": {"color": "cyan", "linewidth": 1.5, "linestyle": "--", "marker": "."},
+        "Leaf Temp History (°C)": {"color": "green", "linewidth": 1.5, "linestyle": "-", "alpha": 0.8},
+        "Leaf Temp Forecast (°C)": {"color": "green", "linewidth": 2.0, "linestyle": "--", "marker": "*"}
     }
 
     for label, data in series_dict.items():
         if not data: continue
         times = [pd.to_datetime(d['timestamp']).astimezone(TZ_ROME) for d in data]
         vals = [d['value'] for d in data]
-        
         
         if "History" not in label and "Forecast" not in label and last_val is not None:
             times = [last_time] + times
@@ -68,16 +72,24 @@ def create_series_plot(df_hist: pd.DataFrame, series_dict: dict, title: str, hid
 
 
 
-def create_vpd_plot(df_hist: pd.DataFrame, future_vpd: list = None) -> io.BytesIO:
+def create_vpd_plot(df_hist: pd.DataFrame, future_vpd: list = None, historical_vpd: list = None) -> io.BytesIO:
     plt.figure(figsize=(10, 5))
     last_time = pd.Timestamp.now(tz=TZ_ROME)
     last_val = None
     has_data = False
     
-    if not df_hist.empty and 'vpd' in df_hist.columns:
+    if historical_vpd:
+        times = [pd.to_datetime(d['timestamp']).astimezone(TZ_ROME) for d in historical_vpd]
+        vals = [d['value'] for d in historical_vpd]
+        plt.plot(times, vals, label='Historical VPD (API)', color='magenta', linewidth=2)
+        if times:
+            last_time = times[-1]
+            last_val = vals[-1]
+        has_data = True
+    elif not df_hist.empty and 'vpd' in df_hist.columns:
         df_plot = df_hist.dropna(subset=['vpd'])
         if not df_plot.empty:
-            plt.plot(df_plot.index, df_plot['vpd'], label='Historical VPD', color='magenta', linewidth=2)
+            plt.plot(df_plot.index, df_plot['vpd'], label='Historical VPD (Sensor)', color='magenta', linewidth=2)
             last_time = df_plot.index[-1]
             last_val = df_plot['vpd'].iloc[-1]
             has_data = True

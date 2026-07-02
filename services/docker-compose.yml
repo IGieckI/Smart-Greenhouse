@@ -10,7 +10,8 @@ services:
       - DOCKER_INFLUXDB_INIT_USERNAME=${INFLUX_USER:-adminadmin}
       - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUX_PASSWORD:-adminadmin}
       - DOCKER_INFLUXDB_INIT_ORG=${INFLUX_ORG}
-      - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUX_BUCKET}
+      - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUX_BUCKET_RAW}
+      - DOCKER_INFLUXDB_CAVEAUX_BUCKET=${INFLUX_BUCKET_CAVEAUX}
       - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUX_TOKEN}
     volumes:
       - influxdb-data:/var/lib/influxdb2
@@ -28,7 +29,7 @@ services:
       # QUESTE SONO FONDAMENTALI PER IL DATASOURCE.YML
       - INFLUX_TOKEN=${INFLUX_TOKEN}
       - INFLUX_ORG=${INFLUX_ORG}
-      - INFLUX_BUCKET=${INFLUX_BUCKET}
+      - INFLUX_BUCKET=${INFLUX_BUCKET_RAW}
     volumes:
       - grafana-data:/var/lib/grafana
       - ./grafana/exported_dashboards:/var/lib/grafana/dashboards/json:ro

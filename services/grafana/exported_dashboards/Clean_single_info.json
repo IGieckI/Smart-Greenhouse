@@ -66,12 +66,11 @@
             }
           },
           "max": 35,
-          "min": 15,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "dark-blue",
                 "value": 0
               },
               {
@@ -143,12 +142,12 @@
         ]
       },
       "gridPos": {
-        "h": 13,
-        "w": 19,
+        "h": 11,
+        "w": 15,
         "x": 0,
         "y": 0
       },
-      "id": 1,
+      "id": 18,
       "options": {
         "annotations": {
           "clustering": -1,
@@ -173,11 +172,11 @@
             "type": "influxdb",
             "uid": "InfluxDB-IoT"
           },
-          "query": "from(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\")\n  |> filter(fn: (r) => contains(value: r[\"_field\"], set: [\"air_temp\", \"leaf_temp\", \"water_temp\"]))\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> filter(fn: (r) => r[\"id_board\"] == \"${id_board_var}\")\n  ",
+          "query": "// Finestra parametrizzabile definita a livello di dashboard (es. stringa \"5m\" o variabile numerica)\nwindow_set = ${window_minutes}m\n\nfrom(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\")\n  // Includiamo \"air_temp_pred\" insieme ai tre campi storici richiesti\n  |> filter(fn: (r) => contains(value: r[\"_field\"], set: [\"leaf_temp\", \"leaf_temp_pred\"]))\n  |> filter(fn: (r) => r[\"id_board\"] == \"${id_board_var}\")\n  // Finestra di aggregazione dinamica e parametrizzabile per ripulire il rumore\n  |> aggregateWindow(every: window_set, fn: mean, createEmpty: false)",
           "refId": "A"
         }
       ],
-      "title": "Temperatures",
+      "title": "Leaf temperature: forecast by different task models",
       "type": "timeseries"
     },
     {
@@ -188,57 +187,193 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
           },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "dashed+area"
+            }
+          },
+          "min": 10,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "dark-blue",
                 "value": 0
               },
               {
+                "color": "light-blue",
+                "value": 15
+              },
+              {
+                "color": "green",
+                "value": 20
+              },
+              {
+                "color": "semi-dark-orange",
+                "value": 28
+              },
+              {
                 "color": "red",
-                "value": 80
+                "value": 32
               }
             ]
           }
-        }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "air_temp_max"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "dark-red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "air_temp_min"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "semi-dark-red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "air_temp_pred_max"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "light-red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "air_temp_pred_min"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "super-light-red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "leaf_temp_min"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "semi-dark-green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "leaf_temp_pred_max"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "light-green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "leaf_temp_pred_min"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "super-light-green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
-        "h": 26,
-        "w": 5,
-        "x": 19,
+        "h": 11,
+        "w": 9,
+        "x": 15,
         "y": 0
       },
-      "id": 6,
+      "id": 15,
       "options": {
-        "barShape": "flat",
-        "barWidthFactor": 0.31,
-        "effects": {
-          "barGlow": false,
-          "centerGlow": false,
-          "gradient": false
+        "barRadius": 0,
+        "barWidth": 0.9,
+        "fullHighlight": false,
+        "groupWidth": 0.75,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
         },
-        "endpointMarker": "point",
-        "minVizHeight": 75,
-        "minVizWidth": 75,
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
+        "orientation": "vertical",
+        "showValue": "auto",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
         },
-        "segmentCount": 100,
-        "segmentSpacing": 0.38,
-        "shape": "gauge",
-        "showThresholdLabels": true,
-        "showThresholdMarkers": true,
-        "sizing": "auto",
-        "sparkline": true,
-        "textMode": "value_and_name"
+        "xField": "_time",
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
       },
       "pluginVersion": "13.0.2",
       "targets": [
@@ -247,13 +382,12 @@
             "type": "influxdb",
             "uid": "InfluxDB-IoT"
           },
-          "query": "from(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\")\n  |> filter(fn: (r) => contains(value: r[\"_field\"], set: [\"air_temp\", \"leaf_temp\", \"water_temp\"]))\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> filter(fn: (r) => r[\"id_board\"] == \"${id_board_var}\")\n  //|> yield()\n\n  //|> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  //|> filter(fn: (r) => r[\"id_board\"] == \"${id_board_var}\")\n  //|> yield(name: \"mean\")",
+          "query": "base_data = from(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\" and r[\"id_board\"] == \"${id_board_var}\")\n  |> filter(fn: (r) => contains(value: r[\"_field\"], set: [\"air_temp\", \"air_temp_pred\", \"leaf_temp\", \"leaf_temp_pred\"]))\n  |> group(columns: [\"_measurement\", \"_field\", \"id_board\"])\n  |> aggregateWindow(every: 15m, fn: mean, createEmpty: false)\n\n// 2. MASSIMI GIORNALIERI\ndata_max = base_data\n  |> aggregateWindow(every: 1d, fn: max, createEmpty: false)\n  |> map(fn: (r) => ({ r with _field: r._field + \"_max\" }))\n\n// 3. MINIMI GIORNALIERI\ndata_min = base_data\n  |> aggregateWindow(every: 1d, fn: min, createEmpty: false)\n  |> map(fn: (r) => ({ r with _field: r._field + \"_min\" }))\n\n// 4. UNIONE, PIVOT E TIMELINE (Ultimi 3 Giorni)\nunion(tables: [data_max, data_min])\n  |> pivot(rowKey:[\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> sort(columns: [\"_time\"], desc: true)\n  |> limit(n: 3)\n  |> sort(columns: [\"_time\"], desc: false)\n  |> drop(columns: [\"_start\", \"_stop\", \"_measurement\", \"id_board\"])",
           "refId": "A"
         }
       ],
-      "title": "New panel",
-      "transparent": true,
-      "type": "gauge"
+      "title": "Daily min/max on main temperature",
+      "type": "barchart"
     },
     {
       "datasource": {
@@ -372,14 +506,89 @@
                 }
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "air_temp 3750846324"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "dark-red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "air_temp_pred 3750846324"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "light-red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "leaf_temp_pred 3750846324"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "light-green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "leaf_temp 3750846324"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "dark-green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "water_temp 3750846324"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "dark-blue",
+                  "mode": "fixed"
+                }
+              }
+            ]
           }
         ]
       },
       "gridPos": {
-        "h": 13,
-        "w": 19,
+        "h": 10,
+        "w": 24,
         "x": 0,
-        "y": 13
+        "y": 11
       },
       "id": 10,
       "options": {
@@ -406,11 +615,11 @@
             "type": "influxdb",
             "uid": "InfluxDB-IoT"
           },
-          "query": "// Finestra parametrizzabile definita a livello di dashboard (es. stringa \"5m\" o variabile numerica)\nwindow_set = ${window_minutes}m\n\nfrom(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\")\n  // Includiamo \"air_temp_pred\" insieme ai tre campi storici richiesti\n  |> filter(fn: (r) => contains(value: r[\"_field\"], set: [\"air_temp\", \"leaf_temp\", \"water_temp\", \"air_temp_pred\"]))\n  |> filter(fn: (r) => r[\"id_board\"] == \"${id_board_var}\")\n  // Finestra di aggregazione dinamica e parametrizzabile per ripulire il rumore\n  |> aggregateWindow(every: window_set, fn: mean, createEmpty: false)",
+          "query": "// Finestra parametrizzabile definita a livello di dashboard\nwindow_set = ${window_minutes}m\n\nfrom(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\")\n  |> filter(fn: (r) => contains(value: r[\"_field\"], set: [\"air_temp\", \"leaf_temp\", \"water_temp\", \"air_temp_pred\", \"leaf_temp_pred\"]))\n  |> filter(fn: (r) => r[\"id_board\"] == \"${id_board_var}\")\n  \n  // 1. Rimuoviamo i tag \"model_source\" e \"freq\" dalle chiavi di raggruppamento.\n  // In questo modo i dati di tutti i modelli per \"air_temp_pred\" finiscono nello stesso \"calderone\".\n  |> group(columns: [\"_measurement\", \"_field\", \"id_board\"])\n  \n  // 2. Finestra di aggregazione dinamica. \n  // Poiché i dati dei vari modelli sono ora raggruppati insieme, la funzione \"mean\" \n  // calcolerà la media esatta tra tutti i modelli e i punti temporali che cadono in quella finestra.\n  |> aggregateWindow(every: window_set, fn: mean, createEmpty: false)",
           "refId": "A"
         }
       ],
-      "title": "Temperaturese",
+      "title": "Temperatures: air, water, forecasted air",
       "type": "timeseries"
     },
     {
@@ -509,7 +718,7 @@
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "red",
+                  "fixedColor": "semi-dark-red",
                   "mode": "fixed"
                 }
               }
@@ -529,153 +738,11 @@
                 }
               }
             ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 13,
-        "w": 19,
-        "x": 0,
-        "y": 26
-      },
-      "id": 9,
-      "options": {
-        "annotations": {
-          "clustering": -1,
-          "multiLane": false
-        },
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "pluginVersion": "13.0.2",
-      "targets": [
-        {
-          "datasource": {
-            "type": "influxdb",
-            "uid": "InfluxDB-IoT"
-          },
-          "query": "import \"math\"\n\nfrom(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\")\n  // Filtriamo per i tre campi necessari\n  |> filter(fn: (r) => r[\"_field\"] == \"air_temp\" or r[\"_field\"] == \"leaf_temp\" or r[\"_field\"] == \"humidity\")\n  |> filter(fn: (r) => r[\"id_board\"] == \"${id_board_var}\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  // Allineiamo i dati in base al tempo per avere i campi come colonne\n  |> pivot(rowKey:[\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  // Ignoriamo le righe in cui manca uno dei valori fondamentali per evitare errori matematici\n  |> filter(fn: (r) => exists r.air_temp and exists r.leaf_temp and exists r.humidity)\n  |> map(fn: (r) => {\n      // 1. Calcolo Pressione di Vapore Satura (SVP) in kPa\n      svp_air = 0.61078 * math.exp(x: (17.27 * r.air_temp) / (r.air_temp + 237.3))\n      svp_leaf = 0.61078 * math.exp(x: (17.27 * r.leaf_temp) / (r.leaf_temp + 237.3))\n      \n      // 2. Calcolo Pressione di Vapore Attuale (AVP) dell'aria in base all'umidità relativa\n      avp = svp_air * (r.humidity / 100.0)\n      \n      // 3. Calcolo VPD (in kPa)\n      vpd_air = svp_air - avp\n      vpd_leaf = svp_leaf - avp\n      \n      return {\n          _time: r._time,\n          VPD_air: vpd_air,\n          VPD_leaf: vpd_leaf\n      }\n  })",
-          "refId": "A"
-        }
-      ],
-      "title": "VPD",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "influxdb",
-        "uid": "InfluxDB-IoT"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": 1200000,
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 8,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "showValues": false,
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "area"
-            }
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": 0
-              },
-              {
-                "color": "yellow",
-                "value": 0.4
-              },
-              {
-                "color": "green",
-                "value": 0.7
-              },
-              {
-                "color": "#EF843C",
-                "value": 1.2
-              },
-              {
-                "color": "red",
-                "value": 1.6
-              }
-            ]
-          },
-          "unit": "none"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "leaf_temp 3750866944"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "semi-dark-green",
-                  "mode": "fixed"
-                }
-              }
-            ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "VPD_air"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "red",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "VPD_leaf"
+              "options": "VPD_leaf_pred"
             },
             "properties": [
               {
@@ -686,14 +753,29 @@
                 }
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "VPD_air_pred"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
           }
         ]
       },
       "gridPos": {
-        "h": 13,
-        "w": 19,
+        "h": 12,
+        "w": 24,
         "x": 0,
-        "y": 39
+        "y": 21
       },
       "id": 11,
       "options": {
@@ -720,7 +802,7 @@
             "type": "influxdb",
             "uid": "InfluxDB-IoT"
           },
-          "query": "import \"math\"\n\n// Recuperiamo il valore dal selettore della dashboard\nwindow_minutes_val = ${window_minutes}\nwindow_set = duration(v: string(v: window_minutes_val) + \"m\")\n\n// Funzione interna per la Pressione di Vapore Satura (SVP)\nsvp = (t) => 0.61078 * math.exp(x: (17.27 * t) / (t + 237.3))\n\nfrom(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\")\n  |> filter(fn: (r) => r[\"id_board\"] == \"${id_board_var}\")\n  |> filter(fn: (r) => \n      r[\"_field\"] == \"air_temp\" or \n      r[\"_field\"] == \"leaf_temp\" or \n      r[\"_field\"] == \"humidity\" or\n      r[\"_field\"] == \"air_temp_pred\" or\n      r[\"_field\"] == \"leaf_temp_pred\" or\n      r[\"_field\"] == \"humidity_pred\"\n  )\n  |> aggregateWindow(every: window_set, fn: mean, createEmpty: false)\n  |> pivot(rowKey:[\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => exists r.air_temp and exists r.humidity)\n  |> map(fn: (r) => {\n      \n      // --- DATI REALI ---\n      svp_air = svp(t: r.air_temp)\n      avp_air = svp_air * (r.humidity / 100.0)\n      v_air = svp_air - avp_air\n      \n      // FIX: Oltre a verificare che esista, scartiamo i codici di errore hardware (es. -127 o 0 anomali)\n      // Se la tua scheda invia esattamente 0.0 quando si rompe/scollega, cambia > -20.0 con > 0.5\n      has_leaf = if exists r.leaf_temp then r.leaf_temp > -20.0 else false\n      v_leaf = if has_leaf then svp(t: r.leaf_temp) - avp_air else float(v: \"NaN\")\n      \n      \n      // --- PREDIZIONI ---\n      // FIX: Nessun fallback sui dati reali. Se non abbiamo le predizioni salvate, le ignoriamo.\n      has_env_pred = exists r.air_temp_pred and exists r.humidity_pred\n      \n      svp_air_pred = if has_env_pred then svp(t: r.air_temp_pred) else float(v: \"NaN\")\n      avp_pred = if has_env_pred then svp_air_pred * (r.humidity_pred / 100.0) else float(v: \"NaN\")\n      \n      v_air_pred = if has_env_pred then svp_air_pred - avp_pred else float(v: \"NaN\")\n      \n      // Per avere il VPD fogliare predetto, ci servono sia le predizioni ambientali sia quelle fogliari\n      has_leaf_pred = exists r.leaf_temp_pred\n      v_leaf_pred = if has_env_pred and has_leaf_pred then \n                        svp(t: r.leaf_temp_pred) - avp_pred \n                    else \n                        float(v: \"NaN\")\n\n      return {\n          _time: r._time,\n          VPD_air: v_air,\n          VPD_leaf: v_leaf,\n          VPD_air_pred: v_air_pred,\n          VPD_leaf_pred: v_leaf_pred\n      }\n  })",
+          "query": "import \"math\"\n\nwindow_minutes_val = ${window_minutes}\nwindow_set = duration(v: string(v: window_minutes_val) + \"m\")\n\nsvp = (t) => 0.61078 * math.exp(x: (17.27 * t) / (t + 237.3))\n\nfrom(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\")\n  |> filter(fn: (r) => r[\"id_board\"] == \"${id_board_var}\")\n  |> filter(fn: (r) => \n      r[\"_field\"] == \"air_temp\" or \n      r[\"_field\"] == \"leaf_temp\" or \n      r[\"_field\"] == \"humidity\" or\n      r[\"_field\"] == \"air_temp_pred\" or\n      r[\"_field\"] == \"leaf_temp_pred\" or\n      r[\"_field\"] == \"humidity_pred\"\n  )\n  \n  |> group(columns: [\"_measurement\", \"id_board\", \"_field\"])\n  |> aggregateWindow(every: window_set, fn: mean, createEmpty: false)\n  \n  |> group(columns: [\"_measurement\", \"id_board\"])\n  |> pivot(rowKey:[\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  \n  \n  |> map(fn: (r) => {\n      \n      has_real_env = exists r.air_temp and exists r.humidity\n      \n      svp_air = if has_real_env then svp(t: r.air_temp) else float(v: \"NaN\")\n      avp_air = if has_real_env then svp_air * (r.humidity / 100.0) else float(v: \"NaN\")\n      v_air   = if has_real_env then svp_air - avp_air else float(v: \"NaN\")\n      \n      has_leaf = if exists r.leaf_temp then r.leaf_temp > -20.0 else false\n      v_leaf   = if has_leaf and has_real_env then svp(t: r.leaf_temp) - avp_air else float(v: \"NaN\")\n      \n      \n      has_env_pred = exists r.air_temp_pred and exists r.humidity_pred\n      \n      svp_air_pred = if has_env_pred then svp(t: r.air_temp_pred) else float(v: \"NaN\")\n      avp_pred     = if has_env_pred then svp_air_pred * (r.humidity_pred / 100.0) else float(v: \"NaN\")\n      \n      v_air_pred   = if has_env_pred then svp_air_pred - avp_pred else float(v: \"NaN\")\n      \n      has_leaf_pred = exists r.leaf_temp_pred\n      v_leaf_pred   = if has_env_pred and has_leaf_pred then \n                        svp(t: r.leaf_temp_pred) - avp_pred \n                    else \n                        float(v: \"NaN\")\n\n      return {\n          _time: r._time,\n          VPD_air: v_air,\n          VPD_leaf: v_leaf,\n          VPD_air_pred: v_air_pred,\n          VPD_leaf_pred: v_leaf_pred\n      }\n  })",
           "refId": "A"
         }
       ],
@@ -768,29 +850,88 @@
               "mode": "none"
             },
             "thresholdsStyle": {
-              "mode": "off"
+              "mode": "area"
             }
           },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "super-light-purple",
                 "value": 0
               },
               {
-                "color": "red",
+                "color": "light-purple",
+                "value": 20
+              },
+              {
+                "color": "purple",
+                "value": 40
+              },
+              {
+                "color": "semi-dark-purple",
+                "value": 60
+              },
+              {
+                "color": "dark-purple",
                 "value": 80
               }
             ]
           }
-        }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "humidity 3750846324"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "dark-blue",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "humidity_pred 3750846324"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "soil_moisture 3750846324"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "semi-dark-green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
+        "h": 11,
+        "w": 16,
         "x": 0,
-        "y": 52
+        "y": 33
       },
       "id": 2,
       "options": {
@@ -817,7 +958,7 @@
             "type": "influxdb",
             "uid": "InfluxDB-IoT"
           },
-          "query": "from(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\")\n  |> filter(fn: (r) => r[\"_field\"] == \"humidity\" or r[\"_field\"] == \"soil_moisture\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> filter(fn: (r) => r[\"id_board\"] == \"${id_board_var}\")\n  |> yield(name: \"moisture_data\")",
+          "query": "from(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\")\n  |> filter(fn: (r) => r[\"id_board\"] == \"${id_board_var}\")\n  |> filter(fn: (r) => r[\"_field\"] == \"humidity\" or r[\"_field\"] == \"soil_moisture\" or r[\"_field\"] == \"humidity_pred\")\n  \n  \n  |> group(columns: [\"_measurement\", \"_field\", \"id_board\"])\n  \n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"moisture_data\")",
           "refId": "A"
         }
       ],
@@ -840,72 +981,140 @@
             "axisColorMode": "text",
             "axisLabel": "",
             "axisPlacement": "auto",
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 0,
+            "fillOpacity": 80,
             "gradientMode": "none",
             "hideFrom": {
               "legend": false,
               "tooltip": false,
               "viz": false
             },
-            "insertNulls": 1200000,
-            "lineInterpolation": "linear",
             "lineWidth": 1,
-            "pointSize": 5,
             "scaleDistribution": {
               "type": "linear"
             },
-            "showPoints": "auto",
-            "showValues": false,
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
             "thresholdsStyle": {
-              "mode": "off"
+              "mode": "dashed+area"
             }
           },
+          "min": 10,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "super-light-purple",
                 "value": 0
               },
               {
-                "color": "red",
+                "color": "light-purple",
+                "value": 20
+              },
+              {
+                "color": "purple",
+                "value": 40
+              },
+              {
+                "color": "semi-dark-purple",
+                "value": 60
+              },
+              {
+                "color": "dark-purple",
                 "value": 80
               }
             ]
           }
-        }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "humidity_max"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "dark-blue",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "humidity_min"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "semi-dark-blue",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "humidity_pred_max"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "light-blue",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "humidity_pred_min"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "super-light-blue",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 52
+        "h": 11,
+        "w": 8,
+        "x": 16,
+        "y": 33
       },
-      "id": 3,
+      "id": 17,
       "options": {
-        "annotations": {
-          "clustering": -1,
-          "multiLane": false
-        },
+        "barRadius": 0,
+        "barWidth": 0.9,
+        "fullHighlight": false,
+        "groupWidth": 0.51,
         "legend": {
           "calcs": [],
           "displayMode": "list",
           "placement": "bottom",
           "showLegend": true
         },
+        "orientation": "vertical",
+        "showValue": "auto",
+        "stacking": "none",
         "tooltip": {
           "hideZeros": false,
           "mode": "single",
           "sort": "none"
-        }
+        },
+        "xField": "_time",
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
       },
       "pluginVersion": "13.0.2",
       "targets": [
@@ -914,12 +1123,12 @@
             "type": "influxdb",
             "uid": "InfluxDB-IoT"
           },
-          "query": "from(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\")\n  |> filter(fn: (r) => r[\"_field\"] == \"light_lux\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> filter(fn: (r) => r[\"id_board\"] == \"${id_board_var}\")\n  |> yield(name: \"moisture_data\")",
+          "query": "base_data = from(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\" and r[\"id_board\"] == \"${id_board_var}\")\n  |> filter(fn: (r) => contains(value: r[\"_field\"], set: [\"humidity\", \"humidity_pred\"]))\n  |> group(columns: [\"_measurement\", \"_field\", \"id_board\"])\n  |> aggregateWindow(every: 15m, fn: mean, createEmpty: false)\n\n// 2. MASSIMI GIORNALIERI\ndata_max = base_data\n  |> aggregateWindow(every: 1d, fn: max, createEmpty: false)\n  |> map(fn: (r) => ({ r with _field: r._field + \"_max\" }))\n\n// 3. MINIMI GIORNALIERI\ndata_min = base_data\n  |> aggregateWindow(every: 1d, fn: min, createEmpty: false)\n  |> map(fn: (r) => ({ r with _field: r._field + \"_min\" }))\n\n// 4. UNIONE, PIVOT E TIMELINE (Ultimi 3 Giorni)\nunion(tables: [data_max, data_min])\n  |> pivot(rowKey:[\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> sort(columns: [\"_time\"], desc: true)\n  |> limit(n: 3)\n  |> sort(columns: [\"_time\"], desc: false)\n  |> drop(columns: [\"_start\", \"_stop\", \"_measurement\", \"id_board\"])",
           "refId": "A"
         }
       ],
-      "title": "Solar irradiation",
-      "type": "timeseries"
+      "title": "Daily min/max on main temperature",
+      "type": "barchart"
     },
     {
       "datasource": {
@@ -978,13 +1187,30 @@
               }
             ]
           }
-        }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pressure 3750846324"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "super-light-yellow",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
-        "h": 8,
+        "h": 16,
         "w": 12,
         "x": 0,
-        "y": 60
+        "y": 44
       },
       "id": 4,
       "options": {
@@ -1059,29 +1285,74 @@
               "mode": "none"
             },
             "thresholdsStyle": {
-              "mode": "off"
+              "mode": "area"
             }
           },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "super-light-purple",
                 "value": 0
               },
               {
-                "color": "red",
-                "value": 80
+                "color": "purple",
+                "value": 100
+              },
+              {
+                "color": "dark-purple",
+                "value": 300
               }
             ]
           }
-        }
+        },
+        "overrides": [
+          {
+            "__systemRef": "hideSeriesFrom",
+            "matcher": {
+              "id": "byNames",
+              "options": {
+                "mode": "exclude",
+                "names": [
+                  "tds 3750846324"
+                ],
+                "prefix": "All except:",
+                "readOnly": true
+              }
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "legend": false,
+                  "tooltip": true,
+                  "viz": true
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "tds 3750846324"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "super-light-yellow",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 60
+        "y": 44
       },
       "id": 5,
       "options": {
@@ -1113,6 +1384,120 @@
         }
       ],
       "title": "Tds",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "InfluxDB-IoT"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": 1200000,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "light_lux 3750846324"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "super-light-yellow",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 52
+      },
+      "id": 3,
+      "options": {
+        "annotations": {
+          "clustering": -1,
+          "multiLane": false
+        },
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "13.0.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "InfluxDB-IoT"
+          },
+          "query": "from(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\")\n  |> filter(fn: (r) => r[\"_field\"] == \"light_lux\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> filter(fn: (r) => r[\"id_board\"] == \"${id_board_var}\")\n  |> yield(name: \"moisture_data\")",
+          "refId": "A"
+        }
+      ],
+      "title": "Solar irradiation",
       "type": "timeseries"
     }
   ],
@@ -1214,5 +1599,5 @@
   "timezone": "browser",
   "title": "Clean single info",
   "uid": "aaaff2e",
-  "version": 13
+  "version": 33
 }
