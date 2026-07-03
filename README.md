@@ -173,7 +173,7 @@ These must match identically in the Gateway.
 
 ## 3. loraWANGateway
 
-An ESP32 (Heltec V3) that bridges LoRa ↔ MQTT. It forwards telemetry uplink (Star → MQTT) and relays actuation commands downlink (MQTT → Star via LoRa). When a command is received via MQTT, the Gateway TXs it once via LoRa and waits up to 500 ms for an ACK from the Star. If the Star ACKs, the ACK is forwarded to `greenhouse/acks` on the broker so the controller can stop retrying. If no ACK arrives, the controller retries (up to 3 attempts, 3 s apart).
+An ESP32 (Heltec V3) that bridges LoRa ↔ MQTT. It forwards telemetry uplink (Star → MQTT) and relays actuation commands downlink (MQTT → Star via LoRa). When a command is received via MQTT, the Gateway TXs it once via LoRa and then returns to continuous interrupt-driven receive, reacting whenever an ACK arrives from the Star rather than waiting on a fixed timeout. If the Star ACKs, the ACK is forwarded to `greenhouse/acks` on the broker so the controller can stop retrying. If no ACK arrives, the controller retries (up to 3 attempts, 3 s apart).
 
 ### Configuration
 

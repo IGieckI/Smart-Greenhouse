@@ -18,10 +18,7 @@ TIMEOUT_SECONDS = 180.0
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Must match TelemetryPacket.h (little-endian):
-# uint32 timestamp, uint32 node_id, float water_temp, float tds_value,
-# float soil_moisture, float light_lux, float air_temp, float humidity,
-# float pressure, float leaf_temp
+# Must match TelemetryPacket.h
 _STRUCT_FMT = '<IIffffffff'
 _STRUCT_SIZE = struct.calcsize(_STRUCT_FMT)
 
@@ -55,10 +52,11 @@ class TelemetryObserver:
     def _start_command_listener(self, star_id: str, loop: asyncio.AbstractEventLoop):
         """Subscribe to MQTT commands for this star, forward to the Star over CoAP, and ACK back."""
         async def _post_to_star(payload: bytes):
+            """
+            Forward the command payload to the Star's /command CoAP resource and publish an ACK to MQTT.
+            """
             try:
                 request = Message(code=POST, uri=f"{STAR_COAP_BASE}/command", payload=payload)
-                # aiocoap sends Confirmable requests by default, so delivery is
-                # retransmitted/acknowledged at the CoAP layer.
                 response = await asyncio.wait_for(self.context.request(request).response, timeout=5)
                 if response.code.is_successful():
                     nid = json.loads(payload).get("nid")
@@ -71,6 +69,9 @@ class TelemetryObserver:
                 logger.error(f"Failed to forward command to Star: {e}")
 
         def on_connect(client, userdata, flags, rc):
+            """
+            Callback for MQTT connection. Subscribes to the command topic for this star.
+            """
             if rc == 0:
                 client.subscribe(f"greenhouse/commands/{star_id}")
                 logger.info(f"MQTT subscribed to greenhouse/commands/{star_id}")
@@ -78,6 +79,9 @@ class TelemetryObserver:
                 logger.error(f"MQTT connect failed rc={rc}")
 
         def on_message(client, userdata, msg):
+            """
+            Callback for incoming MQTT messages. Forwards the payload to the Star over CoAP.
+            """
             asyncio.run_coroutine_threadsafe(_post_to_star(msg.payload), loop)
 
         self.mqtt_client = mqtt_paho.Client()
@@ -91,6 +95,9 @@ class TelemetryObserver:
             logger.error(f"Command listener could not connect to MQTT: {e}")
 
     async def _forward(self, payload: dict):
+        """
+        Forward the decoded telemetry payload to the controller via HTTP POST.
+        """
         try:
             async with self.http_session.post(CONTROLLER_URL, json=payload) as resp:
                 if resp.status == 200:
@@ -101,6 +108,9 @@ class TelemetryObserver:
             logger.error(f"Controller unreachable: {e}")
 
     def _parse(self, data: bytes):
+        """
+        Parse the incoming telemetry data and forward it to the controller.
+        """
         if not data:
             logger.debug("Empty keep-alive packet, ignoring")
             return
@@ -138,8 +148,10 @@ class TelemetryObserver:
         asyncio.create_task(self._forward(payload))
 
     async def start_observing(self):
+        """
+        Start observing the Star's telemetry resource over CoAP and forward data to the controller.
+        """
         self.context = await Context.create_client_context()
-        # aiohttp is still used to forward decoded telemetry to the controller.
         self.http_session = aiohttp.ClientSession()
 
         self.star_id = await fetch_star_id(self.context)
@@ -171,6 +183,9 @@ class TelemetryObserver:
                     observation.observation.cancel()
 
     async def shutdown(self):
+        """
+        Gracefully shutdown the observer, stopping CoAP observation, MQTT, and HTTP session.
+        """
         self.keep_running = False
         if self.mqtt_client:
             self.mqtt_client.loop_stop()

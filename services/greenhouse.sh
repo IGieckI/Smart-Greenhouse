@@ -16,16 +16,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # Helpers
-
 info()  { echo "[INFO]  $*"; }
 warn()  { echo "[WARN]  $*"; }
 die()   { echo "[ERROR] $*" >&2; exit 1; }
 
+# Check dependencies: Docker and docker compose v2
 check_deps() {
     command -v docker  >/dev/null 2>&1 || die "docker not found. Install Docker Desktop or Docker Engine."
     docker compose version >/dev/null 2>&1 || die "'docker compose' (v2) not found. Update Docker."
 }
 
+# Create .env from template if missing
 ensure_env() {
     if [[ ! -f .env ]]; then
         warn ".env not found — creating from template. Fill in TELEGRAM_TOKEN before running 'up'."
@@ -42,6 +43,7 @@ EOF
 
 # Commands
 
+# Setup: check dependencies and create .env if missing
 cmd_setup() {
     check_deps
     ensure_env
@@ -49,6 +51,7 @@ cmd_setup() {
     info "Next step: edit .env if you haven't, then run:  ./greenhouse.sh up"
 }
 
+# Start services based on profile
 cmd_up() {
     local profile="${1:-all}"
     check_deps
@@ -81,11 +84,13 @@ cmd_up() {
     info "  MQTT Broker     →  localhost:1883"
 }
 
+# Stop all services
 cmd_down() {
     info "Stopping all services..."
     $COMPOSE down
 }
 
+# Follow logs for all services or a specific one
 cmd_logs() {
     local svc="${1:-}"
     if [[ -n "$svc" ]]; then
@@ -95,6 +100,7 @@ cmd_logs() {
     fi
 }
 
+# Reset a single service: down + up with rebuild
 cmd_reset() {
     local svc="${1:-}"
     [[ -z "$svc" ]] && die "Specify a service name. Example: ./greenhouse.sh reset lw-client"
@@ -104,6 +110,7 @@ cmd_reset() {
     $COMPOSE logs -f "$svc"
 }
 
+# Send a command to a node via the controller API
 cmd_command() {
     local node_id="${1:-}"
     local actuator="${2:-}"
@@ -122,6 +129,7 @@ cmd_command() {
         | (command -v jq >/dev/null 2>&1 && jq || cat)
 }
 
+# Exchange: import a CSV dump and export a merged cumulative dump
 cmd_exchange() {
     local csv="${1:-}"
     [[ -z "$csv" ]] && die "Specify a CSV file. Example: ./greenhouse.sh exchange friend_dump.csv"
@@ -146,7 +154,6 @@ cmd_exchange() {
     info "Done. Merged dump saved to services/$dump"
 }
 
-# Dispatch
 
 CMD="${1:-help}"
 shift || true
