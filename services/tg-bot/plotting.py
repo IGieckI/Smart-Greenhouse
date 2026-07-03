@@ -78,6 +78,7 @@ def create_vpd_plot(df_hist: pd.DataFrame, future_vpd: list = None, historical_v
     last_val = None
     has_data = False
     
+    # 1. API Historical override (if provided dynamically by ML endpoints during predictions)
     if historical_vpd:
         times = [pd.to_datetime(d['timestamp']).astimezone(TZ_ROME) for d in historical_vpd]
         vals = [d['value'] for d in historical_vpd]
@@ -86,14 +87,35 @@ def create_vpd_plot(df_hist: pd.DataFrame, future_vpd: list = None, historical_v
             last_time = times[-1]
             last_val = vals[-1]
         has_data = True
-    elif not df_hist.empty and 'vpd' in df_hist.columns:
-        df_plot = df_hist.dropna(subset=['vpd'])
-        if not df_plot.empty:
-            plt.plot(df_plot.index, df_plot['vpd'], label='Historical VPD (Sensor)', color='magenta', linewidth=2)
+        
+    # 2. Sensor dataframe plots (Actuals & Past Predictions)
+    elif not df_hist.empty:
+        # Actuals
+        if 'vpd_air' in df_hist.columns and not df_hist['vpd_air'].dropna().empty:
+            df_plot = df_hist.dropna(subset=['vpd_air'])
+            plt.plot(df_plot.index, df_plot['vpd_air'], label='Actual VPD (Air)', color='blue', linewidth=1.5, linestyle='-.', alpha=0.6)
             last_time = df_plot.index[-1]
-            last_val = df_plot['vpd'].iloc[-1]
+            has_data = True
+            
+        if 'vpd_leaf' in df_hist.columns and not df_hist['vpd_leaf'].dropna().empty:
+            df_plot = df_hist.dropna(subset=['vpd_leaf'])
+            plt.plot(df_plot.index, df_plot['vpd_leaf'], label='Actual VPD (Leaf)', color='magenta', linewidth=2)
+            last_time = df_plot.index[-1]
+            last_val = df_plot['vpd_leaf'].iloc[-1]
             has_data = True
 
+        # Past Predictions (What the model *thought* it would be)
+        if 'vpd_air_pred' in df_hist.columns and not df_hist['vpd_air_pred'].dropna().empty:
+            df_plot = df_hist.dropna(subset=['vpd_air_pred'])
+            plt.plot(df_plot.index, df_plot['vpd_air_pred'], label='Predicted VPD (Air)', color='cyan', linewidth=1.5, linestyle='--')
+            has_data = True
+
+        if 'vpd_leaf_pred' in df_hist.columns and not df_hist['vpd_leaf_pred'].dropna().empty:
+            df_plot = df_hist.dropna(subset=['vpd_leaf_pred'])
+            plt.plot(df_plot.index, df_plot['vpd_leaf_pred'], label='Predicted VPD (Leaf)', color='orange', linewidth=1.5, linestyle='--')
+            has_data = True
+
+    # 3. Future Projections (What-If / Future Forecast)
     if future_vpd:
         times = [pd.to_datetime(d['timestamp']).astimezone(TZ_ROME) for d in future_vpd]
         vals = [d['value'] for d in future_vpd]
@@ -110,6 +132,7 @@ def create_vpd_plot(df_hist: pd.DataFrame, future_vpd: list = None, historical_v
 
     plt.axvline(x=last_time, color='red', linestyle=':', alpha=0.6, label='Now')
     return _finalize_and_save_plot("Vapor Pressure Deficit (VPD)", ylabel="VPD (kPa)")
+
 
 
 def create_semantic_category_plots(df_hist: pd.DataFrame) -> list[io.BytesIO]:

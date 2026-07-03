@@ -18,10 +18,11 @@ from config import (
 from utils import build_keyboard, fetch_api
 
 from handlers_inference import (
-    handle_history_menu, handle_predict_menu, 
-    start_whatif, choose_whatif_task, choose_whatif_board, whatif_ask_values, process_whatif_values, cancel_whatif
+    handle_predict_menu, start_whatif,
+    choose_whatif_task, choose_whatif_board, whatif_ask_values, process_whatif_values, cancel_whatif
 )
 from handlers_training import show_training_menu, handle_training_menu
+from handlers_history import handle_history_menu
 
 async def setup_commands(application: Application):
     await application.bot.set_my_commands([
