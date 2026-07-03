@@ -3,8 +3,8 @@ import pandas as pd
 from telegram import Update, InputMediaPhoto
 from telegram.ext import ContextTypes
 from utils import build_keyboard, check_spam_lock
-from data_fetcher import fetch_plot_data, fetch_available_boards # <--- Updated Import
-from plotting import create_semantic_category_plots
+from data_fetcher import fetch_history_with_preds, fetch_available_boards 
+from plotting import create_history_plots
 
 async def handle_history_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -24,19 +24,19 @@ async def handle_history_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
             hours, board_id = int(parts[1]), parts[2]
             await query.edit_message_text(f"📊 Generating charts for Unit ({board_id}) ({hours}h)...")
             
-            # Switch to the dedicated plotting fetcher
-            df_hist = await asyncio.to_thread(fetch_plot_data, board_id, hours, 3, 6)
+            # Use the dedicated history fetcher
+            df_hist = await asyncio.to_thread(fetch_history_with_preds, board_id, hours, 3, 6)
             
             if df_hist.empty:
                 await query.message.reply_text("⚠️ No data found in InfluxDB.")
                 return
             
-            # Added flush=True to force Docker to print this instantly
             print(df_hist.head(2), flush=True)
             print("\n\n\n", flush=True)
             print(df_hist.tail(2), flush=True)
                 
-            plots = create_semantic_category_plots(df_hist)
+            # Use the dedicated history plotter
+            plots = create_history_plots(df_hist)
             await update.get_bot().send_media_group(chat_id=query.message.chat_id, media=[InputMediaPhoto(media=b) for b in plots])
             
             summary = (

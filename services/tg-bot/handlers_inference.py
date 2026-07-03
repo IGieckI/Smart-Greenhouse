@@ -7,8 +7,6 @@ from utils import fetch_api, build_keyboard, check_spam_lock
 from data_fetcher import fetch_history_data, fetch_available_boards
 from plotting import create_series_plot, create_vpd_plot, create_semantic_category_plots
 
-from data_fetcher import fetch_plot_data, fetch_available_boards
-
 async def handle_predict_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
