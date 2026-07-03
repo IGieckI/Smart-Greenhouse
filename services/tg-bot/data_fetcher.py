@@ -47,3 +47,22 @@ def fetch_history_data(board_id: str, hours: int) -> pd.DataFrame:
     except Exception as e:
         logger.error(f"InfluxDB history fetch error: {e}")
         return pd.DataFrame()
+    
+
+def fetch_available_boards() -> list[str]:
+    """Dynamically queries InfluxDB for distinct id_board tags."""
+    client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
+    query = f'''
+        import "influxdata/influxdb/schema"
+        schema.tagValues(bucket: "{BUCKET}", tag: "id_board")
+    '''
+    try:
+        result = client.query_api().query(query)
+        boards = []
+        for table in result:
+            for record in table.records:
+                boards.append(record.get_value())
+        return sorted(boards)
+    except Exception as e:
+        logger.error(f"InfluxDB board fetch error: {e}")
+        return []

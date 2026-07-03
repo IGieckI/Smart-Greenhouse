@@ -236,6 +236,10 @@ app.post('/api/command', (req, res) => {
     res.status(200).send({ status: 'sent', star_id, node_id, topic: `greenhouse/commands/${star_id}` });
 });
 
+app.get('/api/topology', (req, res) => {
+    res.status(200).json(topology);
+});
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
     console.log(`Controller listening on port ${PORT}`);

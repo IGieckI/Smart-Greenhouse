@@ -5,8 +5,16 @@ from telegram.ext import (
     MessageHandler, filters, ContextTypes, ConversationHandler
 )
 
-from handlers_actuator import handle_actuator_routing
-from config import TOKEN, INFERENCE_URL, AWAIT_WHATIF_MODE, AWAIT_WHATIF_TASK, AWAIT_WHATIF_BOARD, AWAIT_WHATIF_VALUES, logger
+from handlers_actuator import (
+    handle_actuator_routing, ask_pump_value, ask_pump_duration, 
+    process_custom_pump, cancel_actuator
+)
+from config import (
+    TOKEN, INFERENCE_URL, AWAIT_WHATIF_MODE, AWAIT_WHATIF_TASK, 
+    AWAIT_WHATIF_BOARD, AWAIT_WHATIF_VALUES, AWAIT_PUMP_VALUE, 
+    AWAIT_PUMP_DURATION, logger
+)
+
 from utils import build_keyboard, fetch_api
 
 from handlers_inference import (
@@ -103,7 +111,18 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_history_menu, pattern="^hist_"))
     application.add_handler(CallbackQueryHandler(handle_predict_menu, pattern="^pred_"))
     application.add_handler(CallbackQueryHandler(handle_training_menu, pattern="^train_"))
-    application.add_handler(CallbackQueryHandler(handle_actuator_routing, pattern="^act_")) 
+    
+    actuator_conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(ask_pump_value, pattern='^act_custom_')],
+        states={
+            AWAIT_PUMP_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_pump_duration)],
+            AWAIT_PUMP_DURATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_custom_pump)]
+        },
+        fallbacks=[CommandHandler('cancel', cancel_actuator)]
+    )
+    application.add_handler(actuator_conv_handler)
+    
+    application.add_handler(CallbackQueryHandler(handle_actuator_routing, pattern="^act_(menu$|board_|cmd_)"))
 
     logger.info("GJGreenhousBot initialized and listening...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)

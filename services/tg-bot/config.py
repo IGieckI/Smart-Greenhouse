@@ -15,9 +15,8 @@ INFLUX_TOKEN = os.getenv("INFLUX_TOKEN")
 INFLUX_ORG = os.getenv("INFLUX_ORG", "iot_org")
 BUCKET = "sensor_data"
 
-BOARD_MAP = {"1": "3750846324", "2": "3750866944"}
-REVERSE_BOARD_MAP = {v: f"Board {k}" for k, v in BOARD_MAP.items()}
 TZ_ROME = ZoneInfo("Europe/Rome")
 
 
 AWAIT_WHATIF_MODE, AWAIT_WHATIF_TASK, AWAIT_WHATIF_BOARD, AWAIT_WHATIF_VALUES = range(4)
+AWAIT_PUMP_VALUE, AWAIT_PUMP_DURATION = range(4, 6)
