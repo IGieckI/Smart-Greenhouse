@@ -261,27 +261,36 @@ def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> d
         "RandomForest": {
             "model": Pipeline(scaler_only + [('regressor', RandomForestRegressor(random_state=42, n_jobs=1))]),
             "params": {
-                "regressor__n_estimators": [100, 300, 500], 
+                "regressor__n_estimators": [100, 300], 
                 "regressor__max_depth": [10, 20, None], 
-                "regressor__min_samples_split": [2, 5, 10]
+                "regressor__min_samples_split": [2, 5, 10],
+                "regressor__max_features": ["sqrt", 1.0]
             }
         },
         "LightGBM": {
             "model": Pipeline(scaler_only + [('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
             "params": {
-                "regressor__n_estimators": [100, 300, 500],
+                "regressor__n_estimators": [100, 300],
                 "regressor__learning_rate": [0.01, 0.05, 0.1],
-                "regressor__num_leaves": [31, 63, 127]
+                "regressor__num_leaves": [31, 63],
+                "regressor__subsample": [0.8, 1.0] 
             }
         },
         "SVR": {
             "model": Pipeline(scaler_only + [('regressor', SVR())]),
-            "params": {
-                "regressor__C": [0.1, 1.0, 10.0, 100.0], 
-                "regressor__gamma": ["scale", "auto", 0.1, 0.01], 
-                "regressor__kernel": ["linear", "rbf"],
-                "regressor__epsilon": [0.000001, 0.0001, 0.01, 1]
-            }
+            "params": [
+                {
+                    "regressor__kernel": ["linear"],
+                    "regressor__C": [0.1, 1.0, 10.0],
+                    "regressor__epsilon": [0.001, 0.01, 0.1]
+                },
+                {
+                    "regressor__kernel": ["rbf"],
+                    "regressor__C": [0.1, 1.0, 10.0],
+                    "regressor__gamma": ["scale", 0.1, 0.01], 
+                    "regressor__epsilon": [0.001, 0.01, 0.1]
+                }
+            ]
         },
     }
 

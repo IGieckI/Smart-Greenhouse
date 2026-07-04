@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 
-    
+
 RUN pip install --no-cache-dir pandas numpy cmdstanpy==1.2.0
 RUN install_cmdstan -d /opt/cmdstan --version 2.33.1
 ENV CMDSTAN=/opt/cmdstan/cmdstan-2.33.1
