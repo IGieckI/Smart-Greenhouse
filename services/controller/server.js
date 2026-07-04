@@ -26,11 +26,9 @@ const FALLBACK_THR = (SAMPLING_FREQ_MIN * ASSUMPTION_EQUALS + TOLERANCE);
 
 const NUMERIC_FIELDS = ["air_temp", "humidity", "pressure", "water_temp", "soil_moisture", "tds", "light_lux", LEAF_TEMP_LABEL];
 
-// Node-to-Star topology: { "<node_id>": "<star_id>" }, persisted across restarts
 const TOPOLOGY_FILE = './data/topology.json';
 let topology = {};
 
-// Load the node→star map from disk.
 function loadTopology() {
     try {
         topology = fs.existsSync(TOPOLOGY_FILE)
@@ -47,7 +45,6 @@ function saveTopology() {
     catch (e) { console.error('[Controller] Could not save topology file:', e.message); }
 }
 
-// MQTT client used to publish actuation commands and receive ACKs
 const mqttClient = mqtt.connect('mqtt://mosquitto:1883');
 mqttClient.on('connect', () => {
     console.log('[Controller] MQTT connected to mosquitto');
@@ -55,9 +52,7 @@ mqttClient.on('connect', () => {
 });
 mqttClient.on('error', (e) => console.error('[Controller] MQTT error:', e.message));
 
-// Pending commands awaiting ACK: node_id (string) → { star_id, payload, attempts, timer }
 const pendingCommands = {};
-// Command retry parameters
 const COMMAND_TIMEOUT_MS = 3000;
 const COMMAND_MAX_ATTEMPTS = 3;
 const MAX_COMMAND_DURATION_S = 300;
@@ -100,19 +95,13 @@ mqttClient.on('message', (topic, message) => {
     } catch (_) {}
 });
 
-// GLOBAL VARIABLES FOR MULTIPLE BOARDS
-// Maps specific combination of node and tempId to a count (e.g., "3750846324_A": 4)
 let fallbackUsageCount = {};
-// Maps specific node to its current fallback ID (e.g., "3750846324": "A")
 let currentFallbackIds = {};
 
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-/**
- * Emits N audio notifications spaced 400ms apart, useful to have a sonoric feedback
- * @param {number} times - Number of playback iterations
- */
+
 const playBeeps = async (times) => {
     for (let i = 0; i < times; i++) {
         await new Promise((resolve) => {
@@ -149,18 +138,15 @@ app.post('/api/data', async (req, res) => {
         }
     }
 
-    // MULTI-BOARD FALLBACK LOGIC
-    if ((data[LEAF_TEMP_LABEL] === undefined) || (data[LEAF_TEMP_LABEL] < 5.0)) {
+        if ((data[LEAF_TEMP_LABEL] === undefined) || (data[LEAF_TEMP_LABEL] < 5.0)) {
         try {
             if (fs.existsSync(FALLBACK_FILE_PATH)) {
                 const fileContent = fs.readFileSync(FALLBACK_FILE_PATH, 'utf8').trim(); 
-                // Split lines and ignore empty ones
-                const lines = fileContent.split(/\r?\n/).filter(line => line.trim() !== '');
+                                const lines = fileContent.split(/\r?\n/).filter(line => line.trim() !== '');
                 
                 let boardFallback = null;
                 
-                // Find the line that matches the current board ID
-                for (const line of lines) {
+                                for (const line of lines) {
                     const parts = line.split('/');
                     if (parts.length === 3 && parts[0] === String(data.node_id)) {
                         boardFallback = parts;
@@ -172,10 +158,8 @@ app.post('/api/data', async (req, res) => {
                     const nodeIdStr = String(data.node_id);
                     const tempVal = parseFloat(boardFallback[1].replace(',', '.'));
                     const tempId = boardFallback[2].trim();
-                    const usageKey = `${nodeIdStr}_${tempId}`; // Unique key per board + ID
-
-                    // Reset count if the ID for THIS board has changed
-                    if (currentFallbackIds[nodeIdStr] !== tempId) {
+                    const usageKey = `${nodeIdStr}_${tempId}`; 
+                                        if (currentFallbackIds[nodeIdStr] !== tempId) {
                         currentFallbackIds[nodeIdStr] = tempId;
                         fallbackUsageCount[usageKey] = 0; 
                     }
@@ -226,7 +210,7 @@ app.post('/api/data', async (req, res) => {
     }
 });
 
-// Send an actuation command to a Node.
+
 app.post('/api/command', (req, res) => {
     const { node_id, actuator, value, duration_s } = req.body;
 
@@ -255,7 +239,6 @@ app.post('/api/command', (req, res) => {
         dur
     });
 
-    // Cancel any in-flight command for this node before issuing a new one
     const key = String(node_id);
     if (pendingCommands[key]) clearTimeout(pendingCommands[key].timer);
     pendingCommands[key] = { star_id, payload, attempts: 1, timer: null };
