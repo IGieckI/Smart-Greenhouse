@@ -29,13 +29,19 @@ const NUMERIC_FIELDS = ["air_temp", "humidity", "pressure", "water_temp", "soil_
 // Node-to-Star topology: { "<node_id>": "<star_id>" }, persisted across restarts
 const TOPOLOGY_FILE = './data/topology.json';
 let topology = {};
-try {
-    if (fs.existsSync(TOPOLOGY_FILE)) {
-        topology = JSON.parse(fs.readFileSync(TOPOLOGY_FILE, 'utf8'));
+
+// Load the node→star map from disk.
+function loadTopology() {
+    try {
+        topology = fs.existsSync(TOPOLOGY_FILE)
+            ? JSON.parse(fs.readFileSync(TOPOLOGY_FILE, 'utf8'))
+            : {};
+    } catch (e) {
+        console.error('[Controller] Could not load topology file:', e.message);
     }
-} catch (e) {
-    console.error('[Controller] Could not load topology file:', e.message);
+    return topology;
 }
+loadTopology();
 function saveTopology() {
     try { fs.writeFileSync(TOPOLOGY_FILE, JSON.stringify(topology, null, 2)); }
     catch (e) { console.error('[Controller] Could not save topology file:', e.message); }
@@ -246,7 +252,7 @@ app.post('/api/command', (req, res) => {
 });
 
 app.get('/api/topology', (req, res) => {
-    res.status(200).json(topology);
+    res.status(200).json(loadTopology());
 });
 
 const PORT = process.env.PORT || 3001;
