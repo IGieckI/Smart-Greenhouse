@@ -234,10 +234,17 @@ app.post('/api/command', (req, res) => {
         dur = MAX_COMMAND_DURATION_S;
     }
 
+    let val = Number(value) || 0;
+    if (val < 0) val = 0;
+    if (val > 255) {
+        console.log(`[Controller] Value ${val} exceeds max, clamping to 255`);
+        val = 255;
+    }
+
     const payload = JSON.stringify({
         nid: Number(node_id),
         act: String(actuator),
-        val: Number(value),
+        val,
         dur
     });
 
