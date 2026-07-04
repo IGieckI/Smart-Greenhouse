@@ -123,7 +123,7 @@ cmd_command() {
     ./greenhouse.sh command 3750866944 led  75  30   # LED at 75% for 30s
     ./greenhouse.sh command 3750866944 pump 0   0    # pump off immediately"
     info "Sending command to node $node_id: $actuator=$value% for ${duration}s..."
-    curl -sf -X POST http://localhost:3001/api/command \
+    curl -s -X POST http://localhost:3001/api/command \
         -H "Content-Type: application/json" \
         -d "{\"node_id\":$node_id,\"actuator\":\"$actuator\",\"value\":$value,\"duration_s\":$duration}" \
         | (command -v jq >/dev/null 2>&1 && jq || cat)
@@ -165,7 +165,7 @@ case "$CMD" in
     logs)     cmd_logs  "${1:-}" ;;
     reset)    cmd_reset "${1:-}" ;;
     exchange) cmd_exchange "${1:-}" ;;
-    command)  cmd_command "${1:-}" "${2:-10}" "${3:-on}" ;;
+    command)  cmd_command "$@" ;;
     help|--help|-h)
         echo "Usage: ./greenhouse.sh <command> [options]"
         echo ""
