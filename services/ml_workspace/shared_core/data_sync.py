@@ -145,24 +145,40 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
         if buckets_api.find_bucket_by_name(BUCKET_CAVEAUX) is None:
             buckets_api.create_bucket(bucket_name=BUCKET_CAVEAUX, org=influx_org)
         
-        query_last = f'''
+        
+        query_last_pred = f'''
             from(bucket: "{bucket_clean}")
-            |> range(start: {BUCKET_CAVEAUX})
+            |> range(start: {SYNC_LOOKBACK_DAYS})
             |> filter(fn: (r) => r._measurement == "sensor_measurements")
-            |> filter(fn: (r) => r._field ~ /pred/)
+            |> filter(fn: (r) => r._field =~ /pred/)
             |> last()
             |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
         '''
-        last_time = None
+        last_pred_time = None
         try:
-            res = query_api.query_data_frame(query_last)
+            res = query_api.query_data_frame(query_last_pred)
             if isinstance(res, list) and len(res) > 0:
                 res = pd.concat(res, ignore_index=True)
             if res is not None and not res.empty and '_time' in res.columns:
-                last_time = res['_time'].max()
+                last_pred_time = res['_time'].max()
         except Exception:
             pass
 
+        if last_pred_time:
+            # Overlap slightly to ensure nothing is missed
+            overlap_time = last_pred_time - pd.Timedelta(minutes=60)
+            time_filter = f"|> range(start: {overlap_time.isoformat()})"
+        else:
+            time_filter = f'|> range(start: {INFERENCE_LOOKBACK_DAYS})'
+
+        query_caveaux = f'''
+            from(bucket: "{BUCKET_CAVEAUX}")
+            {time_filter}
+            |> filter(fn: (r) => r._measurement == "sensor_measurements")
+            |> filter(fn: (r) => r.freq == "{freq_minutes}m")
+            |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+        '''
+        
         if last_time:
             #ensure a bit of historicity usefull for cleaning procedures
             overlap_time = last_time - pd.Timedelta(minutes=60)
@@ -177,6 +193,7 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
             |> filter(fn: (r) => r.freq == "{freq_minutes}m")
             |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
         '''
+
         try:
             df_caveaux = query_api.query_data_frame(query_caveaux)
             if isinstance(df_caveaux, list) and len(df_caveaux) > 0:
@@ -184,6 +201,7 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
                 
             if df_caveaux is not None and not df_caveaux.empty:
                 cav_points = []
+                # Ensure _time is timezone aware or formatted correctly
                 for _, row in df_caveaux.iterrows():
                     p = Point("sensor_measurements") \
                         .tag("id_board", str(row.get('id_board', ''))) \
@@ -199,10 +217,11 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
                         p.field("humidity_pred", float(row['humidity_pred']))
                         
                     cav_points.append(p)
+                    
                 if cav_points:
                     write_api.write(bucket=bucket_clean, org=influx_org, record=cav_points)
                     print(f"[Sync {freq_minutes}m] Re-integrated {len(cav_points)} forecasting by caveaux into {bucket_clean}.")
             else:
-                print(f"[Sync {freq_minutes}m] No previous forecasting found in caveaux.")
+                print(f"[Sync {freq_minutes}m] No new forecasting found in caveaux.")
         except Exception as e:
             print(f"[Sync {freq_minutes}m] Error while attempting import from caveaux: {e}")
