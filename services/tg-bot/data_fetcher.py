@@ -58,17 +58,18 @@ def fetch_history_data(board_id: str, hours: int) -> pd.DataFrame:
         logger.error(f"InfluxDB history fetch error: {e}")
         return pd.DataFrame()
 
-def fetch_history_with_preds(board_id: str, hours_past: int, hours_future: int = 3, min_window: int = 6) -> pd.DataFrame:
-    """ Dedicated fetcher for History Plots. Grabs future data & aligns timestamps. """
-    client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
-    now = datetime.utcnow()
-    start_time = (now - timedelta(hours=hours_past)).strftime('%Y-%m-%dT%H:%M:%SZ')
-    stop_time = (now + timedelta(hours=hours_future)).strftime('%Y-%m-%dT%H:%M:%SZ')
-    
-    # Notice we drop the field filter entirely so nothing gets accidentally left behind
+def _fmt_influx_time(ts) -> str:
+    """ Format a datetime/Timestamp as an UTC string for Flux. """
+    ts = pd.Timestamp(ts)
+    if ts.tz is not None:
+        ts = ts.tz_convert('UTC').tz_localize(None)
+    return ts.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+def _query_history_window(client: InfluxDBClient, board_id: str, start, stop, min_window: int) -> pd.DataFrame:
+    """ Aggregated, pivoted history for a board over an explicit [start, stop] window. """
     query = f'''
         from(bucket: "{BUCKET}")
-          |> range(start: {start_time}, stop: {stop_time})
+          |> range(start: {_fmt_influx_time(start)}, stop: {_fmt_influx_time(stop)})
           |> filter(fn: (r) => r._measurement == "sensor_measurements")
           |> filter(fn: (r) => r.id_board == "{board_id}")
           |> group(columns: ["_measurement", "id_board", "_field"])
@@ -76,23 +77,73 @@ def fetch_history_with_preds(board_id: str, hours_past: int, hours_future: int =
           |> group(columns: ["_measurement", "id_board"])
           |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
     '''
+    df = client.query_api().query_data_frame(query)
+    if isinstance(df, list):
+        if not df:
+            return pd.DataFrame()
+        df = pd.concat(df, ignore_index=True)
+
+    if not df.empty:
+        df.set_index('_time', inplace=True)
+        df.sort_index(inplace=True)
+        if df.index.tz is None:
+            df.index = df.index.tz_localize('UTC')
+        df.index = df.index.tz_convert(TZ_ROME)
+        df = calculate_vpd(df)
+    return df
+
+def _latest_board_timestamp(client: InfluxDBClient, board_id: str, lookback_days: int = 180):
+    """ Most recent reading time for a board, or None if it has no data at all. """
+    query = f'''
+        from(bucket: "{BUCKET}")
+          |> range(start: -{lookback_days}d)
+          |> filter(fn: (r) => r._measurement == "sensor_measurements")
+          |> filter(fn: (r) => r.id_board == "{board_id}")
+          |> keep(columns: ["_time"])
+          |> max(column: "_time")
+    '''
+    df = client.query_api().query_data_frame(query)
+    if isinstance(df, list):
+        if not df:
+            return None
+        df = pd.concat(df, ignore_index=True)
+    if df.empty or '_time' not in df.columns:
+        return None
+    return pd.Timestamp(df['_time'].max())
+
+def fetch_history_with_preds(board_id: str, hours_past: int, hours_future: int = 3, min_window: int = 6) -> pd.DataFrame:
+    """ Dedicated fetcher for History Plots. Grabs future data & aligns timestamps.
+
+    Anchors the window to 'now'. If the board is lagging/offline and that window is
+    empty, falls back to the most recent `hours_past` of data that actually exists,
+    so a stale board still renders its latest history instead of reporting "no data".
+    """
+    client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
+    now = datetime.utcnow()
     try:
-        df = client.query_api().query_data_frame(query)
-        if isinstance(df, list):
-            if not df: return pd.DataFrame()
-            df = pd.concat(df, ignore_index=True)
-            
-        if not df.empty:
-            df.set_index('_time', inplace=True)
-            df.sort_index(inplace=True)
-            if df.index.tz is None:
-                df.index = df.index.tz_localize('UTC')
-            df.index = df.index.tz_convert(TZ_ROME)
-            df = calculate_vpd(df)
+        df = _query_history_window(
+            client, board_id,
+            now - timedelta(hours=hours_past),
+            now + timedelta(hours=hours_future),
+            min_window,
+        )
+        if df.empty:
+            latest = _latest_board_timestamp(client, board_id)
+            if latest is not None:
+                logger.info(f"Board {board_id} has no data in the last {hours_past}h; "
+                            f"falling back to latest available data at {latest}.")
+                df = _query_history_window(
+                    client, board_id,
+                    latest - timedelta(hours=hours_past),
+                    latest + timedelta(hours=hours_future),
+                    min_window,
+                )
         return df
     except Exception as e:
         logger.error(f"InfluxDB plot fetch error: {e}")
         return pd.DataFrame()
+    finally:
+        client.close()
 
 def fetch_available_boards() -> list[str]:
     client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
