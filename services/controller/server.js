@@ -100,15 +100,17 @@ mqttClient.on('message', (topic, message) => {
     } catch (_) {}
 });
 
-// Variabili globali per tracciare l'utilizzo degli ID
+// GLOBAL VARIABLES FOR MULTIPLE BOARDS
+// Maps specific combination of node and tempId to a count (e.g., "3750846324_A": 4)
 let fallbackUsageCount = {};
-let currentFallbackId = null;
+// Maps specific node to its current fallback ID (e.g., "3750846324": "A")
+let currentFallbackIds = {};
 
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * Emits N audio notifications spaced 400ms apart, usefull to have a sonoric feedback
+ * Emits N audio notifications spaced 400ms apart, useful to have a sonoric feedback
  * @param {number} times - Number of playback iterations
  */
 const playBeeps = async (times) => {
@@ -125,7 +127,6 @@ const playBeeps = async (times) => {
         await delay(400); 
     }
 };
-
 
 
 app.post('/api/data', async (req, res) => {
@@ -148,40 +149,56 @@ app.post('/api/data', async (req, res) => {
         }
     }
 
+    // MULTI-BOARD FALLBACK LOGIC
     if ((data[LEAF_TEMP_LABEL] === undefined) || (data[LEAF_TEMP_LABEL] < 5.0)) {
         try {
             if (fs.existsSync(FALLBACK_FILE_PATH)) {
                 const fileContent = fs.readFileSync(FALLBACK_FILE_PATH, 'utf8').trim(); 
-                const parts = fileContent.split('/');
+                // Split lines and ignore empty ones
+                const lines = fileContent.split(/\r?\n/).filter(line => line.trim() !== '');
                 
-                if (parts.length === 2) {
-                    const tempVal = parseFloat(parts[0].replace(',', '.'));
-                    const tempId = parts[1];
+                let boardFallback = null;
+                
+                // Find the line that matches the current board ID
+                for (const line of lines) {
+                    const parts = line.split('/');
+                    if (parts.length === 3 && parts[0] === String(data.node_id)) {
+                        boardFallback = parts;
+                        break;
+                    }
+                }
+                
+                if (boardFallback) {
+                    const nodeIdStr = String(data.node_id);
+                    const tempVal = parseFloat(boardFallback[1].replace(',', '.'));
+                    const tempId = boardFallback[2].trim();
+                    const usageKey = `${nodeIdStr}_${tempId}`; // Unique key per board + ID
 
-                    if (currentFallbackId !== tempId) {
-                        currentFallbackId = tempId;
-                        fallbackUsageCount[tempId] = 0; 
+                    // Reset count if the ID for THIS board has changed
+                    if (currentFallbackIds[nodeIdStr] !== tempId) {
+                        currentFallbackIds[nodeIdStr] = tempId;
+                        fallbackUsageCount[usageKey] = 0; 
                     }
 
-                    if (fallbackUsageCount[tempId] < FALLBACK_THR) {
+                    if (fallbackUsageCount[usageKey] < FALLBACK_THR) {
                         data[LEAF_TEMP_LABEL] = tempVal;
 
-                        const currentCount = fallbackUsageCount[tempId];
-                        fallbackUsageCount[tempId]++; 
+                        const currentCount = fallbackUsageCount[usageKey];
+                        fallbackUsageCount[usageKey]++; 
                         
-                        console.log(`[Controller] Leaf temp read: ${tempVal}°C (ID: ${tempId}, Usage: ${currentCount + 1}/${FALLBACK_THR})`);
+                        console.log(`[Controller] Leaf temp read: ${tempVal}°C for board ${nodeIdStr} (ID: ${tempId}, Usage: ${currentCount + 1}/${FALLBACK_THR})`);
                         
                         if (currentCount % SAMPLING_FREQ_MIN === 0) {
                             const numBeeps = (currentCount / SAMPLING_FREQ_MIN) + 1;
                             playBeeps(numBeeps);
                         }
                     } else {
-                        console.log(`[Controller] WARNING: ID '${tempId}' has been used ${FALLBACK_THR} times. Leaf data DISCARDED. Update the txt file!`);
+                        console.log(`[Controller] WARNING: ID '${tempId}' for board ${nodeIdStr} has been used ${FALLBACK_THR} times. Leaf data DISCARDED. Update the txt file!`);
                         playBeeps(5);
                     }
                 } else {
-                    console.error("[Controller] leaf_temp will be undefined -> invalid txt format (Use layout: 21.5/A)");
-                    data[LEAF_TEMP_LABEL] = undefined
+                    console.error(`[Controller] leaf_temp undefined -> No fallback entry found for board ${data.node_id} (Use layout: 3750846324/21.5/A)`);
+                    data[LEAF_TEMP_LABEL] = undefined;
                 }
             }
         } catch (error) {
@@ -210,8 +227,6 @@ app.post('/api/data', async (req, res) => {
 });
 
 // Send an actuation command to a Node.
-// The Star managing that node is looked up from the topology file.
-// Body: { node_id: number, actuator: string, value: number (0-255), duration_s: number }
 app.post('/api/command', (req, res) => {
     const { node_id, actuator, value, duration_s } = req.body;
 
