@@ -1,4 +1,3 @@
-import json
 import logging
 from telegram import Update, BotCommand
 from telegram.ext import (
@@ -20,7 +19,6 @@ from handlers_training import show_training_menu, handle_training_menu
 async def setup_commands(application: Application):
     await application.bot.set_my_commands([
         BotCommand("menu", "🎛 Open Control Panel"),
-        BotCommand("info", "📊 View ML Model Metrics (Usage: /info <freq> <task>)"),
         BotCommand("reload", "🔄 Reload API Models into RAM")
     ])
 
@@ -55,19 +53,6 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "menu_main":
         await show_main_menu(update, context)
 
-
-async def handle_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) != 2:
-        await update.message.reply_text("ℹ️ **Usage:** `/info [freq_minutes] [task]`\n_Example:_ `/info 6 t1`", parse_mode='Markdown')
-        return
-
-    freq, task = context.args[0], context.args[1].lower()
-    msg = await update.message.reply_text(f"🔍 Fetching metrics for **{freq}m {task.upper()}**...")
-    data = await fetch_api(f"{INFERENCE_URL}/info/{freq}m/{task}")
-    if data:
-        await msg.edit_text(f"📊 **Model Metrics ({freq}m {task.upper()}):**\n```json\n{json.dumps(data, indent=2)}\n```", parse_mode='Markdown')
-    else:
-        await msg.edit_text("⚠️ **Model info not found.** Check if the task/frequency exists.")
 
 async def handle_reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("🔄 Requesting API server to reload models into RAM...")
@@ -115,7 +100,6 @@ def main():
     
     
     application.add_handler(CommandHandler(["start", "menu"], show_main_menu))
-    application.add_handler(CommandHandler("info", handle_info_command))
     application.add_handler(CommandHandler("reload", handle_reload_command))
     
     
