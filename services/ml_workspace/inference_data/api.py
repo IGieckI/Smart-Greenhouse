@@ -241,18 +241,11 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
 
 def scheduled_inference_job():
     print("[Scheduler] Starting hourly automatic inference...")
-    for board in ACTIVE_BOARDS:
+    for t in TASKS:
         try:
-            _run_ensemble_inference(
-                freq_minutes=6, 
-                group="B", 
-                board_id=board, 
-                custom_data=None, 
-                use_real_leaf_temp=False, 
-                save_to_db=True
-            )
+            _run_standard_inference(freq_minutes=6, task=t, board_id=BOARD_324, custom_data=None, use_real_leaf_temp=False, save_to_db=True)
         except Exception as e:
-            print(f"[Scheduler] Error running inference on board {board}: {e}")
+            print(f"[Scheduler] Error running inference on task {t}: {e}")
 
 def load_assets():
     if not os.path.exists(BASE_MODEL_DIR): return

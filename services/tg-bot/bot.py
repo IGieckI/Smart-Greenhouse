@@ -11,9 +11,10 @@ from config import TOKEN, INFERENCE_URL, AWAIT_WHATIF_MODE, AWAIT_WHATIF_TASK, A
 from utils import build_keyboard, fetch_api
 
 from handlers_inference import (
-    handle_history_menu, handle_predict_menu, 
+    handle_predict_menu,
     start_whatif, choose_whatif_task, choose_whatif_board, whatif_ask_values, process_whatif_values, cancel_whatif
 )
+from handlers_history import handle_history_menu
 from handlers_training import show_training_menu, handle_training_menu
 
 async def setup_commands(application: Application):
@@ -152,7 +153,7 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_history_menu, pattern="^hist_"))
     application.add_handler(CallbackQueryHandler(handle_predict_menu, pattern="^pred_"))
     application.add_handler(CallbackQueryHandler(handle_training_menu, pattern="^train_"))
-    application.add_handler(CallbackQueryHandler(handle_actuator_routing, pattern="^act_"))
+    application.add_handler(CallbackQueryHandler(handle_actuator_routing, pattern="^act_(menu$|board_|cmd_)"))
 
     application.add_error_handler(error_handler)
 

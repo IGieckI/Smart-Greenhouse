@@ -1,6 +1,6 @@
 from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
-from config import CONTROLLER_URL, BOARD_MAP, AWAIT_ACT_CUSTOM, logger
+from config import CONTROLLER_URL, AWAIT_ACT_CUSTOM, logger
 from utils import build_keyboard, fetch_api
 
 
@@ -35,7 +35,9 @@ async def handle_actuator_routing(update: Update, context: ContextTypes.DEFAULT_
     data = query.data
 
     if data == "act_menu":
-        buttons = [[(f"🌿 Board {k}", f"act_board_{k}")] for k in BOARD_MAP.keys()]
+        topology = await fetch_api(f"{CONTROLLER_URL}/api/topology")
+        node_ids = sorted(list(topology.keys())) if topology else []
+        buttons = [[(f"Unit {i+1} ({n_id})", f"act_board_{n_id}")] for i, n_id in enumerate(node_ids)]
         await query.edit_message_text(
             "🚰 **Actuator Control**\nSelect the greenhouse (Board) to control:",
             reply_markup=build_keyboard(buttons, "menu_main"),
@@ -43,16 +45,14 @@ async def handle_actuator_routing(update: Update, context: ContextTypes.DEFAULT_
         )
 
     elif data.startswith("act_board_"):
-        board_key = data.split("_")[2]
-        node_id = BOARD_MAP[board_key]
+        node_id = data.split("_")[2]
 
         buttons = [
-            [("🟢 Turn On Pump (60s)", f"act_cmd_{node_id}_pump_255_60")],
-            [("🔴 Turn Off Pump", f"act_cmd_{node_id}_pump_0_0")],
+            [("🟢 Turn On Pump (10s)", f"act_cmd_{node_id}_pump_255_10")],
             [("✏️ Custom Command", f"act_custom_{node_id}")]
         ]
         await query.edit_message_text(
-            f"🎛 **Control Board {board_key}** (Node: `{node_id}`)\nChoose an action:",
+            f"🎛 **Control Unit** (Node: `{node_id}`)\nChoose an action:",
             reply_markup=build_keyboard(buttons, "act_menu"),
             parse_mode='Markdown'
         )

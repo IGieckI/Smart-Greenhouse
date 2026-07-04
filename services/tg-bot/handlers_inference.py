@@ -2,42 +2,10 @@ import asyncio
 import pandas as pd
 from telegram import Update, InputMediaPhoto
 from telegram.ext import ContextTypes, ConversationHandler
-from config import INFERENCE_URL, BOARD_MAP, REVERSE_BOARD_MAP, TZ_ROME, AWAIT_WHATIF_MODE, AWAIT_WHATIF_TASK, AWAIT_WHATIF_BOARD, AWAIT_WHATIF_VALUES, logger
+from config import INFERENCE_URL, TZ_ROME, AWAIT_WHATIF_MODE, AWAIT_WHATIF_TASK, AWAIT_WHATIF_BOARD, AWAIT_WHATIF_VALUES, logger
 from utils import fetch_api, build_keyboard, check_spam_lock
-from data_fetcher import fetch_history_data
+from data_fetcher import fetch_history_data, fetch_available_boards, fetch_history_with_preds
 from plotting import create_series_plot, create_vpd_plot, create_semantic_category_plots
-
-async def handle_history_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    parts = query.data.split("_")
-    if len(parts) == 2:
-        buttons = [[(f"🌿 Board {k} ({BOARD_MAP[k]})", f"hist_{parts[1]}_{k}")] for k in BOARD_MAP.keys()]
-        await query.edit_message_text("Select the greenhouse (Board):", reply_markup=build_keyboard(buttons, "menu_history"))
-    elif len(parts) == 3:
-        if await check_spam_lock(update, context): return
-        try:
-            hours, board_key = int(parts[1]), parts[2]
-            await query.edit_message_text(f"📊 Generating charts for Board {board_key} ({hours}h)...")
-            df_hist = await asyncio.to_thread(fetch_history_data, BOARD_MAP[board_key], hours)
-            if df_hist.empty:
-                await query.message.reply_text("⚠️ No data found in InfluxDB.")
-                return
-                
-            plots = create_semantic_category_plots(df_hist)
-            await update.get_bot().send_media_group(chat_id=query.message.chat_id, media=[InputMediaPhoto(media=b) for b in plots])
-            
-            summary = (
-                f"✅ **Request Completed**\n"
-                f"**Target:** {REVERSE_BOARD_MAP[BOARD_MAP[board_key]]}\n"
-                f"**Timeframe:** Past {hours} Hours"
-            )
-            await update.get_bot().send_message(chat_id=query.message.chat_id, text=summary, parse_mode='Markdown')
-            await query.message.delete()
-        finally:
-            context.user_data['is_processing'] = False
-
-
 
 async def handle_predict_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -63,17 +31,18 @@ async def handle_predict_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     elif data.startswith("pred_sel_"):
         mode = data.replace("pred_sel_", "")
-        buttons = [[(f"🌿 Board {k} ({BOARD_MAP[k]})", f"pred_go_{mode}_{k}")] for k in BOARD_MAP.keys()]
+        boards = await asyncio.to_thread(fetch_available_boards)
+        buttons = [[(f"Unit {i+1} ({b_id})", f"pred_go_{mode}_{b_id}")] for i, b_id in enumerate(boards)]
         await query.edit_message_text("Which greenhouse (Board)?", reply_markup=build_keyboard(buttons, "menu_predict"))
 
     elif data.startswith("pred_go_"):
         if await check_spam_lock(update, context): return
         try:
-            _, _, type_mod, param, board_key = data.split("_")
+            _, _, type_mod, param, board_id = data.split("_")
             mode = "ensemble" if type_mod == "ens" else "standard"
-            wait_msg = await query.message.reply_text(f"🔄 Starting {mode.upper()} engine ({param}) for Board {board_key}...")
+            wait_msg = await query.message.reply_text(f"🔄 Starting {mode.upper()} engine ({param}) for Unit ({board_id})...")
             await query.message.delete()
-            await _process_prediction(update, mode, param, BOARD_MAP[board_key], wait_msg)
+            await _process_prediction(update, mode, param, board_id, wait_msg)
         finally:
             context.user_data['is_processing'] = False
 
@@ -98,8 +67,6 @@ async def _send_prediction_results(update: Update, wait_msg, df_hist: pd.DataFra
     elif mode == "standard":
         if p := leaf_data.get("forecast", []): series_temp[proj_name] = p
 
-
-
     if env_hist := env_data.get("historical", {}):
         if air_h := env_hist.get("air_temp", []): arima_series["Air Temp History (°C)"] = air_h
         if hum_h := env_hist.get("humidity", []): arima_series["Humidity History (%)"] = hum_h
@@ -111,14 +78,9 @@ async def _send_prediction_results(update: Update, wait_msg, df_hist: pd.DataFra
     if leaf_h := leaf_data.get("historical", []): arima_series["Leaf Temp History (°C)"] = leaf_h
     if leaf_f := leaf_data.get("forecast", []): arima_series["Leaf Temp Forecast (°C)"] = leaf_f
 
-
-
-
     historical_vpd = vpd_data.get("historical", [])
     future_vpd = vpd_data.get("forecast", [])
 
-
-    
     plots = []
     
     hide_real = bool(series_temp.get("Est. History (Soft Sensor)"))
@@ -136,11 +98,10 @@ async def _send_prediction_results(update: Update, wait_msg, df_hist: pd.DataFra
     summary = (
         f"✅ **Request Completed**\n"
         f"**Action:** {action_type} ({mode.capitalize()})\n"
-        f"**Target:** {REVERSE_BOARD_MAP[board_id]}\n"
+        f"**Target:** Unit ({board_id})\n"
         f"**Task/Group:** {task.upper()}\n"
     )
 
-    
     weights = ens_details.get("weights", {})
     if mode == "ensemble" and weights:
         w_auto = weights.get("autoregressive", 0) * 100
@@ -151,16 +112,9 @@ async def _send_prediction_results(update: Update, wait_msg, df_hist: pd.DataFra
             f" • Environmental: {w_env:.1f}%\n"
         )
 
-    # # Aggiunta snapshot testuali per le proiezioni What-If
-    # if is_whatif:
-    #     target_series = series_temp.get(proj_name, [])
-    #     summary_lines = [f"🕒 {pd.to_datetime(p['timestamp']).astimezone(TZ_ROME).strftime('%H:%M')} ➔ **{p['value']:.2f}°C**" for i, p in enumerate(target_series) if (i+1) % 5 == 0]
-    #     summary += "\n_Future snapshots (every 30m):_\n" + "\n".join(summary_lines)
-
     await update.get_bot().send_media_group(chat_id=wait_msg.chat_id, media=plots)
     await update.get_bot().send_message(chat_id=wait_msg.chat_id, text=summary, parse_mode='Markdown')
     await wait_msg.delete()
-
 
 async def _process_prediction(update: Update, mode: str, task_or_group: str, board_id: str, wait_message, freq_min: int = 6):
     endpoint = f"{INFERENCE_URL}/predict/{freq_min}m/{mode}/{task_or_group}/latest?board_id={board_id}"
@@ -170,9 +124,8 @@ async def _process_prediction(update: Update, mode: str, task_or_group: str, boa
         await wait_message.edit_text("⚠️ **Timeout or Network Error from API Server.**")
         return
 
-    df_hist = await asyncio.to_thread(fetch_history_data, board_id, 3)
+    df_hist = await asyncio.to_thread(fetch_history_with_preds, board_id, 3, 3, 6)
     await _send_prediction_results(update, wait_message, df_hist, data, mode, task_or_group, board_id, is_whatif=False)
-
 
 
 async def start_whatif(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -185,9 +138,6 @@ async def start_whatif(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
     await query.edit_message_text("🧪 **What-If Simulation**\nSelect the engine type:", reply_markup=keyboard, parse_mode='Markdown')
     return AWAIT_WHATIF_MODE
-
-
-
 
 async def choose_whatif_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -217,8 +167,6 @@ async def choose_whatif_task(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.edit_message_text("Which configuration should we test?", reply_markup=keyboard)
     return AWAIT_WHATIF_TASK
 
-
-
 async def choose_whatif_board(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -227,11 +175,10 @@ async def choose_whatif_board(update: Update, context: ContextTypes.DEFAULT_TYPE
         return ConversationHandler.END
 
     context.user_data['wi_task'] = query.data.split("_")[2]
-    buttons = [[(f"🌿 Board {k}", f"whatif_board_{k}")] for k in BOARD_MAP.keys()]
+    boards = await asyncio.to_thread(fetch_available_boards)
+    buttons = [[(f"Unit {i+1} ({b_id})", f"whatif_board_{b_id}")] for i, b_id in enumerate(boards)]
     await query.edit_message_text("Select the greenhouse to apply the context to:", reply_markup=build_keyboard(buttons, "whatif_cancel"))
     return AWAIT_WHATIF_BOARD
-
-
 
 async def whatif_ask_values(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -240,11 +187,11 @@ async def whatif_ask_values(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ Simulation cancelled. Send /menu to restart.")
         return ConversationHandler.END
 
-    board_key = query.data.split("_")[2]
-    context.user_data['wi_board'] = BOARD_MAP[board_key]
+    board_id = query.data.split("_")[2]
+    context.user_data['wi_board'] = board_id
 
     text = (
-        f"✅ Context: **{context.user_data['wi_mode'].upper()} {context.user_data['wi_task'].upper()}** on **Board {board_key}**.\n\n"
+        f"✅ Context: **{context.user_data['wi_mode'].upper()} {context.user_data['wi_task'].upper()}** on **Unit ({board_id})**.\n\n"
         "Please provide the **7 values** (separated by spaces):\n"
         "`[Air Temp] [Humidity] [Pressure] [Water Temp] [TDS] [Soil Moisture] [Luminosity]`\n\n"
         "📝 _Example:_\n`25.5 60 1013 22.0 400 45 10000`\n"
@@ -252,8 +199,6 @@ async def whatif_ask_values(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await query.edit_message_text(text, parse_mode='Markdown')
     return AWAIT_WHATIF_VALUES
-
-
 
 async def process_whatif_values(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -284,14 +229,12 @@ async def process_whatif_values(update: Update, context: ContextTypes.DEFAULT_TY
             await wait_msg.edit_text("⚠️ **Timeout or Network Error from API Server.**")
             return ConversationHandler.END
 
-        df_hist = await asyncio.to_thread(fetch_history_data, board_id, 3)
+        df_hist = await asyncio.to_thread(fetch_history_with_preds, board_id, 3, 3, 6)
         await _send_prediction_results(update, wait_msg, df_hist, data, mode, task, board_id, is_whatif=True)
     except Exception as e:
         logger.error(f"What-If simulation failed: {e}")
         await wait_msg.edit_text("⚠️ Simulation failed while building the results. Send /menu to restart.")
     return ConversationHandler.END
-
-
 
 async def cancel_whatif(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Simulation cancelled. Send /menu to restart.")

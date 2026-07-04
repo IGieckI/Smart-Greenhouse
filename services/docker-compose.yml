@@ -166,6 +166,7 @@ services:
       - INFLUX_URL=http://influxdb:8086
       - INFLUX_TOKEN=${INFLUX_TOKEN}
       - INFLUX_ORG=${INFLUX_ORG}
+      - PYTHONUNBUFFERED=1
     depends_on:
       - ml-inference
 
