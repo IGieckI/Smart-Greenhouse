@@ -13,17 +13,21 @@ A distributed IoT system for monitoring greenhouse environments. Sensor nodes tr
                                        │
                                        └──CoAP /dump ─────────────────────────────────►[operatorTools]
 
-── Actuation (downlink) ──────────────────────────────────────────────────────────────────────────
-[services] ──MQTT──► [loraWANGateway] ──LoRa──► [greenhouseStar] ──ESP-NOW──► [Greenhouse Nodes]
+── Actuation (downlink, LoRa) ────────────────────────────────────────────────────────────────────
+[services] ──MQTT──► `lw-client` ──MQTT──► [loraWANGateway] ──LoRa──► [greenhouseStar] ──ESP-NOW──► [Greenhouse Nodes]
+
+── Actuation (downlink, CoAP shortcut) ───────────────────────────────────────────────────────────
+[services] ──MQTT──► `cw-client` ──CoAP /command──► [greenhouseStar] ──ESP-NOW──► [Greenhouse Nodes]
 ```
 
 **Telemetry paths (uplink):**
-1. **LoRa path** — Star → LoRaWAN Gateway → MQTT broker → `lw-client` → Controller → InfluxDB
-2. **CoAP path** — Star → `cw-client` (if laptop is on the Star's Wi-Fi AP) → Controller → InfluxDB
-3. **Offline path** — Star keeps a RAM ring buffer; operator downloads it via `operatorTools`
+1. **LoRa path**: Star → LoRaWAN Gateway → MQTT broker → `lw-client` → Controller → InfluxDB
+2. **CoAP path**: Star → `cw-client` (if laptop is on the Star's Wi-Fi AP) → Controller → InfluxDB
+3. **Offline path**: Star keeps a RAM ring buffer; operator downloads it via `operatorTools`
 
-**Actuation path (downlink):**
-4. **Command path** — Controller publishes to MQTT → Gateway TXs via LoRa → Star receives and queues → delivered to Node via ESP-NOW on next wakeup
+**Actuation paths (downlink):**
+4. **LoRa command path**: Controller publishes to `greenhouse/commands/<star_id>` on the MQTT broker → `lw-client` (subscribed to that per-star topic, learned from telemetry) republishes to the fixed `greenhouse/gateway/commands` topic → Gateway TXs via LoRa → Star receives and queues → delivered to Node via ESP-NOW on next wakeup
+5. **CoAP command path**: If `cw-client` is connected to the Star's Wi-Fi AP, it is also subscribed to the same MQTT command topics and POSTs the command straight to the Star's CoAP `/command` endpoint, bypassing LoRa/the Gateway entirely, then publishes the ACK back to `greenhouse/acks` itself
 
 ---
 
@@ -50,11 +54,11 @@ An ESP32 that reads sensors, applies a median filter over 5 samples, and transmi
 | DS18B20 | 1-Wire | Water temperature |
 | TDS (analog) | ADC1 CH0 (GPIO36) | Total dissolved solids |
 | Soil Moisture (analog) | ADC1 CH5 (GPIO33) | Capacitive sensor |
-| ADS1115 + thermocouple | I2C 0x48 | Leaf temperature — **optional** |
+| ADS1115 + thermocouple | I2C 0x48 | Leaf temperature (optional) |
 
 ### Configuration
 
-**`greenhouseNode/main/personal_config.hpp`** — edit before flashing:
+**`greenhouseNode/main/personal_config.hpp`**:
 
 ```cpp
 // Calibrate by measuring the ADC value when the sensor is dry and fully submerged
@@ -64,7 +68,7 @@ An ESP32 that reads sensors, applies a median filter over 5 samples, and transmi
 // DS18B20 data pin
 #define DS18B20_DATA_PIN  GPIO_NUM_32
 
-// Actuator pin assignments — one #define per actuator
+// Actuator pin assignments, one #define per actuator
 // Names must match ACTUATOR_TABLE in config.hpp (max 4 chars)
 #define PIN_PUMP   GPIO_NUM_2
 
@@ -72,14 +76,14 @@ An ESP32 that reads sensors, applies a median filter over 5 samples, and transmi
 // Comment this out if you don't have the ADS1115 wired up
 #define ADS1115_ADDR  0x48
 
-// MAC address of the Star node — read from Star's serial log at boot
+// MAC address of the Star node, read from Star's serial log at boot
 static uint8_t central_mac[6] = {0x3C, 0x0F, 0x02, 0xEB, 0x8A, 0x5C};
 ```
 
 > **How to find the Star's MAC:** Flash the Star first, open its serial monitor, and look for the line:
 > `MAC Address (Wi-Fi STA): XX:XX:XX:XX:XX:XX`
 
-**`greenhouseNode/main/config.hpp`** — timing (change if needed):
+**`greenhouseNode/main/config.hpp`**:
 
 ```cpp
 #define NUM_SAMPLES      5      // median filter samples
@@ -107,21 +111,25 @@ The central ESP32 hub. Receives packets from all Nodes via ESP-NOW, then:
 - Maintains an in-RAM **ring buffer** downloadable over CoAP
 - Displays live data on the **OLED** (Heltec boards only)
 
-> **`star_id`** is derived from the last 4 bytes of the Star's Wi-Fi STA MAC address (same formula as `node_id` on Nodes). It is printed at boot: `Star ID: XXXXXXXX`. The backend uses this to route commands to the correct Star.
+> **`star_id`** is derived from the last 4 bytes of the Star's Wi-Fi STA MAC address (same formula as `node_id` on Nodes). It is printed at boot as a decimal number: `Star ID: 1234567890`. The backend uses this to route commands to the correct Star.
 
 ### Configuration
 
 **`greenhouseStar/main/config.hpp`**:
 
 ```cpp
+// Wi-Fi Access Point (operator connection)
+#define WIFI_AP_SSID      "GREENHOUSE_STAR"
+#define WIFI_AP_PASSWORD  "operator123"
+
 // If running on a Heltec V3 board (has built-in OLED + LoRa)
 // Comment this line out if using a generic ESP32 with external LoRa module
 #define IS_HELTEC
 
-// RAM ring buffer — holds ~12 sensor readings before overwriting oldest
+// RAM ring buffer, holds ~410 TelemetryPacket records (~13 hours at the default 2-minute node interval) before overwriting the oldest
 #define INTERNAL_BUFFER_SIZE (16 * 1024)
 
-// LoRa hardware pins — already set for Heltec V3, change if using a different board
+// LoRa hardware pins, already set for Heltec V3, change if using a different board
 #define LORA_CS    8
 #define LORA_SCK   9
 // ... (see config.hpp for all pins)
@@ -135,6 +143,8 @@ The Star creates a hotspot at boot:
 - **IP:** `192.168.4.1`
 
 The operator laptop and the `cw-client` Docker container both use this AP.
+
+> **Security note:** the SSID/password above are set via `WIFI_AP_SSID`/`WIFI_AP_PASSWORD` in `greenhouseStar/main/config.hpp` and shipped as lab-only defaults. Anyone within Wi-Fi range who joins the AP can reach every CoAP endpoint, including `/command`. Change the password before using this outside a trusted setting.
 
 ### Endpoints
 
@@ -177,7 +187,7 @@ An ESP32 (Heltec V3) that bridges LoRa ↔ MQTT. It forwards telemetry uplink (S
 
 ### Configuration
 
-**`loraWANGateway/main/config.hpp`** — the only file you need to edit:
+**`loraWANGateway/main/config.hpp`**:
 
 ```cpp
 // Your home/lab Wi-Fi network
@@ -188,16 +198,13 @@ An ESP32 (Heltec V3) that bridges LoRa ↔ MQTT. It forwards telemetry uplink (S
 #define USE_LOCAL_BROKER
 
 #ifdef USE_LOCAL_BROKER
-    // LAN IP of the machine running docker-compose
-    // Find it with: ip route get 1 | awk '{print $7}' (Linux)
-    //            or: ipconfig (Windows) / ifconfig (macOS)
     #define MQTT_BROKER  "mqtt://192.168.1.X"
 #else
     #define MQTT_BROKER  "mqtt://broker.hivemq.com"
 #endif
 ```
 
-> **Note:** The gateway must be on the same LAN as the machine running `docker-compose`. The services stack exposes port `1883` — the gateway connects to that port on your machine's LAN IP.
+> **Note:** The gateway must be on the same LAN as the machine running `docker-compose`. The services stack exposes port `1883`, the gateway connects to that port on your machine's LAN IP.
 
 ### Build & Flash
 
@@ -233,7 +240,7 @@ The backend stack running in Docker. Handles data ingestion from both the LoRa g
 ```bash
 cd services
 
-# 1. First-time setup — creates .env template and checks Docker
+# 1. First-time setup, creates .env template and checks Docker
 ./greenhouse.sh setup
 
 # 2. Edit .env and fill in your Telegram bot token
@@ -249,13 +256,15 @@ TELEGRAM_TOKEN=your_telegram_bot_token_here
 
 > `INFLUX_TOKEN` must match `DOCKER_INFLUXDB_INIT_ADMIN_TOKEN` in `docker-compose.yml`. The default value `secret_token` works out of the box.
 
+> **Security note:** `secret_token`, and the default Grafana/InfluxDB credentials (`admin`/`admin`, `adminadmin`) below, are lab-only placeholders committed for convenience. Change them before exposing any of these ports beyond your local machine.
+
 ### Running the Stack
 
 ```bash
 # Start everything (all services)
 ./greenhouse.sh up
 
-# Start only core services (skip ML — faster startup for development)
+# Start only core services (skip ML, faster startup for development)
 ./greenhouse.sh up core
 
 # Start only ML pipeline
@@ -282,7 +291,7 @@ TELEGRAM_TOKEN=your_telegram_bot_token_here
 
 1. Connect your laptop to `GREENHOUSE_STAR` (password: `operator123`)
 2. The `cw-client` container will automatically reach `coap://192.168.4.1/telemetry`
-3. At startup, `cw-client` queries `coap://192.168.4.1/info` to auto-discover the Star's `star_id` — no manual configuration needed
+3. At startup, `cw-client` queries `coap://192.168.4.1/info` to auto-discover the Star's `star_id`, no manual configuration needed
 
 > When connected to the Star's AP, your machine loses internet access. The LoRa path (via a gateway on your home LAN) is the better option for permanent deployments.
 
@@ -309,7 +318,7 @@ docker run --rm --network services_default eclipse-mosquitto:2 \
 Two team members can merge their InfluxDB datasets using `exchange.sh`:
 
 ```bash
-# Import a colleague's CSV export and produce a merged cumulative dump
+# Import an external CSV export and produce a merged cumulative dump
 ./greenhouse.sh exchange /path/to/colleague_dump.csv
 # Output: services/cumulative_dump.csv  (import this on another machine)
 ```
@@ -318,14 +327,14 @@ Two team members can merge their InfluxDB datasets using `exchange.sh`:
 
 #### `POST /api/data`
 
-Ingestion endpoint consumed by `lw-client` and `cw-client`. Both clients include `star_id` in the payload — the controller uses this to maintain `controller/data/topology.json`, which maps each `node_id` to the `star_id` of the Star it communicates through.
+Ingestion endpoint consumed by `lw-client` and `cw-client`. Both clients include `star_id` in the payload, the controller uses this to maintain `controller/data/topology.json`, which maps each `node_id` to the `star_id` of the Star it communicates through.
 
 ```
 POST http://localhost:3001/api/data
 Content-Type: application/json
 
 {
-  "star_id": "3C0F02EB",
+  "star_id": "1234567890",
   "node_id": 123456,
   "timestamp": 1750000000,
   "air_temp": 25.3,
@@ -341,16 +350,19 @@ Content-Type: application/json
 
 #### `POST /api/command`
 
-Sends an actuation command to a specific Node. The controller looks up the Node's Star in `topology.json` and publishes to `greenhouse/commands/<star_id>` on the MQTT broker. The loraWANGateway ESP32 (subscribed to that topic) picks it up and TXs it via LoRa — neither `lw-client` nor `cw-client` is involved.
+Sends an actuation command to a specific Node. The controller looks up the Node's Star in `topology.json` and publishes to `greenhouse/commands/<star_id>` on the MQTT broker. From there it reaches the Star by one of two paths, depending on which clients are running:
+
+- **Via LoRa**: `lw-client` is subscribed to that per-star topic (it learns which stars exist from incoming telemetry) and republishes the payload to the fixed `greenhouse/gateway/commands` topic; the loraWANGateway ESP32 (subscribed to that fixed topic, not the per-star one) picks it up and TXs it via LoRa.
+- **Via CoAP**: if `cw-client` is connected to the Star's Wi-Fi AP, it is also subscribed to `greenhouse/commands/<star_id>` and POSTs the command straight to the Star's CoAP `/command` endpoint, bypassing LoRa/the Gateway entirely, then publishes the ACK to `greenhouse/acks` itself.
 
 The easiest way to trigger a command is via `greenhouse.sh`:
 
 ```bash
 # Pump on full for 10 seconds
-./greenhouse.sh command <node_id> pump 100 10
+./greenhouse.sh command <node_id> pump 255 10
 
-# LED at 75% brightness for 30 seconds
-./greenhouse.sh command <node_id> led 75 30
+# LED at ~75% brightness for 30 seconds
+./greenhouse.sh command <node_id> led 191 30
 
 # Pump off immediately
 ./greenhouse.sh command <node_id> pump 0 0
@@ -362,14 +374,22 @@ Raw API call if needed:
 POST http://localhost:3001/api/command
 Content-Type: application/json
 
-{ "node_id": 123456, "actuator": "pump", "value": 100, "duration_s": 10 }
+{ "node_id": 123456, "actuator": "pump", "value": 255, "duration_s": 10 }
 ```
 
-`value` is 0–100: binary actuators treat 0 as off and any non-zero as on; PWM actuators use it as duty cycle percentage.
+`value` is 0–255: binary actuators treat 0 as off and any non-zero as on; PWM actuators use it directly as the duty level (255 = full duty, 0 = off, the node scales it internally to the LEDC 10-bit range via `value * 1023 / 255`). The controller clamps out-of-range values into `[0, 255]` before queuing.
 
 Responses: `200 OK` with `{ status, star_id, node_id, topic }` | `404` if the Node has never been seen | `400` if fields are missing.
 
 > **Note:** The Node delivers the command on its **next wakeup** (up to 2 minutes later). The command is queued in the Star's RAM until then.
+
+#### `GET /api/topology`
+
+Returns the `node_id → star_id` mapping the controller has learned from incoming telemetry (the live contents of `controller/data/topology.json`).
+
+```
+GET http://localhost:3001/api/topology
+```
 
 #### Leaf Temperature Fallback
 
@@ -447,7 +467,7 @@ The binary struct sent from Star → Node via ESP-NOW after a downlink command i
 typedef struct {
     uint32_t node_id;
     char     actuator[CMD_ACTUATOR_LEN];  // null-terminated name matching ACTUATOR_TABLE
-    uint8_t  value;                        // 0=off, 1-100=level (binary: 0 or 100; PWM: duty %)
+    uint8_t  value;                        // 0=off, 1-255=level (binary: any non-zero=on; PWM: 255=full duty)
     uint16_t duration_s;                   // 0=hold indefinitely
 } __attribute__((packed)) command_packet_t;  // 12 bytes
 ```
@@ -455,7 +475,7 @@ typedef struct {
 The LoRa downlink JSON (Gateway → Star) format:
 
 ```json
-{"nid":123456,"act":"pump","val":100,"dur":10}
+{"nid":123456,"act":"pump","val":255,"dur":10}
 ```
 
-Actuators are defined in `greenhouseNode/main/personal_config.hpp` as an `ACTUATOR_TABLE` mapping names to GPIOs and control types (`ACT_BINARY` or `ACT_PWM`). The actuation logic in `main.cpp` is generic — adding a new actuator only requires a new row in the table.
+Actuators are defined in `greenhouseNode/main/config.hpp` as an `ACTUATOR_TABLE` mapping names to GPIOs and control types (`ACT_BINARY` or `ACT_PWM`), pin assignments come from `personal_config.hpp`. The actuation logic in `main.cpp` is generic, adding a new actuator only requires a new row in the table.
