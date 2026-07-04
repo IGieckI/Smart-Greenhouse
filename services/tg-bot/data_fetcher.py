@@ -1,8 +1,9 @@
 import pandas as pd
 import numpy as np
+import httpx
 from datetime import datetime, timedelta
 from influxdb_client import InfluxDBClient
-from config import INFLUX_URL, INFLUX_TOKEN, INFLUX_ORG, BUCKET, TZ_ROME, logger
+from config import INFLUX_URL, INFLUX_TOKEN, INFLUX_ORG, BUCKET, TZ_ROME, CONTROLLER_URL, logger
 
 def calculate_vpd(df: pd.DataFrame) -> pd.DataFrame:
     """ Unified Vectorized calculation of Air and Leaf VPD, including historical predictions. """
@@ -145,6 +146,16 @@ def fetch_history_with_preds(board_id: str, hours_past: int, hours_future: int =
     finally:
         client.close()
 
+def fetch_topology_boards() -> set[str] | None:
+    """ Node (board) IDs registered in the controller's topology, or None if unreachable. """
+    try:
+        resp = httpx.get(f"{CONTROLLER_URL}/api/topology", timeout=5.0)
+        resp.raise_for_status()
+        return set(resp.json().keys())
+    except Exception as e:
+        logger.error(f"Controller topology fetch error: {e}")
+        return None
+
 def fetch_available_boards() -> list[str]:
     client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
     query = f'''
@@ -154,7 +165,11 @@ def fetch_available_boards() -> list[str]:
     try:
         result = client.query_api().query(query)
         boards = [record.get_value() for table in result for record in table.records]
-        return sorted(boards)
     except Exception as e:
         logger.error(f"InfluxDB board fetch error: {e}")
         return []
+
+    topology = fetch_topology_boards()
+    if topology is not None:
+        boards = [b for b in boards if b in topology]
+    return sorted(boards)
