@@ -43,7 +43,9 @@ function loadTopology() {
 }
 loadTopology();
 function saveTopology() {
-    try { fs.writeFileSync(TOPOLOGY_FILE, JSON.stringify(topology, null, 2)); }
+    try {fs.mkdirSync(path.dirname(TOPOLOGY_FILE), { recursive: true });
+        fs.writeFileSync(TOPOLOGY_FILE, JSON.stringify(topology, null, 2));
+    }
     catch (e) { console.error('[Controller] Could not save topology file:', e.message); }
 }
 
