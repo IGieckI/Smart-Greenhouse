@@ -20,6 +20,11 @@ info()  { echo "[INFO]  $*"; }
 warn()  { echo "[WARN]  $*"; }
 die()   { echo "[ERROR] $*" >&2; exit 1; }
 
+# Safely export .env variables if the file exists (prevents crashing on cold start)
+if [ -f "./.env" ]; then
+    export $(grep -v '^#' ./.env | xargs)
+fi
+
 # Check dependencies: Docker and docker compose v2
 check_deps() {
     command -v docker  >/dev/null 2>&1 || die "docker not found. Install Docker Desktop or Docker Engine."
@@ -31,13 +36,17 @@ ensure_env() {
     if [[ ! -f .env ]]; then
         warn ".env not found — creating from template. Fill in TELEGRAM_TOKEN before running 'up'."
         cat > .env <<'EOF'
-# InfluxDB admin token (must match DOCKER_INFLUXDB_INIT_ADMIN_TOKEN in docker-compose.yml)
-INFLUX_TOKEN=TokenFittizio
+# InfluxDB Configuration
+INFLUX_TOKEN=secret_token
+INFLUX_ORG=iot_org
+INFLUX_BUCKET_RAW=sensor_data
 
 # Telegram bot token — get one from @BotFather on Telegram
 TELEGRAM_TOKEN=your_telegram_bot_token_here
 EOF
         info ".env created at services/.env"
+        # Load the newly created file into the current session
+        export $(grep -v '^#' ./.env | xargs)
     fi
 }
 
@@ -78,7 +87,7 @@ cmd_up() {
     echo ""
     info "Services running:"
     info "  Grafana         →  http://localhost:3030  (admin/admin on first login)"
-    info "  InfluxDB        →  http://localhost:8086  (token: TokenFittizio)"
+    info "  InfluxDB        →  http://localhost:8086  (token: ${INFLUX_TOKEN:-secret_token})"
     info "  Controller API  →  http://localhost:3001/api/data"
     info "  ML Inference    →  http://localhost:8000  (if ml or all profile)"
     info "  MQTT Broker     →  localhost:1883"
@@ -135,9 +144,10 @@ cmd_exchange() {
     [[ -z "$csv" ]] && die "Specify a CSV file. Example: ./greenhouse.sh exchange friend_dump.csv"
     [[ ! -f "$csv" ]] && die "File not found: $csv"
 
-    local org="iot_org"
-    local bucket="sensor_data"
-    local token="TokenFittizio"
+    # Pull from loaded environment variables, falling back to defaults if empty
+    local org="${INFLUX_ORG:-iot_org}"
+    local bucket="${INFLUX_BUCKET_RAW:-sensor_data}"
+    local token="${INFLUX_TOKEN:-secret_token}"
     local dump="cumulative_dump.csv"
 
     info "Importing data from $csv into InfluxDB..."
@@ -153,7 +163,6 @@ cmd_exchange() {
 
     info "Done. Merged dump saved to services/$dump"
 }
-
 
 CMD="${1:-help}"
 shift || true

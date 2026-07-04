@@ -224,7 +224,7 @@ The backend stack running in Docker. Handles data ingestion from both the LoRa g
 | `controller` | Data router → InfluxDB | 3001 |
 | `lw-client` | LoRa path: MQTT subscriber → controller | — |
 | `cw-client` | CoAP path: observes Star → controller | — |
-| `ml-trainer` | Trains anomaly-detection model on startup | — |
+| `ml-trainer` | Trains anomaly-detection model on startup | 8001 |
 | `ml-inference` | Serves predictions via HTTP | 8000 |
 | `tg-bot` | Telegram bot: query data and predictions | — |
 
@@ -243,11 +243,11 @@ nano .env
 
 **.env file:**
 ```
-INFLUX_TOKEN=TokenFittizio
+INFLUX_TOKEN=secret_token
 TELEGRAM_TOKEN=your_telegram_bot_token_here
 ```
 
-> `INFLUX_TOKEN` must match `DOCKER_INFLUXDB_INIT_ADMIN_TOKEN` in `docker-compose.yml`. The default value `TokenFittizio` works out of the box.
+> `INFLUX_TOKEN` must match `DOCKER_INFLUXDB_INIT_ADMIN_TOKEN` in `docker-compose.yml`. The default value `secret_token` works out of the box.
 
 ### Running the Stack
 
@@ -269,10 +269,11 @@ TELEGRAM_TOKEN=your_telegram_bot_token_here
 
 1. Open `http://localhost:3030`
 2. Login: `admin` / `admin` (you'll be prompted to change the password)
-3. Add InfluxDB as a data source:
+3. If asked, change password into `adminadmin`
+4. Add InfluxDB as a data source:
    - URL: `http://influxdb:8086`
    - Organization: `iot_org`
-   - Token: `TokenFittizio`
+   - Token: `secret_token`
    - Bucket: `sensor_data`
 
 ### CoAP Path Setup
@@ -372,7 +373,7 @@ Responses: `200 OK` with `{ status, star_id, node_id, topic }` | `404` if the No
 
 #### Leaf Temperature Fallback
 
-If `leaf_temp` is missing or below 5°C, the controller reads a fallback value from `controller/data/leaf_temp.txt`. Format: `21.5/A` (value / reading ID). The same reading is accepted for a limited number of uses before the controller discards it and alerts with audio beeps.
+If `leaf_temp` is missing or below 5°C (this project born in summer, is strange to have temperature values below that threshold), the controller reads a fallback value from `controller/data/leaf_temp.txt`. Format: `3750846324/21.5/Any_String_you_WANT` (value / reading ID). The same reading is accepted for a limited number of uses before the controller discards it and alerts with audio beeps. This only to ensure into the raw data Influx bucket fresh data.
 
 ---
 
