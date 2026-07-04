@@ -65,7 +65,8 @@
               "mode": "area"
             }
           },
-          "max": 35,
+          "max": 40,
+          "min": 20,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -1247,5 +1248,5 @@
   "timezone": "browser",
   "title": "Raw single info",
   "uid": "a342f2e",
-  "version": 1
+  "version": 3
 }
