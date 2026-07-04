@@ -292,32 +292,25 @@ static void coap_server_task(void *p) {
     }
     coap_new_endpoint(ctx, &serv_addr, COAP_PROTO_UDP);
 
-    // Let libcoap manage RFC 7959 block-wise transfers and reassemble whole
-    // bodies, so /dump can return payloads larger than a single block.
     coap_context_set_block_mode(ctx, COAP_BLOCK_USE_LIBCOAP | COAP_BLOCK_SINGLE_BODY);
 
-    // /telemetry — observable live reading (binary telemetry_packet_t)
     telemetry_resource = coap_resource_init(coap_make_str_const("telemetry"), 0);
     coap_resource_set_get_observable(telemetry_resource, 1);
     coap_register_handler(telemetry_resource, COAP_REQUEST_GET, hnd_get_telemetry);
     coap_add_resource(ctx, telemetry_resource);
 
-    // /info — GET star_id as JSON
     coap_resource_t *info_res = coap_resource_init(coap_make_str_const("info"), 0);
     coap_register_handler(info_res, COAP_REQUEST_GET, hnd_get_info);
     coap_add_resource(ctx, info_res);
 
-    // /dump — GET the ring-buffer history as packed binary records (block-wise)
     coap_resource_t *dump_res = coap_resource_init(coap_make_str_const("dump"), 0);
     coap_register_handler(dump_res, COAP_REQUEST_GET, hnd_get_dump);
     coap_add_resource(ctx, dump_res);
 
-    // /set_time — POST an epoch string to set the RTC
     coap_resource_t *time_res = coap_resource_init(coap_make_str_const("set_time"), 0);
     coap_register_handler(time_res, COAP_REQUEST_POST, hnd_post_settime);
     coap_add_resource(ctx, time_res);
 
-    // /command — POST a JSON actuation command to queue for a node
     coap_resource_t *cmd_res = coap_resource_init(coap_make_str_const("command"), 0);
     coap_register_handler(cmd_res, COAP_REQUEST_POST, hnd_post_command);
     coap_add_resource(ctx, cmd_res);
@@ -325,8 +318,6 @@ static void coap_server_task(void *p) {
     ESP_LOGI(TAG, "CoAP server listening on port 5683 (/telemetry, /info, /dump, /set_time, /command)");
 
     while (1) {
-        // Issue any pending observe notification from this task, which owns the
-        // CoAP context; coap_io_process() then flushes it to subscribers.
         if (telemetry_dirty) {
             telemetry_dirty = false;
             coap_resource_notify_observers(telemetry_resource, NULL);
@@ -353,9 +344,9 @@ static void wifi_init_ap() {
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
     wifi_config_t wifi_config = {};
-    strcpy((char *)wifi_config.ap.ssid, "GREENHOUSE_STAR");
-    wifi_config.ap.ssid_len      = strlen("GREENHOUSE_STAR");
-    strcpy((char *)wifi_config.ap.password, "operator123");
+    strcpy((char *)wifi_config.ap.ssid, WIFI_AP_SSID);
+    wifi_config.ap.ssid_len      = strlen(WIFI_AP_SSID);
+    strcpy((char *)wifi_config.ap.password, WIFI_AP_PASSWORD);
     wifi_config.ap.max_connection = 4;
     wifi_config.ap.authmode       = WIFI_AUTH_WPA2_PSK;
     wifi_config.ap.channel        = 1;
@@ -543,7 +534,6 @@ void reception_task(void *pvParameters) {
             }
 
             memcpy(&last_received_data, &pkt, sizeof(telemetry_packet_t));
-            // Hand the observe notification off to coap_server_task (see telemetry_dirty).
             telemetry_dirty = true;
 
             if (xRingbufferSend(telemetry_ringbuf, &pkt, sizeof(telemetry_packet_t), 0) != pdTRUE) {

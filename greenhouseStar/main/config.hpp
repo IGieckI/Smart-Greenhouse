@@ -1,3 +1,7 @@
+// Wi-Fi Access Point
+#define WIFI_AP_SSID      "GREENHOUSE_STAR"
+#define WIFI_AP_PASSWORD  "operator123"
+
 // Heltec V3 specific pins
 #define VEXT_PIN GPIO_NUM_36
 #define OLED_SDA GPIO_NUM_17
