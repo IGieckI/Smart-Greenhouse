@@ -51,8 +51,10 @@ mqttClient.on('error', (e) => console.error('[Controller] MQTT error:', e.messag
 
 // Pending commands awaiting ACK: node_id (string) → { star_id, payload, attempts, timer }
 const pendingCommands = {};
+// Command retry parameters
 const COMMAND_TIMEOUT_MS = 3000;
 const COMMAND_MAX_ATTEMPTS = 3;
+const MAX_COMMAND_DURATION_S = 300;
 
 function publishCommand(node_id, star_id, payload, attempt) {
     const topic = `greenhouse/commands/${star_id}`;
@@ -218,11 +220,18 @@ app.post('/api/command', (req, res) => {
         });
     }
 
+    let dur = Number(duration_s) || 0;
+    if (dur < 0) dur = 0;
+    if (dur > MAX_COMMAND_DURATION_S) {
+        console.log(`[Controller] Duration ${dur}s exceeds max, clamping to ${MAX_COMMAND_DURATION_S}s`);
+        dur = MAX_COMMAND_DURATION_S;
+    }
+
     const payload = JSON.stringify({
         nid: Number(node_id),
         act: String(actuator),
         val: Number(value),
-        dur: Number(duration_s) || 0
+        dur
     });
 
     // Cancel any in-flight command for this node before issuing a new one

@@ -506,8 +506,6 @@ def _run_ensemble_inference(freq_minutes: int, group: str, board_id: str,
 
     summary_msg = f"Ensemble inference for group {group.upper()} on board {board_id} executed." if save_to_db else f"What-if (manual) ensemble inference for group {group.upper()} on board {board_id} executed. Data not saved to InfluxDB."
 
-    summary_msg = f"Ensemble inference for group {group.upper()} on board {board_id} executed." if save_to_db else f"What-if (manual) ensemble inference for group {group.upper()} on board {board_id} executed. Data not saved to InfluxDB."
-
     return {
         "message": summary_msg,
         "group": group,

@@ -167,6 +167,12 @@ void setup() {
     }
    
     esp_now_register_send_cb(OnDataSent);
+
+    command_sem = xSemaphoreCreateBinary();
+    if (command_sem == NULL) {
+        ESP_LOGE(TAG, "Failed to create command semaphore");
+        return;
+    }
     esp_now_register_recv_cb(OnCommandRecv);
     memset(&peerInfo, 0, sizeof(peerInfo));
     memcpy(peerInfo.peer_addr, central_mac, 6);
@@ -318,8 +324,7 @@ extern "C" void app_main(void)
         myData.leaf_temp
     );
 
-    // Send over ESP-NOW
-    command_sem = xSemaphoreCreateBinary();
+    xSemaphoreTake(command_sem, 0);
     esp_now_send(central_mac, (uint8_t *)&myData, sizeof(myData));
 
     // Wait up to 1.5s for an actuation command from the Star.
