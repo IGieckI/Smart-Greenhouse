@@ -3,7 +3,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from config import logger
 
-async def fetch_api(url: str, payload: dict = None, timeout: float = 120.0) -> dict:
+async def fetch_api(url: str, payload: dict = None, timeout: float = 120.0, surface_errors: bool = False) -> dict:
     """
         Fetches JSON from the given absolute URL.
     """
@@ -15,9 +15,20 @@ async def fetch_api(url: str, payload: dict = None, timeout: float = 120.0) -> d
                 response = await client.get(url, timeout=timeout)
             response.raise_for_status()
             return response.json()
+    except httpx.HTTPStatusError as e:
+        msg = None
+        try:
+            body = e.response.json()
+            msg = body.get("error") or body.get("detail")
+        except Exception:
+            pass
+        logger.error(f"API HTTP {e.response.status_code} at {url}: {msg or e}")
+        if surface_errors:
+            return {"error": msg or f"Server returned HTTP {e.response.status_code}"}
+        return {}
     except Exception as e:
         logger.error(f"API JSON Error at {url}: {e}")
-        return {}
+        return {"error": "Could not reach the server."} if surface_errors else {}
 
 async def fetch_api_raw(url: str, timeout: float = 120.0) -> bytes:
     """

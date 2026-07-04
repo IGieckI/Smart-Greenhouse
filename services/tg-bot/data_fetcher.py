@@ -22,7 +22,6 @@ def calculate_vpd(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def fetch_history_data(board_id: str, hours: int) -> pd.DataFrame:
-    client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
     query = f'''
         from(bucket: "{BUCKET}")
           |> range(start: -{hours}h)
@@ -31,11 +30,13 @@ def fetch_history_data(board_id: str, hours: int) -> pd.DataFrame:
           |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
     '''
     try:
-        df = client.query_api().query_data_frame(query)
+        with InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG) as client:
+            df = client.query_api().query_data_frame(query)
+
         if isinstance(df, list):
             if not df: return pd.DataFrame()
             df = pd.concat(df, ignore_index=True)
-            
+
         if not df.empty:
             df.set_index('_time', inplace=True)
             df.sort_index(inplace=True)
