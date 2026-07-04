@@ -19,18 +19,27 @@ def _finalize_and_save_plot(title: str, xlabel: str = 'Time (Local)', ylabel: st
     plt.close()
     return buf
 
+def _is_humidity_series(label: str) -> bool:
+    return "Humidity" in label or "(%)" in label
+
 def create_series_plot(df_hist: pd.DataFrame, series_dict: dict, title: str, hide_real_history: bool = False) -> io.BytesIO:
-    plt.figure(figsize=(10, 5))
+    fig, ax_temp = plt.subplots(figsize=(10, 5))
     last_time = pd.Timestamp.now(tz=TZ_ROME)
-    last_val = None 
-    
+    last_val = None
+
+    has_humidity = any(_is_humidity_series(label) for label, data in series_dict.items() if data)
+    ax_hum = ax_temp.twinx() if has_humidity else None
+
+    def _axis_for(label: str):
+        return ax_hum if (ax_hum is not None and _is_humidity_series(label)) else ax_temp
+
     if not df_hist.empty and 'leaf_temp' in df_hist.columns:
         df_plot = df_hist.dropna(subset=['leaf_temp'])
         if not df_plot.empty:
             last_time = df_plot.index[-1]
             last_val = df_plot['leaf_temp'].iloc[-1]
             if not hide_real_history:
-                plt.plot(df_plot.index, df_plot['leaf_temp'], label='Real History', color='black', alpha=0.4, linewidth=2)
+                ax_temp.plot(df_plot.index, df_plot['leaf_temp'], label='Real History', color='black', alpha=0.4, linewidth=2)
 
     styles = {
         "Blended (Final)": {"color": "blue", "linewidth": 2.5, "marker": "o", "markersize": 6, "alpha": 1.0, "zorder": 5},
@@ -51,18 +60,39 @@ def create_series_plot(df_hist: pd.DataFrame, series_dict: dict, title: str, hid
         if not data: continue
         times = [pd.to_datetime(d['timestamp']).astimezone(TZ_ROME) for d in data]
         vals = [d['value'] for d in data]
-        
+
         if "History" not in label and "Forecast" not in label and last_val is not None:
             times = [last_time] + times
             vals = [last_val] + vals
 
         style = styles.get(label, {"marker": "o", "markersize": 4, "linestyle": "--"})
-        plt.plot(times, vals, label=label, **style)
+        _axis_for(label).plot(times, vals, label=label, **style)
 
-    plt.axvline(x=last_time, color='red', linestyle=':', alpha=0.6, label='Now')
-    return _finalize_and_save_plot(title)
+    ax_temp.axvline(x=last_time, color='red', linestyle=':', alpha=0.6, label='Now')
 
-# === ORIGINAL FUNCTIONS FOR ML INFERENCE ===
+    ax_temp.set_title(title)
+    ax_temp.set_xlabel('Time (Local)')
+    ax_temp.set_ylabel('Temperature (°C)' if ax_hum is not None else 'Value')
+    ax_temp.grid(True, alpha=0.3)
+    for label in ax_temp.get_xticklabels():
+        label.set_rotation(45)
+
+    if ax_hum is not None:
+        ax_hum.set_ylabel('Humidity (%)')
+        handles, labels = ax_temp.get_legend_handles_labels()
+        h2, l2 = ax_hum.get_legend_handles_labels()
+        ax_temp.legend(handles + h2, labels + l2, loc='best')
+    else:
+        ax_temp.legend(loc='best')
+
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=100)
+    buf.seek(0)
+    plt.close(fig)
+    return buf
+
+# Original functions for ml inference
 
 def create_vpd_plot(df_hist: pd.DataFrame, future_vpd: list = None, historical_vpd: list = None) -> io.BytesIO:
     plt.figure(figsize=(10, 5))
@@ -125,24 +155,38 @@ def create_semantic_category_plots(df_hist: pd.DataFrame) -> list[io.BytesIO]:
     plots.append(create_vpd_plot(df_hist))
     return plots
 
-# === NEW DEDICATED FUNCTIONS FOR HISTORY MENU ===
+# Functions for history menu
 
-def create_history_vpd_plot(df_hist: pd.DataFrame) -> io.BytesIO:
+def _forecast_xy(series: list, anchor_time=None, anchor_val=None):
+    """ Convert an API series [{timestamp, value}] to (times, values), optionally
+        prepended with an anchor point so the forecast line connects to the actuals. """
+    times = [pd.to_datetime(d['timestamp']).astimezone(TZ_ROME) for d in series]
+    vals = [d['value'] for d in series]
+    if anchor_time is not None and anchor_val is not None:
+        times = [anchor_time] + times
+        vals = [anchor_val] + vals
+    return times, vals
+
+def create_history_vpd_plot(df_hist: pd.DataFrame, vpd_forecast: dict = None) -> io.BytesIO:
     plt.figure(figsize=(10, 5))
     last_time = pd.Timestamp.now(tz=TZ_ROME)
     has_data = False
-    
+    last_air_time = last_air_val = None
+    last_leaf_time = last_leaf_val = None
+
     if not df_hist.empty:
         if 'vpd_air' in df_hist.columns and not df_hist['vpd_air'].dropna().empty:
             df_plot = df_hist.dropna(subset=['vpd_air'])
             plt.plot(df_plot.index, df_plot['vpd_air'], label='Actual VPD (Air)', color='blue', linewidth=1.5, linestyle='-.', alpha=0.6)
             last_time = df_plot.index[-1]
+            last_air_time, last_air_val = df_plot.index[-1], df_plot['vpd_air'].iloc[-1]
             has_data = True
-            
+
         if 'vpd_leaf' in df_hist.columns and not df_hist['vpd_leaf'].dropna().empty:
             df_plot = df_hist.dropna(subset=['vpd_leaf'])
             plt.plot(df_plot.index, df_plot['vpd_leaf'], label='Actual VPD (Leaf)', color='magenta', linewidth=2)
             last_time = df_plot.index[-1]
+            last_leaf_time, last_leaf_val = df_plot.index[-1], df_plot['vpd_leaf'].iloc[-1]
             has_data = True
 
         if 'vpd_air_pred' in df_hist.columns and not df_hist['vpd_air_pred'].dropna().empty:
@@ -155,13 +199,23 @@ def create_history_vpd_plot(df_hist: pd.DataFrame) -> io.BytesIO:
             plt.plot(df_plot.index, df_plot['vpd_leaf_pred'], label='Predicted VPD (Leaf)', color='orange', linewidth=1.5, linestyle='--')
             has_data = True
 
+    if vpd_forecast:
+        if air_fc := vpd_forecast.get('air'):
+            times, vals = _forecast_xy(air_fc, last_air_time, last_air_val)
+            plt.plot(times, vals, label='Forecast VPD (Air)', color='dodgerblue', linewidth=2.0, linestyle='--', marker='.', markersize=6)
+            has_data = True
+        if leaf_fc := vpd_forecast.get('leaf'):
+            times, vals = _forecast_xy(leaf_fc, last_leaf_time, last_leaf_val)
+            plt.plot(times, vals, label='Forecast VPD (Leaf)', color='red', linewidth=2.0, linestyle='--', marker='*', markersize=7)
+            has_data = True
+
     if not has_data:
         plt.text(0.5, 0.5, 'VPD Data Unavailable', horizontalalignment='center', verticalalignment='center', transform=plt.gca().transAxes)
 
     plt.axvline(x=last_time, color='red', linestyle=':', alpha=0.6, label='Now')
     return _finalize_and_save_plot("Vapor Pressure Deficit (VPD) [History]", ylabel="VPD (kPa)")
 
-def create_history_plots(df_hist: pd.DataFrame) -> list[io.BytesIO]:
+def create_history_plots(df_hist: pd.DataFrame, vpd_forecast: dict = None) -> list[io.BytesIO]:
     plots = []
     categories = {
         "Temperatures (°C)": {
@@ -210,5 +264,5 @@ def create_history_plots(df_hist: pd.DataFrame) -> list[io.BytesIO]:
         
         plots.append(_finalize_and_save_plot(title))
         
-    plots.append(create_history_vpd_plot(df_hist))
+    plots.append(create_history_vpd_plot(df_hist, vpd_forecast))
     return plots
