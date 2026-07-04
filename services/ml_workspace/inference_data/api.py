@@ -29,14 +29,14 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 
 sys.path.append('/app')
 from shared_core.data_sync import sync_clean_bucket
-from shared_core.tasks import TASKS
+from shared_core.tasks import TASKS, GROUPS
 from shared_core.config import *
 from shared_core.preprocessing import build_advanced_features
 
 from .predictor import recursive_multistep_inference, ensemble_multistep_inference
 from .sensor_payload import SensorData
 
-app = FastAPI(title="Multi-Freq IoT Inference API")
+app = FastAPI(title="Greenhouse IoT Inference API")
 
 loaded_models = {}
 loaded_info = {}
@@ -45,10 +45,6 @@ loaded_env_prophets = {}
 sync_lock = threading.Lock()
 LAST_SYNC_TIME = {} 
 SYNC_COOLDOWN_SECONDS = 30.0  
-
-
-
-
 
 
 def calculate_vpd(t_leaf: float, t_air: float, rh: float) -> float:
@@ -241,9 +237,15 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
 
 def scheduled_inference_job():
     print("[Scheduler] Starting hourly automatic inference...")
+    for g in GROUPS:
+        try:
+            _run_ensemble_inference(freq_minutes=6, group=g, board_id=BOARD_324, custom_data=None, use_real_leaf_temp=False, save_to_db=True)
+        except Exception as e:
+            print(f"[Scheduler] Error running inference on group{g}: {e}")
+    
     for t in TASKS:
         try:
-            _run_standard_inference(freq_minutes=6, task=t, board_id=BOARD_324, custom_data=None, use_real_leaf_temp=False, save_to_db=True)
+            _run_ensemble_inference(freq_minutes=6, group=g, board_id=BOARD_324, custom_data=None, use_real_leaf_temp=False, save_to_db=True)
         except Exception as e:
             print(f"[Scheduler] Error running inference on task {t}: {e}")
 
@@ -410,32 +412,29 @@ def predict_manual(freq_minutes: int, task: str, custom_data: SensorData, board_
                    use_real_leaf_temp: bool = Query(False, description="Set True to use physical sensor historical data instead of Soft Sensor")):
     return _run_standard_inference(freq_minutes, task, board_id, custom_data, use_real_leaf_temp, save_to_db=False)
 
-
-
-
-
-
 def _run_ensemble_inference(freq_minutes: int, group: str, board_id: str, 
                             custom_data: Optional[SensorData] = None, 
                             use_real_leaf_temp: bool = False,
                             save_to_db: bool = True):
     freq_key = str(freq_minutes)
+    
+    if not group:
+        raise HTTPException(status_code=400, detail="Group identifier is required.")
+        
     group = group.upper()
     
-    if group == 'A':
-        t_soft, t_env, t_auto = "t1", "t2", "t3"
-    elif group == 'B': 
-        t_soft, t_env, t_auto = "t4", "t5", "t6"
-    elif group == 'C':
-        t_soft, t_env, t_auto = "t4", "t8", "t9"
-    else: 
-        raise HTTPException(status_code=400, detail="Group must be 'A', 'B' or 'C'.")
-
-    for t in [t_soft, t_env, t_auto]:
-        if freq_key not in loaded_models or t not in loaded_models[freq_key]:
-            raise HTTPException(status_code=404, detail="Incomplete models for this ensemble.")
+    if group not in GROUPS:
+        possible_groups = ", ".join([f"'{g}'" for g in GROUPS])
+        raise HTTPException(status_code=400, detail=f"Group must be one of these values: {possible_groups}.")
         
+    group_targets = GROUPS[group]
     
+    for t in group_targets:
+        if freq_key not in loaded_models or t not in loaded_models[freq_key]:
+            raise HTTPException(status_code=404, detail="Incomplete models for this ensemble.")    
+    
+    t_soft, t_env, t_auto = group_targets
+
     df_history, local_prophets = _prepare_inference_context(
         freq_minutes, board_id, group, custom_data, use_real_leaf_temp
     )

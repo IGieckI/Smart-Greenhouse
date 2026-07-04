@@ -20,12 +20,14 @@ from sklearn.linear_model import Ridge
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.svm import SVR
 from lightgbm import LGBMRegressor
-from prophet import Prophet
-from prophet.serialize import model_to_json
 
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import PolynomialFeatures
+
+
+from prophet import Prophet
+from prophet.serialize import model_to_json
 
 import cmdstanpy
 
@@ -100,8 +102,15 @@ def log_and_evaluate(y_test, y_pred, features_names, model, model_name, task_nam
     report = {
         "model_name": model_name,
         "best_params": best_params,
-        "metrics": {"MAE": round(mae, 3), "RMSE": round(rmse, 3), "R_squared": round(r2, 3)},
-        "performance": {"training_time_seconds": round(training_time, 4), "inference_time_seconds": round(inf_time, 4)},
+        "metrics": {
+            "MAE": round(mae, 3),
+            "RMSE": round(rmse, 3),
+            "R_squared": round(r2, 3)
+        },
+        "performance": {
+            "training_time_seconds": round(training_time, 4),
+            "inference_time_seconds": round(inf_time, 4)
+        },
         "feature_importance": importance_dict
     }
     

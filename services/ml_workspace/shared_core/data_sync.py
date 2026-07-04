@@ -71,7 +71,7 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
     
 
     print(f"[Sync {freq_minutes}m] Pre-processing {len(df_raw)} raw records (Standardizing column names)...")
-
+    print("ciao")
     
 
 
@@ -145,9 +145,34 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
         if buckets_api.find_bucket_by_name(BUCKET_CAVEAUX) is None:
             buckets_api.create_bucket(bucket_name=BUCKET_CAVEAUX, org=influx_org)
         
+        query_last = f'''
+            from(bucket: "{bucket_clean}")
+            |> range(start: {BUCKET_CAVEAUX})
+            |> filter(fn: (r) => r._measurement == "sensor_measurements")
+            |> filter(fn: (r) => r._field ~ /pred/)
+            |> last()
+            |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+        '''
+        last_time = None
+        try:
+            res = query_api.query_data_frame(query_last)
+            if isinstance(res, list) and len(res) > 0:
+                res = pd.concat(res, ignore_index=True)
+            if res is not None and not res.empty and '_time' in res.columns:
+                last_time = res['_time'].max()
+        except Exception:
+            pass
+
+        if last_time:
+            #ensure a bit of historicity usefull for cleaning procedures
+            overlap_time = last_time - pd.Timedelta(minutes=60)
+            time_filter = f"|> range(start: {overlap_time.isoformat()})"
+        else:
+            time_filter = '|> range(start: 0)'
+
         query_caveaux = f'''
             from(bucket: "{BUCKET_CAVEAUX}")
-            |> range(start: 0)
+            {time_filter}
             |> filter(fn: (r) => r._measurement == "sensor_measurements")
             |> filter(fn: (r) => r.freq == "{freq_minutes}m")
             |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")

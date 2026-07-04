@@ -66,3 +66,10 @@ TASKS = {
         "description": "Like T6, but fully autoregressive using 15 points of history."
     }
 }
+
+
+GROUPS = {
+    "A" : ("t1", "t2", "t3"),
+    "B" : ("t4", "t5", "t6"),
+    "C" : ("t4", "t8", "t9")
+}

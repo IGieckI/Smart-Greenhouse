@@ -94,16 +94,38 @@ def run_full_pipeline_for_freq(freq_minutes: int):
 def bootstrap_check():
     threading.Thread(target=worker_daemon, daemon=True).start()
 
-    needs_training = not os.path.exists(BASE_MODEL_DIR) or not [
-        d for d in os.listdir(BASE_MODEL_DIR) if os.path.isdir(os.path.join(BASE_MODEL_DIR, d))
-    ]
+    print("\n[Trainer API] Running structural model integrity check...")
     
-    if needs_training:
-        print("\n[Trainer API] No models found at boot (Cold Start).")
-        for freq in DEFAULT_FREQS: 
+    any_training_queued = False
+
+    for freq in DEFAULT_FREQS:
+        freq_dir = os.path.join(BASE_MODEL_DIR, f"{freq}m")
+        freq_needs_training = False
+        missing_tasks = []
+
+        if not os.path.exists(freq_dir):
+            freq_needs_training = True
+            print(f"[Trainer API] Cold Start or directory missing for {freq}m.")
+        else:
+            for task_name in TASKS.keys():
+                model_file_path = os.path.join(freq_dir, task_name, "best_model", "best_model.joblib")
+                if not os.path.exists(model_file_path):
+                    missing_tasks.append(task_name)
+            
+            if missing_tasks:
+                freq_needs_training = True
+                print(f"[Trainer API] Integrity check failed for {freq}m. Missing tasks: {missing_tasks}")
+
+        if freq_needs_training:
+            print(f"[Trainer API] Queuing training for {freq}m...")
             training_queue.put(freq)
-    else:
-        print("\n[Trainer API] Existing models detected. System ready for on-demand requests.")
+            any_training_queued = True
+        else:
+            print(f"[Trainer API] All models for {freq}m are valid and present.")
+
+    if not any_training_queued:
+        print("\n[Trainer API] Existing models fully verified. System ready for on-demand requests.")
+
 
 @app.post("/train/standard")
 def trigger_standard_training():
@@ -159,6 +181,8 @@ def get_global_summary(freq_minutes: int):
             summary[task] = models_info
             
     return {"freq_minutes": freq_minutes, "tasks_available": list(summary.keys()), "details": summary}
+
+
 
 @app.get("/analytics/{freq_minutes}/plots/global")
 def get_global_plots_zip(freq_minutes: int):
