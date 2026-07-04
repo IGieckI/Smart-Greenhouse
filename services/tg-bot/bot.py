@@ -1,3 +1,4 @@
+import json
 import logging
 from telegram import Update, BotCommand
 from telegram.ext import (
@@ -5,24 +6,16 @@ from telegram.ext import (
     MessageHandler, filters, ContextTypes, ConversationHandler
 )
 
-from handlers_actuator import (
-    handle_actuator_routing, ask_pump_value, ask_pump_duration, 
-    process_custom_pump, cancel_actuator
-)
-from config import (
-    TOKEN, INFERENCE_URL, AWAIT_WHATIF_MODE, AWAIT_WHATIF_TASK, 
-    AWAIT_WHATIF_BOARD, AWAIT_WHATIF_VALUES, AWAIT_PUMP_VALUE, 
-    AWAIT_PUMP_DURATION, logger
-)
-
+from handlers_actuator import handle_actuator_routing, start_custom_command, process_custom_command, cancel_custom
+from config import TOKEN, INFERENCE_URL, AWAIT_WHATIF_MODE, AWAIT_WHATIF_TASK, AWAIT_WHATIF_BOARD, AWAIT_WHATIF_VALUES, AWAIT_ACT_CUSTOM, logger
 from utils import build_keyboard, fetch_api
 
 from handlers_inference import (
-    handle_predict_menu, start_whatif,
-    choose_whatif_task, choose_whatif_board, whatif_ask_values, process_whatif_values, cancel_whatif
+    handle_predict_menu,
+    start_whatif, choose_whatif_task, choose_whatif_board, whatif_ask_values, process_whatif_values, cancel_whatif
 )
-from handlers_training import show_training_menu, handle_training_menu
 from handlers_history import handle_history_menu
+from handlers_training import show_training_menu, handle_training_menu
 
 async def setup_commands(application: Application):
     await application.bot.set_my_commands([
@@ -64,12 +57,11 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = update.message.text.split()
-    if len(args) != 3:
+    if len(context.args) != 2:
         await update.message.reply_text("ℹ️ **Usage:** `/info [freq_minutes] [task]`\n_Example:_ `/info 6 t1`", parse_mode='Markdown')
         return
-    
-    freq, task = args[1], args[2].lower()
+
+    freq, task = context.args[0], context.args[1].lower()
     msg = await update.message.reply_text(f"🔍 Fetching metrics for **{freq}m {task.upper()}**...")
     data = await fetch_api(f"{INFERENCE_URL}/info/{freq}m/{task}")
     if data:
@@ -84,6 +76,38 @@ async def handle_reload_command(update: Update, context: ContextTypes.DEFAULT_TY
         await msg.edit_text("✅ **Models reloaded successfully!**", parse_mode='Markdown')
     else:
         await msg.edit_text("⚠️ **Failed to reload models.** Check API logs.", parse_mode='Markdown')
+
+async def menu_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Escape hatch out of a conversation: show the main menu and end the conversation cleanly."""
+    await show_main_menu(update, context)
+    return ConversationHandler.END
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Log any uncaught handler exception and tell the user, so failures never look like a silent hang."""
+    logger.error("Unhandled exception while processing update", exc_info=context.error)
+
+    if context.user_data is not None:
+        context.user_data['is_processing'] = False
+
+    chat_id = None
+    if isinstance(update, Update):
+        if update.effective_chat:
+            chat_id = update.effective_chat.id
+        if update.callback_query:
+            try:
+                await update.callback_query.answer()
+            except Exception:
+                pass
+    if chat_id is not None:
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="⚠️ Something went wrong while handling that. Send /menu to start over."
+            )
+        except Exception:
+            pass
+
 
 def main():
     if not TOKEN: return logger.error("TELEGRAM_BOT_TOKEN missing in .env file!")
@@ -103,27 +127,35 @@ def main():
             AWAIT_WHATIF_BOARD: [CallbackQueryHandler(whatif_ask_values, pattern='^(whatif_board_|whatif_cancel)')],
             AWAIT_WHATIF_VALUES: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_whatif_values)]
         },
-        fallbacks=[CommandHandler('cancel', cancel_whatif)]
+        fallbacks=[
+            CommandHandler('cancel', cancel_whatif),
+            CommandHandler(['menu', 'start'], menu_fallback),
+        ],
+        allow_reentry=True,
     )
     application.add_handler(conv_handler)
-    
-    
+
+    actuator_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_custom_command, pattern='^act_custom_')],
+        states={
+            AWAIT_ACT_CUSTOM: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_custom_command)]
+        },
+        fallbacks=[
+            CommandHandler('cancel', cancel_custom),
+            CommandHandler(['menu', 'start'], menu_fallback),
+        ],
+        allow_reentry=True,
+    )
+    application.add_handler(actuator_conv)
+
+
     application.add_handler(CallbackQueryHandler(handle_main_menu, pattern="^menu_(predict|history|main)$"))
     application.add_handler(CallbackQueryHandler(handle_history_menu, pattern="^hist_"))
     application.add_handler(CallbackQueryHandler(handle_predict_menu, pattern="^pred_"))
     application.add_handler(CallbackQueryHandler(handle_training_menu, pattern="^train_"))
-    
-    actuator_conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(ask_pump_value, pattern='^act_custom_')],
-        states={
-            AWAIT_PUMP_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_pump_duration)],
-            AWAIT_PUMP_DURATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_custom_pump)]
-        },
-        fallbacks=[CommandHandler('cancel', cancel_actuator)]
-    )
-    application.add_handler(actuator_conv_handler)
-    
     application.add_handler(CallbackQueryHandler(handle_actuator_routing, pattern="^act_(menu$|board_|cmd_)"))
+
+    application.add_error_handler(error_handler)
 
     logger.info("GJGreenhousBot initialized and listening...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)

@@ -30,11 +30,7 @@ async def handle_history_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
             if df_hist.empty:
                 await query.message.reply_text("⚠️ No data found in InfluxDB.")
                 return
-            
-            print(df_hist.head(2), flush=True)
-            print("\n\n\n", flush=True)
-            print(df_hist.tail(2), flush=True)
-                
+
             # Use the dedicated history plotter
             plots = create_history_plots(df_hist)
             await update.get_bot().send_media_group(chat_id=query.message.chat_id, media=[InputMediaPhoto(media=b) for b in plots])

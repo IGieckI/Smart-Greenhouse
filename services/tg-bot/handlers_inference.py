@@ -2,9 +2,9 @@ import asyncio
 import pandas as pd
 from telegram import Update, InputMediaPhoto
 from telegram.ext import ContextTypes, ConversationHandler
-from config import INFERENCE_URL, TZ_ROME, AWAIT_WHATIF_MODE, AWAIT_WHATIF_TASK, AWAIT_WHATIF_BOARD, AWAIT_WHATIF_VALUES
+from config import INFERENCE_URL, TZ_ROME, AWAIT_WHATIF_MODE, AWAIT_WHATIF_TASK, AWAIT_WHATIF_BOARD, AWAIT_WHATIF_VALUES, logger
 from utils import fetch_api, build_keyboard, check_spam_lock
-from data_fetcher import fetch_history_data, fetch_available_boards
+from data_fetcher import fetch_history_data, fetch_available_boards, fetch_history_with_preds
 from plotting import create_series_plot, create_vpd_plot, create_semantic_category_plots
 
 async def handle_predict_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -124,8 +124,7 @@ async def _process_prediction(update: Update, mode: str, task_or_group: str, boa
         await wait_message.edit_text("⚠️ **Timeout or Network Error from API Server.**")
         return
 
-    # UPDATED call:
-    df_hist = await asyncio.to_thread(fetch_plot_data, board_id, 3, 3, 6)
+    df_hist = await asyncio.to_thread(fetch_history_with_preds, board_id, 3, 3, 6)
     await _send_prediction_results(update, wait_message, df_hist, data, mode, task_or_group, board_id, is_whatif=False)
 
 
@@ -210,23 +209,31 @@ async def process_whatif_values(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("⚠️ Invalid format. Exactly 7 numbers are required. Try again:")
         return AWAIT_WHATIF_VALUES
 
+    mode = context.user_data.get('wi_mode')
+    task = context.user_data.get('wi_task')
+    board_id = context.user_data.get('wi_board')
+    if not (mode and task and board_id):
+        await update.message.reply_text("⚠️ Simulation context lost. Send /menu to restart.")
+        return ConversationHandler.END
+
     wait_msg = await update.message.reply_text("🧪 Contacting the ML Server for simulation...")
     payload = {
         "air_temp": vals[0], "humidity": vals[1], "pressure": vals[2],
         "water_temp": vals[3], "tds": vals[4], "soil_moisture": vals[5], "light_lux": vals[6]
     }
-
-    mode, task, board_id = context.user_data['wi_mode'], context.user_data['wi_task'], context.user_data['wi_board']
     endpoint = f"{INFERENCE_URL}/predict/6m/{mode}/{task}/manual?board_id={board_id}"
 
-    data = await fetch_api(endpoint, payload=payload)
-    if not data:
-        await wait_msg.edit_text("⚠️ **Timeout or Network Error from API Server.**")
-        return ConversationHandler.END
+    try:
+        data = await fetch_api(endpoint, payload=payload)
+        if not data:
+            await wait_msg.edit_text("⚠️ **Timeout or Network Error from API Server.**")
+            return ConversationHandler.END
 
-    # UPDATED call:
-    df_hist = await asyncio.to_thread(fetch_plot_data, board_id, 3, 3, 6)
-    await _send_prediction_results(update, wait_msg, df_hist, data, mode, task, board_id, is_whatif=True)
+        df_hist = await asyncio.to_thread(fetch_history_with_preds, board_id, 3, 3, 6)
+        await _send_prediction_results(update, wait_msg, df_hist, data, mode, task, board_id, is_whatif=True)
+    except Exception as e:
+        logger.error(f"What-If simulation failed: {e}")
+        await wait_msg.edit_text("⚠️ Simulation failed while building the results. Send /menu to restart.")
     return ConversationHandler.END
 
 async def cancel_whatif(update: Update, context: ContextTypes.DEFAULT_TYPE):

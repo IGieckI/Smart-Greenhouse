@@ -29,13 +29,19 @@ const NUMERIC_FIELDS = ["air_temp", "humidity", "pressure", "water_temp", "soil_
 // Node-to-Star topology: { "<node_id>": "<star_id>" }, persisted across restarts
 const TOPOLOGY_FILE = './data/topology.json';
 let topology = {};
-try {
-    if (fs.existsSync(TOPOLOGY_FILE)) {
-        topology = JSON.parse(fs.readFileSync(TOPOLOGY_FILE, 'utf8'));
+
+// Load the node→star map from disk.
+function loadTopology() {
+    try {
+        topology = fs.existsSync(TOPOLOGY_FILE)
+            ? JSON.parse(fs.readFileSync(TOPOLOGY_FILE, 'utf8'))
+            : {};
+    } catch (e) {
+        console.error('[Controller] Could not load topology file:', e.message);
     }
-} catch (e) {
-    console.error('[Controller] Could not load topology file:', e.message);
+    return topology;
 }
+loadTopology();
 function saveTopology() {
     try { fs.writeFileSync(TOPOLOGY_FILE, JSON.stringify(topology, null, 2)); }
     catch (e) { console.error('[Controller] Could not save topology file:', e.message); }
@@ -51,8 +57,10 @@ mqttClient.on('error', (e) => console.error('[Controller] MQTT error:', e.messag
 
 // Pending commands awaiting ACK: node_id (string) → { star_id, payload, attempts, timer }
 const pendingCommands = {};
+// Command retry parameters
 const COMMAND_TIMEOUT_MS = 3000;
 const COMMAND_MAX_ATTEMPTS = 3;
+const MAX_COMMAND_DURATION_S = 300;
 
 function publishCommand(node_id, star_id, payload, attempt) {
     const topic = `greenhouse/commands/${star_id}`;
@@ -218,11 +226,18 @@ app.post('/api/command', (req, res) => {
         });
     }
 
+    let dur = Number(duration_s) || 0;
+    if (dur < 0) dur = 0;
+    if (dur > MAX_COMMAND_DURATION_S) {
+        console.log(`[Controller] Duration ${dur}s exceeds max, clamping to ${MAX_COMMAND_DURATION_S}s`);
+        dur = MAX_COMMAND_DURATION_S;
+    }
+
     const payload = JSON.stringify({
         nid: Number(node_id),
         act: String(actuator),
         val: Number(value),
-        dur: Number(duration_s) || 0
+        dur
     });
 
     // Cancel any in-flight command for this node before issuing a new one
@@ -237,7 +252,7 @@ app.post('/api/command', (req, res) => {
 });
 
 app.get('/api/topology', (req, res) => {
-    res.status(200).json(topology);
+    res.status(200).json(loadTopology());
 });
 
 const PORT = process.env.PORT || 3001;
