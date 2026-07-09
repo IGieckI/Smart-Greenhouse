@@ -117,10 +117,7 @@ def ensemble_multistep_inference(
     freq_minutes: int,
     mae_env: float = 0.5, 
     mae_auto: float = 0.5 
-) -> dict:
-    
-    # 1. Inverse MAE Weighting Calibration
-    # The lower the MAE, the higher the weight in the ensemble.
+) -> dict:    
     inv_mae_env = 1.0 / (mae_env + 1e-6)
     inv_mae_auto = 1.0 / (mae_auto + 1e-6)
     total_inv = inv_mae_env + inv_mae_auto
@@ -130,23 +127,16 @@ def ensemble_multistep_inference(
 
     df_patched = T_current_data.copy()
     
-    # 2. Extract Soft Sensor History
     soft_cfg = task_configs["soft"]
     virtual_ratio = get_virtual_ratio(freq_minutes)
     
-    # --- FIX: INJECT is_indoor DYNAMICALLY ---
     soft_features = soft_cfg["features"].copy()
     if USE_INDOOR_FEATURE and 'is_indoor' not in soft_features:
         soft_features.append('is_indoor')
-    # -----------------------------------------
     
     history_adv = build_advanced_features(df_patched, soft_features, soft_cfg.get("use_lags", False), virtual_ratio)
     ext_feat_soft = get_extended_features_list(soft_features, soft_cfg.get("use_lags", False))
     
-    print("CCCCCCCCCCCCCCC")
-
-
-    # Drop rows that don't have enough features to run the soft sensor
     X_soft = history_adv[ext_feat_soft].dropna()
     
     generated_history = []
@@ -156,8 +146,6 @@ def ensemble_multistep_inference(
         
         generated_leaf = ml_models["soft"].predict(X_soft)
         
-        # 3. OVERWRITE CHEATING: Explicitly overwrite the historical leaf_temp 
-        # with the soft sensor's estimation, so T3/T6 doesn't see real sparse data.
         df_patched.loc[X_soft.index, 'leaf_temp'] = generated_leaf
         
         generated_history = [
@@ -165,12 +153,8 @@ def ensemble_multistep_inference(
             for ts, val in zip(X_soft.index, generated_leaf)
         ]
 
-    print("DDDDDDDDDDD")
-
-    # Clean up any remaining NaNs (for rows before the soft sensor window)
     df_patched['leaf_temp'] = df_patched['leaf_temp'].ffill().bfill()
 
-    # 4. Generate Predictions (Auto uses the patched history, Env uses standard)
     preds_auto = recursive_multistep_inference(
         df_patched, prophet_models, ml_models["auto"], task_configs["auto"], freq_minutes
     )

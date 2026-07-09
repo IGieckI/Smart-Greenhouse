@@ -7,11 +7,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-###
 # Utility file to convert a csv estracted by operatorTools/StarInterface.py 
 # Data stored in that CSV will be updated direcly into Influx DB
 # To dump all data in Influx, you can use ./save_container_status.sh
-
 
 ORG = os.getenv("ORG", "iot_org")
 BUCKET = os.getenv("BUCKET", "sensor_data")

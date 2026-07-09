@@ -7,7 +7,7 @@ import csv
 import time
 from aiocoap import Context, Message, GET, POST
 
-# Base CoAP URI of the Star node
+# CoAP URI of the Star node
 DEFAULT_ESP32_URL = "coap://192.168.4.1"
 
 # Binary layout of the /dump payload (telemetry_packet_t)

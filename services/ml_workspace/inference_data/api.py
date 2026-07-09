@@ -212,17 +212,13 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
             virtual_ratio
         )
         
-        # Ensure we slice EXACTLY the features the soft model was trained on
         expected_features = list(soft_model.feature_names_in_)
         valid_idx = df_history_adv.dropna(subset=expected_features).index
         
         if not valid_idx.empty:
-            # Overwrite the physical history with the calculated Soft Sensor data
             df_history.loc[valid_idx, 'leaf_temp'] = soft_model.predict(df_history_adv.loc[valid_idx, expected_features])
-            # Fill remaining edges
             df_history['leaf_temp'] = df_history['leaf_temp'].ffill().bfill()
 
-    # Calculate Historical VPD
     df_history['vpd'] = df_history.apply(
         lambda row: calculate_vpd(row.get('leaf_temp', 0), row.get('air_temp', 0), row.get('humidity', 0)), 
         axis=1

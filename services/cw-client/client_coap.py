@@ -34,7 +34,7 @@ class TelemetryObserver:
 
     async def _ensure_star_id(self):
         """
-        Poll the Star's /info until its id is known, then stop.
+        Poll the Star's /info until its id is known, then stop
         """
         while self.keep_running and not self.star_id:
             ctx = await Context.create_client_context()
@@ -50,10 +50,12 @@ class TelemetryObserver:
                 await ctx.shutdown()
 
     def _start_command_listener(self, loop: asyncio.AbstractEventLoop):
-        """Subscribe to MQTT commands, forward each to the Star over CoAP, and ACK back."""
+        """
+        Subscribe to MQTT commands, forward each to the Star over CoAP, and ACK back
+        """
         async def _post_to_star(payload: bytes):
             """
-            Forward the command payload to the Star's /command CoAP resource and publish an ACK to MQTT.
+            Forward the command payload to the Star's /command CoAP resource and publish an ACK to MQTT
             """
             try:
                 request = Message(code=POST, uri=f"{STAR_COAP_BASE}/command", payload=payload)
@@ -70,7 +72,7 @@ class TelemetryObserver:
 
         def on_connect(client, userdata, flags, rc):
             """
-            Callback for MQTT connection. Subscribes to the command topic for this star.
+            Callback for MQTT connection. Subscribes to the command topic for this star
             """
             if rc == 0:
                 topic = (f"greenhouse/commands/{self.star_id}"
@@ -82,7 +84,7 @@ class TelemetryObserver:
 
         def on_message(client, userdata, msg):
             """
-            Callback for incoming MQTT messages. Forwards the payload to the Star over CoAP.
+            Callback for incoming MQTT messages. Forwards the payload to the Star over CoAP
             """
             asyncio.run_coroutine_threadsafe(_post_to_star(msg.payload), loop)
 
@@ -98,7 +100,7 @@ class TelemetryObserver:
 
     async def _forward(self, payload: dict):
         """
-        Forward the decoded telemetry payload to the controller via HTTP POST.
+        Forward the decoded telemetry payload to the controller via HTTP POST
         """
         try:
             async with self.http_session.post(CONTROLLER_URL, json=payload) as resp:
@@ -111,7 +113,7 @@ class TelemetryObserver:
 
     def _parse(self, data: bytes):
         """
-        Parse the incoming telemetry data and forward it to the controller.
+        Parse the incoming telemetry data and forward it to the controller
         """
         if not data:
             logger.debug("Empty keep-alive packet, ignoring")
@@ -151,7 +153,7 @@ class TelemetryObserver:
 
     async def start_observing(self):
         """
-        Start observing the Star's telemetry resource over CoAP and forward data to the controller.
+        Start observing the Star's telemetry resource over CoAP and forward data to the controller
         """
         self.context = await Context.create_client_context()
         self.http_session = aiohttp.ClientSession()
@@ -185,7 +187,7 @@ class TelemetryObserver:
 
     async def shutdown(self):
         """
-        Gracefully shutdown the observer, stopping CoAP observation, MQTT, and HTTP session.
+        Gracefully shutdown the observer, stopping CoAP observation, MQTT, and HTTP session
         """
         self.keep_running = False
         if self._star_id_task:

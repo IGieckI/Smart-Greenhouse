@@ -34,7 +34,7 @@ static volatile bool lora_rx_flag = false;
 void IRAM_ATTR setRxFlag() { lora_rx_flag = true; }
 
 /**
- * MQTT event handler, handles connection, disconnection, and incoming messages.
+ * MQTT event handler, handles connection, disconnection, and incoming messages
  */
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
     switch (event_id) {
@@ -77,7 +77,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 }
 
 /**
- * WiFi event handler, handles connection and disconnection events.
+ * WiFi event handler, handles connection and disconnection events
  */
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
     if (event_id == WIFI_EVENT_STA_START || event_id == WIFI_EVENT_STA_DISCONNECTED) {
@@ -88,7 +88,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
 }
 
 /**
- * Initialize WiFi in station mode and connect to the specified SSID and password.
+ * Initialize WiFi in station mode and connect to the specified SSID and password
  */
 static void wifi_init_sta(void) {
     wifi_event_group = xEventGroupCreate();
@@ -110,7 +110,8 @@ static void wifi_init_sta(void) {
 }
 
 /**
- * LoRa RX task, listens for downlink command frames from the Gateway. Uses interrupt-driven continuous receive so the radio stays in RX at all times. The mutex is held only for the brief readData() + startReceive() calls.
+ * LoRa RX task, listens for downlink command frames from the Gateway, and uses interrupt-driven continuous receive 
+ * so the radio stays in RX at all times. The mutex is held only for the brief readData() + startReceive() calls
  */
 static void lora_rx_task(void *pvParameters) {
     uint8_t buf[256] = {0};
