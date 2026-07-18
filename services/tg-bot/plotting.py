@@ -92,8 +92,6 @@ def create_series_plot(df_hist: pd.DataFrame, series_dict: dict, title: str, hid
     plt.close(fig)
     return buf
 
-# Original functions for ml inference
-
 def create_vpd_plot(df_hist: pd.DataFrame, future_vpd: list = None, historical_vpd: list = None) -> io.BytesIO:
     plt.figure(figsize=(10, 5))
     last_time = pd.Timestamp.now(tz=TZ_ROME)
@@ -154,8 +152,6 @@ def create_semantic_category_plots(df_hist: pd.DataFrame) -> list[io.BytesIO]:
         
     plots.append(create_vpd_plot(df_hist))
     return plots
-
-# Functions for history menu
 
 def _forecast_xy(series: list, anchor_time=None, anchor_val=None):
     """ Convert an API series [{timestamp, value}] to (times, values), optionally

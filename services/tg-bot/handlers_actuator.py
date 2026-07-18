@@ -66,8 +66,6 @@ async def handle_actuator_routing(update: Update, context: ContextTypes.DEFAULT_
         await wait_msg.edit_text(_format_command_result(res, actuator, value, duration), parse_mode='Markdown')
 
 
-# Custom command conversation
-
 async def start_custom_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Entry point: user tapped 'Custom Command' for a board. Ask for the free-form command."""
     query = update.callback_query

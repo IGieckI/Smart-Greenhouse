@@ -172,7 +172,7 @@
             "type": "influxdb",
             "uid": "InfluxDB-IoT"
           },
-          "query": "// Finestra parametrizzabile definita a livello di dashboard (es. stringa \"5m\" o variabile numerica)\nwindow_set = ${window_minutes}m\n\nfrom(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\")\n  // Includiamo \"air_temp_pred\" insieme ai tre campi storici richiesti\n  |> filter(fn: (r) => contains(value: r[\"_field\"], set: [\"leaf_temp\", \"leaf_temp_pred\"]))\n  |> filter(fn: (r) => r[\"id_board\"] == \"${id_board_var}\")\n  // Finestra di aggregazione dinamica e parametrizzabile per ripulire il rumore\n  |> aggregateWindow(every: window_set, fn: mean, createEmpty: false)",
+          "query": "window_set = ${window_minutes}m\n\nfrom(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\")\n  |> filter(fn: (r) => contains(value: r[\"_field\"], set: [\"leaf_temp\", \"leaf_temp_pred\"]))\n  |> filter(fn: (r) => r[\"id_board\"] == \"${id_board_var}\")\n  |> aggregateWindow(every: window_set, fn: mean, createEmpty: false)",
           "refId": "A"
         }
       ],
@@ -382,7 +382,7 @@
             "type": "influxdb",
             "uid": "InfluxDB-IoT"
           },
-          "query": "base_data = from(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\" and r[\"id_board\"] == \"${id_board_var}\")\n  |> filter(fn: (r) => contains(value: r[\"_field\"], set: [\"air_temp\", \"air_temp_pred\", \"leaf_temp\", \"leaf_temp_pred\"]))\n  |> group(columns: [\"_measurement\", \"_field\", \"id_board\"])\n  |> aggregateWindow(every: 15m, fn: mean, createEmpty: false)\n\n// 2. MASSIMI GIORNALIERI\ndata_max = base_data\n  |> aggregateWindow(every: 1d, fn: max, createEmpty: false)\n  |> map(fn: (r) => ({ r with _field: r._field + \"_max\" }))\n\n// 3. MINIMI GIORNALIERI\ndata_min = base_data\n  |> aggregateWindow(every: 1d, fn: min, createEmpty: false)\n  |> map(fn: (r) => ({ r with _field: r._field + \"_min\" }))\n\n// 4. UNIONE, PIVOT E TIMELINE (Ultimi 3 Giorni)\nunion(tables: [data_max, data_min])\n  |> pivot(rowKey:[\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> sort(columns: [\"_time\"], desc: true)\n  |> limit(n: 3)\n  |> sort(columns: [\"_time\"], desc: false)\n  |> drop(columns: [\"_start\", \"_stop\", \"_measurement\", \"id_board\"])",
+          "query": "base_data = from(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\" and r[\"id_board\"] == \"${id_board_var}\")\n  |> filter(fn: (r) => contains(value: r[\"_field\"], set: [\"air_temp\", \"air_temp_pred\", \"leaf_temp\", \"leaf_temp_pred\"]))\n  |> group(columns: [\"_measurement\", \"_field\", \"id_board\"])\n  |> aggregateWindow(every: 15m, fn: mean, createEmpty: false)\n\ndata_max = base_data\n  |> aggregateWindow(every: 1d, fn: max, createEmpty: false)\n  |> map(fn: (r) => ({ r with _field: r._field + \"_max\" }))\n\ndata_min = base_data\n  |> aggregateWindow(every: 1d, fn: min, createEmpty: false)\n  |> map(fn: (r) => ({ r with _field: r._field + \"_min\" }))\n\nunion(tables: [data_max, data_min])\n  |> pivot(rowKey:[\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> sort(columns: [\"_time\"], desc: true)\n  |> limit(n: 3)\n  |> sort(columns: [\"_time\"], desc: false)\n  |> drop(columns: [\"_start\", \"_stop\", \"_measurement\", \"id_board\"])",
           "refId": "A"
         }
       ],
@@ -615,7 +615,7 @@
             "type": "influxdb",
             "uid": "InfluxDB-IoT"
           },
-          "query": "// Finestra parametrizzabile definita a livello di dashboard\nwindow_set = ${window_minutes}m\n\nfrom(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\")\n  |> filter(fn: (r) => contains(value: r[\"_field\"], set: [\"air_temp\", \"leaf_temp\", \"water_temp\", \"air_temp_pred\", \"leaf_temp_pred\"]))\n  |> filter(fn: (r) => r[\"id_board\"] == \"${id_board_var}\")\n  \n  // 1. Rimuoviamo i tag \"model_source\" e \"freq\" dalle chiavi di raggruppamento.\n  // In questo modo i dati di tutti i modelli per \"air_temp_pred\" finiscono nello stesso \"calderone\".\n  |> group(columns: [\"_measurement\", \"_field\", \"id_board\"])\n  \n  // 2. Finestra di aggregazione dinamica. \n  // Poiché i dati dei vari modelli sono ora raggruppati insieme, la funzione \"mean\" \n  // calcolerà la media esatta tra tutti i modelli e i punti temporali che cadono in quella finestra.\n  |> aggregateWindow(every: window_set, fn: mean, createEmpty: false)",
+          "query": "window_set = ${window_minutes}m\n\nfrom(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\")\n  |> filter(fn: (r) => contains(value: r[\"_field\"], set: [\"air_temp\", \"leaf_temp\", \"water_temp\", \"air_temp_pred\", \"leaf_temp_pred\"]))\n  |> filter(fn: (r) => r[\"id_board\"] == \"${id_board_var}\")\n  |> group(columns: [\"_measurement\", \"_field\", \"id_board\"])\n  |> aggregateWindow(every: window_set, fn: mean, createEmpty: false)",
           "refId": "A"
         }
       ],
@@ -958,7 +958,7 @@
             "type": "influxdb",
             "uid": "InfluxDB-IoT"
           },
-          "query": "from(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\")\n  |> filter(fn: (r) => r[\"id_board\"] == \"${id_board_var}\")\n  |> filter(fn: (r) => r[\"_field\"] == \"humidity\" or r[\"_field\"] == \"soil_moisture\" or r[\"_field\"] == \"humidity_pred\")\n  \n  \n  |> group(columns: [\"_measurement\", \"_field\", \"id_board\"])\n  \n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"moisture_data\")",
+          "query": "from(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\")\n  |> filter(fn: (r) => r[\"id_board\"] == \"${id_board_var}\")\n  |> filter(fn: (r) => r[\"_field\"] == \"humidity\" or r[\"_field\"] == \"soil_moisture\" or r[\"_field\"] == \"humidity_pred\")\n  |> group(columns: [\"_measurement\", \"_field\", \"id_board\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"moisture_data\")",
           "refId": "A"
         }
       ],
@@ -1123,7 +1123,7 @@
             "type": "influxdb",
             "uid": "InfluxDB-IoT"
           },
-          "query": "base_data = from(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\" and r[\"id_board\"] == \"${id_board_var}\")\n  |> filter(fn: (r) => contains(value: r[\"_field\"], set: [\"humidity\", \"humidity_pred\"]))\n  |> group(columns: [\"_measurement\", \"_field\", \"id_board\"])\n  |> aggregateWindow(every: 15m, fn: mean, createEmpty: false)\n\n// 2. MASSIMI GIORNALIERI\ndata_max = base_data\n  |> aggregateWindow(every: 1d, fn: max, createEmpty: false)\n  |> map(fn: (r) => ({ r with _field: r._field + \"_max\" }))\n\n// 3. MINIMI GIORNALIERI\ndata_min = base_data\n  |> aggregateWindow(every: 1d, fn: min, createEmpty: false)\n  |> map(fn: (r) => ({ r with _field: r._field + \"_min\" }))\n\n// 4. UNIONE, PIVOT E TIMELINE (Ultimi 3 Giorni)\nunion(tables: [data_max, data_min])\n  |> pivot(rowKey:[\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> sort(columns: [\"_time\"], desc: true)\n  |> limit(n: 3)\n  |> sort(columns: [\"_time\"], desc: false)\n  |> drop(columns: [\"_start\", \"_stop\", \"_measurement\", \"id_board\"])",
+          "query": "base_data = from(bucket: \"${bucket_clean}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"sensor_measurements\" and r[\"id_board\"] == \"${id_board_var}\")\n  |> filter(fn: (r) => contains(value: r[\"_field\"], set: [\"humidity\", \"humidity_pred\"]))\n  |> group(columns: [\"_measurement\", \"_field\", \"id_board\"])\n  |> aggregateWindow(every: 15m, fn: mean, createEmpty: false)\n\ndata_max = base_data\n  |> aggregateWindow(every: 1d, fn: max, createEmpty: false)\n  |> map(fn: (r) => ({ r with _field: r._field + \"_max\" }))\n\ndata_min = base_data\n  |> aggregateWindow(every: 1d, fn: min, createEmpty: false)\n  |> map(fn: (r) => ({ r with _field: r._field + \"_min\" }))\n\nunion(tables: [data_max, data_min])\n  |> pivot(rowKey:[\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> sort(columns: [\"_time\"], desc: true)\n  |> limit(n: 3)\n  |> sort(columns: [\"_time\"], desc: false)\n  |> drop(columns: [\"_start\", \"_stop\", \"_measurement\", \"id_board\"])",
           "refId": "A"
         }
       ],
@@ -1307,30 +1307,6 @@
           }
         },
         "overrides": [
-          {
-            "__systemRef": "hideSeriesFrom",
-            "matcher": {
-              "id": "byNames",
-              "options": {
-                "mode": "exclude",
-                "names": [
-                  "tds 3750846324"
-                ],
-                "prefix": "All except:",
-                "readOnly": true
-              }
-            },
-            "properties": [
-              {
-                "id": "custom.hideFrom",
-                "value": {
-                  "legend": false,
-                  "tooltip": true,
-                  "viz": true
-                }
-              }
-            ]
-          },
           {
             "matcher": {
               "id": "byName",
@@ -1599,5 +1575,5 @@
   "timezone": "browser",
   "title": "Clean single info",
   "uid": "aaaff2e",
-  "version": 6
+  "version": 5
 }

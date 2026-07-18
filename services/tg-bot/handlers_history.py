@@ -60,7 +60,6 @@ async def handle_history_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
             hours, board_id = int(parts[1]), parts[2]
             await query.edit_message_text(f"📊 Generating charts for Unit ({board_id}) ({hours}h)...")
             
-            # Use the dedicated history fetcher
             df_hist = await asyncio.to_thread(fetch_history_with_preds, board_id, hours, 3, 6)
             
             if df_hist.empty:
