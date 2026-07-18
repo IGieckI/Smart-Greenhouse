@@ -26,6 +26,7 @@ services:
     restart: unless-stopped
 
 
+
   grafana:
     image: grafana/grafana:latest
     container_name: grafana
@@ -35,6 +36,8 @@ services:
       - INFLUX_TOKEN=${INFLUX_TOKEN}
       - INFLUX_ORG=${INFLUX_ORG}
       - INFLUX_BUCKET=${INFLUX_BUCKET_RAW}
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
     volumes:
       - grafana-data:/var/lib/grafana
       - ./grafana/exported_dashboards:/var/lib/grafana/dashboards/json:ro
@@ -44,7 +47,9 @@ services:
       influxdb:
         condition: service_healthy
     restart: unless-stopped
-    
+
+
+
   controller:
     build: ./controller
     container_name: controller
@@ -68,6 +73,8 @@ services:
     group_add:
       - audio
 
+
+
   mosquitto:
     image: eclipse-mosquitto:2
     container_name: mosquitto
@@ -76,6 +83,8 @@ services:
     volumes:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
     restart: unless-stopped
+
+
 
   lw-client:
     build: ./lw-client
@@ -93,6 +102,8 @@ services:
       - mosquitto
     restart: unless-stopped
 
+
+
   cw-client:
     build: ./cw-client
     container_name: cw-client
@@ -109,6 +120,8 @@ services:
     depends_on:
       - controller
     restart: unless-stopped
+
+
 
   ml-trainer:
     build: ./ml_workspace/trainer_data
@@ -134,7 +147,9 @@ services:
       interval: 5s
       timeout: 2s
       retries: 5
-    
+  
+
+  
   ml-inference:
     build: ./ml_workspace/inference_data
     container_name: ml-inference

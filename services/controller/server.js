@@ -5,29 +5,54 @@ const path = require('path');
 const mqtt = require('mqtt');
 const { InfluxDB, Point } = require('@influxdata/influxdb-client');
 
-const app = express();
-app.use(express.json());
 
-const url = process.env.INFLUX_URL || 'http://localhost:8086';
-const token = process.env.INFLUX_TOKEN;
-const org = process.env.INFLUX_ORG;
-const bucket = process.env.INFLUX_BUCKET;
-const influxDB = new InfluxDB({ url, token });
-const writeApi = influxDB.getWriteApi(org, bucket);
+const PORT = process.env.PORT || 3001;
+
+
+const INFLUX_URL = process.env.INFLUX_URL || 'http://localhost:8086';
+const INFLUX_TOKEN = process.env.INFLUX_TOKEN;
+const INFLUX_ORG = process.env.INFLUX_ORG;
+const INFLUX_BUCKET = process.env.INFLUX_BUCKET;
+
+const MQTT_URL = process.env.MQTT_URL || 'mqtt://mosquitto:1883';
+
 
 const LEAF_TEMP_LABEL = process.env.LEAF_TEMP_LABEL || 'leaf_temp';
-const FALLBACK_FILE_PATH = './data/leaf_temp.txt';
-const AUDIO_FILE = path.join(__dirname, 'ringtone.mp3'); 
+const NUMERIC_FIELDS = ["air_temp", "humidity", "pressure", "water_temp", "soil_moisture", "tds", "light_lux", LEAF_TEMP_LABEL];
+
+const FALLBACK_FILE_PATH = path.join(__dirname, 'data', 'leaf_temp.txt');
+const AUDIO_FILE = path.join(__dirname, 'ringtone.mp3');
 
 const SAMPLING_FREQ_MIN = 6;
 const ASSUMPTION_EQUALS = 2;
 const TOLERANCE = 2; 
 const FALLBACK_THR = (SAMPLING_FREQ_MIN * ASSUMPTION_EQUALS + TOLERANCE);
 
-const NUMERIC_FIELDS = ["air_temp", "humidity", "pressure", "water_temp", "soil_moisture", "tds", "light_lux", LEAF_TEMP_LABEL];
 
-const TOPOLOGY_FILE = './data/topology.json';
+
+const COMMAND_TIMEOUT_MS = 3000;
+const COMMAND_MAX_ATTEMPTS = 3;
+const MAX_COMMAND_DURATION_S = 300;
+
+const pendingCommands = {};
+let fallbackUsageCount = {};
+let currentFallbackIds = {};
+
+
+
+
+const TOPOLOGY_FILE = path.join(__dirname, 'data', 'topology.json');
 let topology = {};
+
+const app = express();
+app.use(express.json());
+
+
+const influxDB = new InfluxDB({ url: INFLUX_URL, token: INFLUX_TOKEN });
+const writeApi = influxDB.getWriteApi(INFLUX_ORG, INFLUX_BUCKET);
+const mqttClient = mqtt.connect(MQTT_URL);
+
+
 
 function loadTopology() {
     try {
@@ -40,6 +65,8 @@ function loadTopology() {
     return topology;
 }
 loadTopology();
+
+
 function saveTopology() {
     try {fs.mkdirSync(path.dirname(TOPOLOGY_FILE), { recursive: true });
         fs.writeFileSync(TOPOLOGY_FILE, JSON.stringify(topology, null, 2));
@@ -47,17 +74,15 @@ function saveTopology() {
     catch (e) { console.error('[Controller] Could not save topology file:', e.message); }
 }
 
-const mqttClient = mqtt.connect('mqtt://mosquitto:1883');
+
+
+
 mqttClient.on('connect', () => {
     console.log('[Controller] MQTT connected to mosquitto');
     mqttClient.subscribe('greenhouse/acks', { qos: 1 });
 });
 mqttClient.on('error', (e) => console.error('[Controller] MQTT error:', e.message));
 
-const pendingCommands = {};
-const COMMAND_TIMEOUT_MS = 3000;
-const COMMAND_MAX_ATTEMPTS = 3;
-const MAX_COMMAND_DURATION_S = 300;
 
 function publishCommand(node_id, star_id, payload, attempt) {
     const topic = `greenhouse/commands/${star_id}`;
@@ -262,7 +287,8 @@ app.get('/api/topology', (req, res) => {
     res.status(200).json(loadTopology());
 });
 
-const PORT = process.env.PORT || 3001;
+
+
 app.listen(PORT, () => {
     console.log(`Controller listening on port ${PORT}`);
 });
