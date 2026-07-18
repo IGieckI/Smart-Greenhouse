@@ -126,12 +126,12 @@ cmd_command() {
     local value="${3:-}"
     local duration="${4:-10}"
     [[ -z "$node_id" || -z "$actuator" || -z "$value" ]] && \
-        die "Usage: ./greenhouse.sh command <node_id> <actuator> <value 0-100> [duration_s]
+        die "Usage: ./greenhouse.sh command <node_id> <actuator> <value 0-255> [duration_s]
   Examples:
-    ./greenhouse.sh command 3750866944 pump 100 10   # pump on full for 10s
-    ./greenhouse.sh command 3750866944 led  75  30   # LED at 75% for 30s
+    ./greenhouse.sh command 3750866944 pump 255 10   # pump on full for 10s
+    ./greenhouse.sh command 3750866944 led  191 30   # LED at ~75% brightness for 30s
     ./greenhouse.sh command 3750866944 pump 0   0    # pump off immediately"
-    info "Sending command to node $node_id: $actuator=$value% for ${duration}s..."
+    info "Sending command to node $node_id: $actuator=$value for ${duration}s..."
     curl -s -X POST http://localhost:3001/api/command \
         -H "Content-Type: application/json" \
         -d "{\"node_id\":$node_id,\"actuator\":\"$actuator\",\"value\":$value,\"duration_s\":$duration}" \
@@ -185,7 +185,7 @@ case "$CMD" in
         echo "  logs [service]               Follow logs (all services, or one by name)"
         echo "  reset <service>              Rebuild and restart a single service"
         echo "  exchange <file.csv>          Import colleague CSV, export merged dump"
-        echo "  command <node_id> <act> <val 0-100> [dur]   Send actuator command (default dur: 10s)"
+        echo "  command <node_id> <act> <val 0-255> [dur]   Send actuator command (default dur: 10s)"
         ;;
     *)
         die "Unknown command '$CMD'. Run './greenhouse.sh help' for usage."

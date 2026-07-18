@@ -138,9 +138,6 @@ def ensemble_multistep_inference(
     history_adv = build_advanced_features(df_patched, soft_features, soft_cfg.get("use_lags", False), virtual_ratio)
     ext_feat_soft = get_extended_features_list(soft_features, soft_cfg.get("use_lags", False))
     
-    print("CCCCCCCCCCCCCCC")
-
-
     X_soft = history_adv[ext_feat_soft].dropna()
     
     generated_history = []

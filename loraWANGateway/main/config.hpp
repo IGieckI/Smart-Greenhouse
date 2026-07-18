@@ -14,7 +14,7 @@
 // MQTT
 #define MQTT_TOPIC  "greenhouse/telemetry/live"
 
-// Broker selection: comment out USE_LOCAL_BROKER to use HiveMQ, otherwise a local broker will be used 
+// Broker selection: comment out USE_LOCAL_BROKER to use HiveMQ, otherwise a local Mosquitto broker hosted in services will be used 
 #define USE_LOCAL_BROKER
 
 #ifdef USE_LOCAL_BROKER

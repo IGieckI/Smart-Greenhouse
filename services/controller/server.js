@@ -41,7 +41,9 @@ function loadTopology() {
 }
 loadTopology();
 function saveTopology() {
-    try { fs.writeFileSync(TOPOLOGY_FILE, JSON.stringify(topology, null, 2)); }
+    try {fs.mkdirSync(path.dirname(TOPOLOGY_FILE), { recursive: true });
+        fs.writeFileSync(TOPOLOGY_FILE, JSON.stringify(topology, null, 2));
+    }
     catch (e) { console.error('[Controller] Could not save topology file:', e.message); }
 }
 
@@ -232,10 +234,17 @@ app.post('/api/command', (req, res) => {
         dur = MAX_COMMAND_DURATION_S;
     }
 
+    let val = Number(value) || 0;
+    if (val < 0) val = 0;
+    if (val > 255) {
+        console.log(`[Controller] Value ${val} exceeds max, clamping to 255`);
+        val = 255;
+    }
+
     const payload = JSON.stringify({
         nid: Number(node_id),
         act: String(actuator),
-        val: Number(value),
+        val,
         dur
     });
 

@@ -59,7 +59,7 @@ coap_resource_t *telemetry_resource = NULL;
 
 // Raised by reception_task when new telemetry is ready. The observe
 // notification itself is issued by coap_server_task, because this libcoap build
-// is not thread-safe (COAP_THREAD_SAFE=0): the CoAP context must only be
+// is not thread-safe: the CoAP context must only be
 // touched from the task that runs coap_io_process.
 static volatile bool telemetry_dirty = false;
 
@@ -68,7 +68,6 @@ EspHal*  hal   = nullptr;
 Module*  mod   = nullptr;
 SX1262*  radio = nullptr;
 
-// Star identity (derived from MAC)
 static uint32_t star_id = 0;
 
 // Mutex protecting SPI access to the LoRa radio (shared between lora_rx_task and reception_task)
@@ -116,7 +115,7 @@ void lora_init() {
 }
 
 /**
- * CoAP GET handler for /info, returns the star_id as JSON.
+ * CoAP GET handler for /info, returns the star_id as JSON
  */
 static void hnd_get_info(coap_resource_t *resource, coap_session_t *session,
                          const coap_pdu_t *request, const coap_string_t *query,
@@ -131,7 +130,7 @@ static void hnd_get_info(coap_resource_t *resource, coap_session_t *session,
 
 /**
  * Frees the heap snapshot handed to coap_add_data_large_response once libcoap
- * has finished transmitting every block of a /dump transfer.
+ * has finished transmitting every block of a /dump transfer
  */
 static void free_dump_buf(coap_session_t *session, void *app_ptr) {
     (void)session;
@@ -141,10 +140,9 @@ static void free_dump_buf(coap_session_t *session, void *app_ptr) {
 /**
  * CoAP GET handler for /dump. Drains the telemetry ring buffer once into a heap
  * snapshot of packed telemetry_packet_t records and hands it to libcoap, which
- * serves it (block-wise via RFC 7959 if it exceeds one block) without
- * re-invoking this handler — so the destructive drain happens exactly once per
- * transfer. The payload is raw little-endian telemetry_packet_t records, the
- * same layout already streamed over /telemetry.
+ * serves it (in multiple blocks if it exceeds one block) without
+ * re-invoking this handler, so the destructive drain happens exactly once per
+ * transfer
  */
 static void hnd_get_dump(coap_resource_t *resource, coap_session_t *session,
                          const coap_pdu_t *request, const coap_string_t *query,
@@ -182,7 +180,7 @@ static void hnd_get_dump(coap_resource_t *resource, coap_session_t *session,
 
 /**
  * CoAP POST handler for /set_time, sets the system clock from an epoch timestamp
- * supplied as an ASCII string in the request payload.
+ * supplied as an ASCII string in the request payload
  */
 static void hnd_post_settime(coap_resource_t *resource, coap_session_t *session,
                              const coap_pdu_t *request, const coap_string_t *query,
@@ -207,8 +205,7 @@ static void hnd_post_settime(coap_resource_t *resource, coap_session_t *session,
 }
 
 /**
- * CoAP POST handler for /command, queues an actuation command for a node. The
- * payload is the same JSON accepted by the former HTTP endpoint.
+ * CoAP POST handler for /command, queues an actuation command for a node
  */
 static void hnd_post_command(coap_resource_t *resource, coap_session_t *session,
                              const coap_pdu_t *request, const coap_string_t *query,
@@ -261,7 +258,7 @@ static void hnd_post_command(coap_resource_t *resource, coap_session_t *session,
 }
 
 /**
- * CoAP GET handler for /telemetry resource, returns the last received telemetry packet in binary format.
+ * CoAP GET handler for /telemetry resource, returns the last received telemetry packet in binary format
  */
 static void hnd_get_telemetry(coap_resource_t *resource, coap_session_t *session,
                                const coap_pdu_t *request, const coap_string_t *query,
@@ -274,7 +271,7 @@ static void hnd_get_telemetry(coap_resource_t *resource, coap_session_t *session
 }
 
 /**
- * CoAP server task, runs in its own FreeRTOS task and handles incoming CoAP requests.
+ * CoAP server task, runs in its own FreeRTOS task and handles incoming CoAP requests
  */
 static void coap_server_task(void *p) {
     coap_context_t  *ctx = NULL;
@@ -292,32 +289,25 @@ static void coap_server_task(void *p) {
     }
     coap_new_endpoint(ctx, &serv_addr, COAP_PROTO_UDP);
 
-    // Let libcoap manage RFC 7959 block-wise transfers and reassemble whole
-    // bodies, so /dump can return payloads larger than a single block.
     coap_context_set_block_mode(ctx, COAP_BLOCK_USE_LIBCOAP | COAP_BLOCK_SINGLE_BODY);
 
-    // /telemetry — observable live reading (binary telemetry_packet_t)
     telemetry_resource = coap_resource_init(coap_make_str_const("telemetry"), 0);
     coap_resource_set_get_observable(telemetry_resource, 1);
     coap_register_handler(telemetry_resource, COAP_REQUEST_GET, hnd_get_telemetry);
     coap_add_resource(ctx, telemetry_resource);
 
-    // /info — GET star_id as JSON
     coap_resource_t *info_res = coap_resource_init(coap_make_str_const("info"), 0);
     coap_register_handler(info_res, COAP_REQUEST_GET, hnd_get_info);
     coap_add_resource(ctx, info_res);
 
-    // /dump — GET the ring-buffer history as packed binary records (block-wise)
     coap_resource_t *dump_res = coap_resource_init(coap_make_str_const("dump"), 0);
     coap_register_handler(dump_res, COAP_REQUEST_GET, hnd_get_dump);
     coap_add_resource(ctx, dump_res);
 
-    // /set_time — POST an epoch string to set the RTC
     coap_resource_t *time_res = coap_resource_init(coap_make_str_const("set_time"), 0);
     coap_register_handler(time_res, COAP_REQUEST_POST, hnd_post_settime);
     coap_add_resource(ctx, time_res);
 
-    // /command — POST a JSON actuation command to queue for a node
     coap_resource_t *cmd_res = coap_resource_init(coap_make_str_const("command"), 0);
     coap_register_handler(cmd_res, COAP_REQUEST_POST, hnd_post_command);
     coap_add_resource(ctx, cmd_res);
@@ -325,8 +315,6 @@ static void coap_server_task(void *p) {
     ESP_LOGI(TAG, "CoAP server listening on port 5683 (/telemetry, /info, /dump, /set_time, /command)");
 
     while (1) {
-        // Issue any pending observe notification from this task, which owns the
-        // CoAP context; coap_io_process() then flushes it to subscribers.
         if (telemetry_dirty) {
             telemetry_dirty = false;
             coap_resource_notify_observers(telemetry_resource, NULL);
@@ -340,7 +328,7 @@ static void coap_server_task(void *p) {
 }
 
 /**
- * Wi-Fi initialization in AP+STA mode, sets up an access point for operator connection and a station for upstream connectivity.
+ * Wi-Fi initialization in AP+STA mode, sets up an access point for operator connection and a station for upstream connectivity
  */
 static void wifi_init_ap() {
     ESP_ERROR_CHECK(esp_netif_init());
@@ -353,9 +341,9 @@ static void wifi_init_ap() {
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
     wifi_config_t wifi_config = {};
-    strcpy((char *)wifi_config.ap.ssid, "GREENHOUSE_STAR");
-    wifi_config.ap.ssid_len      = strlen("GREENHOUSE_STAR");
-    strcpy((char *)wifi_config.ap.password, "operator123");
+    strcpy((char *)wifi_config.ap.ssid, WIFI_AP_SSID);
+    wifi_config.ap.ssid_len      = strlen(WIFI_AP_SSID);
+    strcpy((char *)wifi_config.ap.password, WIFI_AP_PASSWORD);
     wifi_config.ap.max_connection = 4;
     wifi_config.ap.authmode       = WIFI_AUTH_WPA2_PSK;
     wifi_config.ap.channel        = 1;
@@ -367,7 +355,7 @@ static void wifi_init_ap() {
 
 #ifdef IS_HELTEC
 /**
- * Initializes the OLED display using u8g2 library and sets up I2C communication.
+ * Initializes the OLED display using u8g2 library and sets up I2C communication
  */
 static void display_init() {
     gpio_set_direction((gpio_num_t)VEXT_PIN, GPIO_MODE_OUTPUT);
@@ -393,7 +381,7 @@ static void display_init() {
 #endif
 
 /**
- * ESP-NOW receive callback, called from ISR context. Saves the sender MAC alongside the packet so reception_task can reply.
+ * ESP-NOW receive callback, called from ISR context. Saves the sender MAC alongside the packet so reception_task can reply
  */
 void OnDataRecv(const esp_now_recv_info_t *esp_now_info, const uint8_t *incomingData, int len) {
     received_espnow_t item;
@@ -407,7 +395,8 @@ void OnDataRecv(const esp_now_recv_info_t *esp_now_info, const uint8_t *incoming
 }
 
 /**
- * LoRa RX task, listens for downlink command frames from the Gateway. Uses interrupt-driven continuous receive so the radio stays in RX at all times. The mutex is held only for the brief readData() + startReceive() calls.
+ * LoRa RX task, listens for downlink command frames from the Gateway and uses interrupt-driven continuous 
+ * receive so the radio stays in RX at all times. The mutex is held only for the brief readData() + startReceive() calls
  */
 static void lora_rx_task(void *p) {
     if (radio == nullptr) {
@@ -493,7 +482,9 @@ static void lora_rx_task(void *p) {
 }
 
 /**
- * Reception task, runs in its own FreeRTOS task. Receives telemetry packets from ESP-NOW, timestamps them, learns the node's MAC for future replies, forwards the data to LoRa, updates the CoAP observable resource, pushes to the ring buffer for /dump, updates the display, and dispatches any pending commands to the node.
+ * Reception task, runs in its own FreeRTOS task and receives telemetry packets from ESP-NOW, 
+ * timestamps them, learns the node's MAC for future replies, forwards the data to LoRa, updates the CoAP observable resource, 
+ * pushes to the ring buffer for /dump, updates the display, and dispatches any pending commands to the node.
  */
 void reception_task(void *pvParameters) {
     ESP_LOGI(TAG, "Reception Task running on Core %d", xPortGetCoreID());
@@ -543,7 +534,6 @@ void reception_task(void *pvParameters) {
             }
 
             memcpy(&last_received_data, &pkt, sizeof(telemetry_packet_t));
-            // Hand the observe notification off to coap_server_task (see telemetry_dirty).
             telemetry_dirty = true;
 
             if (xRingbufferSend(telemetry_ringbuf, &pkt, sizeof(telemetry_packet_t), 0) != pdTRUE) {
@@ -583,7 +573,8 @@ void reception_task(void *pvParameters) {
 }
 
 /**
- * Data manager task, runs in its own FreeRTOS task. Receives telemetry packets from the display mailbox and updates the OLED display (if present) or logs the data to the console.
+ * Data manager task, runs in its own FreeRTOS task and receives telemetry packets from the display mailbox 
+ * and updates the OLED display (if present) or logs the data to the console
  */
 void data_manager_task(void *pvParameters) {
     ESP_LOGI(TAG, "Display Task running on Core %d", xPortGetCoreID());
