@@ -10,9 +10,10 @@ services:
       - DOCKER_INFLUXDB_INIT_USERNAME=${INFLUX_USER}
       - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUX_PASSWORD}
       - DOCKER_INFLUXDB_INIT_ORG=${INFLUX_ORG}
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUX_TOKEN}
+
       - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUX_BUCKET_RAW}
       - DOCKER_INFLUXDB_CAVEAUX_BUCKET=${INFLUX_BUCKET_CAVEAUX}
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUX_TOKEN}
     volumes:
       - influxdb-data:/var/lib/influxdb2
       - ./influx/import_on_startup.sh:/docker-entrypoint-initdb.d/import_on_startup.sh:ro
