@@ -6,45 +6,24 @@ import pandas as pd
 import numpy as np
 import joblib
 import matplotlib.pyplot as plt
-import seaborn as sns
-
-
-
-
 from influxdb_client import InfluxDBClient
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import TimeSeriesSplit, GridSearchCV
-
 from sklearn.linear_model import Ridge
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.svm import SVR
 from lightgbm import LGBMRegressor
-
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import PolynomialFeatures
-
-
 from prophet import Prophet
 from prophet.serialize import model_to_json
-
-import cmdstanpy
-
-try:
-    os.environ['CMDSTAN'] = cmdstanpy.cmdstan_path()
-except Exception as e:
-    print(f"[Warning] Unable to dynamically set CMDSTAN: {e}")
 
 sys.path.append('/app')
 from shared_core.preprocessing import build_advanced_features, get_extended_features_list, create_lagged_features
 from shared_core.config import *
 from shared_core.tasks import TASKS
-import traceback
-
-
-
-
 
 def fetch_clean_data(freq_minutes: int):
     print(f"[Data Fetch] Pulling clean data from bucket for {freq_minutes}m frequency...")
@@ -66,7 +45,6 @@ def fetch_clean_data(freq_minutes: int):
     if not df.empty:
         df.set_index('_time', inplace=True)
         df.sort_index(inplace=True)
-        
         
         if USE_INDOOR_FEATURE:
             df['is_indoor'] = df['id_board'].map(BOARD_ENV_MAP).fillna(0).astype(int)
@@ -124,22 +102,18 @@ def log_and_evaluate(y_test, y_pred, features_names, model, model_name, task_nam
         
     return report, mae
 
-
-
-
 def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
     print(f"\n{'='*60}\n[Trainer {freq_minutes}m] INDEPENDENT ENVIRONMENTAL PROPHET TRAINING\n{'='*60}")
     os.makedirs(output_dir, exist_ok=True)
     df_train = df_clean[df_clean['id_board'].isin(ACTIVE_BOARDS)].copy()
     
-    effective_days = ENV_ARIMA_TRAIN_DAYS if freq_minutes >= 6 else 3
+    effective_days = ENV_MODELS_TRAIN_DAYS if freq_minutes >= 6 else 3
     tail_samples = int((effective_days * 24 * 60) / freq_minutes)
     print(f"[Prophet Setup] Target history per board: {effective_days} days ({tail_samples} tail samples).")
     
     for feat in features:
         try:
             print(f"[Prophet Training] Constructing Panel Dataset for feature: '{feat}'...")
-            
             
             df_prophet_full = pd.DataFrame()
             for b_id in ACTIVE_BOARDS:
@@ -150,7 +124,6 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
                 if USE_INDOOR_FEATURE and 'is_indoor' in df_b.columns:
                     cols_to_extract.append('is_indoor')
                     
-                
                 df_b = df_b[cols_to_extract].dropna().tail(tail_samples)
                 if len(df_b) < 100 or df_b[feat].nunique() <= 1: continue
                 
@@ -171,21 +144,18 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
             df_prophet_full.dropna(inplace=True)
             df_prophet_full.sort_values('ds', inplace=True) 
             
-            
             split_time = df_prophet_full['ds'].quantile(0.8)
             df_train_prophet = df_prophet_full[df_prophet_full['ds'] <= split_time]
             df_test_prophet = df_prophet_full[df_prophet_full['ds'] > split_time]
             
             print(f"[Prophet - {feat}] Temporal 80/20 Split | Train: {len(df_train_prophet)} | Test: {len(df_test_prophet)}")
             
-            
-            final_model = Prophet(daily_seasonality=True, yearly_seasonality=False, weekly_seasonality=False, stan_backend='CMDSTANPY')
+            final_model = Prophet(daily_seasonality=True, yearly_seasonality=False, weekly_seasonality=False)
             if USE_INDOOR_FEATURE and 'is_indoor' in df_train_prophet.columns:
                 final_model.add_regressor('is_indoor')
                 print(f"[Prophet - {feat}] Using 'is_indoor' as an Extra Regressor.")
             
             final_model.fit(df_train_prophet)
-            
             
             print(f"[Prophet - {feat}] Generating forecast for evaluation...")
             future = df_test_prophet[['ds']].copy()
@@ -198,7 +168,6 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
             
             print(f"[Prophet - {feat}] Evaluation Completed -> MAE: {mae:.2f}, RMSE: {rmse:.2f}")
 
-            
             plt.figure(figsize=(12, 6))
             plt.scatter(df_train_prophet['ds'], df_train_prophet['y'], label='Train Data', color='blue', alpha=0.3, s=5)
             plt.scatter(df_test_prophet['ds'], df_test_prophet['y'], label='Test Actual', color='black', alpha=0.5, s=5)
@@ -209,14 +178,12 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
             plt.savefig(os.path.join(output_dir, f"prophet_plot_{feat}.png"))
             plt.close()
 
-            
             print(f"[Prophet - {feat}] Refitting on 100% of available data for production...")
-            prod_model = Prophet(daily_seasonality=True, yearly_seasonality=False, weekly_seasonality=False, stan_backend='CMDSTANPY')
+            prod_model = Prophet(daily_seasonality=True, yearly_seasonality=False, weekly_seasonality=False)
             if USE_INDOOR_FEATURE and 'is_indoor' in df_prophet_full.columns:
                 prod_model.add_regressor('is_indoor')
             prod_model.fit(df_prophet_full)
 
-            
             with open(os.path.join(output_dir, f"prophet_{feat}.json"), 'w') as fout:
                 fout.write(model_to_json(prod_model)) 
             with open(os.path.join(output_dir, f"prophet_metrics_{feat}.json"), 'w') as fout:
@@ -299,7 +266,6 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
     
     target_col = config["target"]
     
-    
     features_list = config["features"].copy() 
     if USE_INDOOR_FEATURE and 'is_indoor' not in features_list:
         features_list.append('is_indoor')
@@ -311,7 +277,6 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
     virtual_ratio = get_virtual_ratio(freq_minutes)
     task_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", task_name)
     archive_dir, best_dir = [os.path.join(task_dir, p) for p in ["models_archive", "best_model"]]
-    
     
     for d in [archive_dir, best_dir]: 
         os.makedirs(d, exist_ok=True)
@@ -331,7 +296,6 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
         initial_len = len(df_b)
         print(f"[{task_name}] Processing Board {board_id} (Initial Clean Rows: {initial_len})")
 
-        
         cols_to_keep = features_list + [target_col]
         available_cols = [c for c in cols_to_keep if c in df_b.columns]
         
@@ -346,7 +310,6 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
             print(f"[{task_name}] Target '{target_col}' not found for board {board_id}. Skipping.")
             continue
 
-        
         df_b = build_advanced_features(df_b, features_list, use_lags, virtual_ratio)
         if use_lags:
             print(f"[{task_name}] Generating lags (Depth: {task_lags}) for Board {board_id}...")
@@ -357,7 +320,6 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
         else:
             model_features = [col for col in extended_features_list if col in df_b.columns] 
 
-        
         pre_drop_len = len(df_b)
         df_b.dropna(subset=model_features + [target_col], inplace=True)
         dropped_rows = pre_drop_len - len(df_b)
@@ -369,7 +331,6 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
 
         df_b['id_board'] = board_id
 
-        
         split_idx = int(len(df_b) * TRAIN_SPLIT_PERCENTAGE)
         df_train_b, df_test_b = df_b.iloc[:split_idx], df_b.iloc[split_idx:]
 
@@ -380,12 +341,10 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
         print(f"[{task_name}] Error: Empty datasets after processing all boards. Skipping task.")
         return
 
-    
     df_train_final = pd.concat(df_train_final_list).sort_values(by=['id_board', '_time'])
     df_test_final = pd.concat(df_test_final_list).sort_values(by=['id_board', '_time'])
 
     print(f"[{task_name}] Aggregation Complete | Final Valid Train Vol: {len(df_train_final)} | Test Vol: {len(df_test_final)}")
-    
     
     X_train, y_train = df_train_final[model_features], df_train_final[target_col]
     X_test, y_test = df_test_final[model_features], df_test_final[target_col]
@@ -436,9 +395,6 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
     with open(os.path.join(best_dir, "best_model_info.json"), "w") as f:
         json.dump({"best_model": best_model_name, "mae": best_overall_mae, "target": target_col}, f)
 
-
-
-
 def main():
     print("[Trainer] Starting Multi-Frequency Global Pipeline...")
     
@@ -451,12 +407,10 @@ def main():
             print(f"[Trainer] Insufficient data for {freq}m. Please run cleaner.py first.")
             continue
         
-        
         all_env_features = TASKS["t1"]["features"]
         env_output_dir = os.path.join(BASE_MODEL_DIR, f"{freq}m", "env_forecasters")
         train_environmental_prophet(df_clean, all_env_features, env_output_dir, freq)
 
-        
         for task_name, config in TASKS.items():
             run_pipeline_for_task(task_name, config, df_clean, freq)
                 

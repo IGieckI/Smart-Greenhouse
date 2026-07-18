@@ -9,8 +9,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip install --no-cache-dir pandas numpy prophet==1.1.5
 
-RUN install_cmdstan -d /opt/cmdstan --version 2.33.1
-
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 

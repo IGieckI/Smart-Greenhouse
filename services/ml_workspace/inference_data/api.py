@@ -2,28 +2,15 @@ import os
 import sys
 import json
 import joblib
-import copy
 import time
 import threading
 import numpy as np
 import pandas as pd
-
 from apscheduler.schedulers.background import BackgroundScheduler
-
 from influxdb_client import InfluxDBClient
-
-import cmdstanpy
-try:
-    os.environ['CMDSTAN'] = cmdstanpy.cmdstan_path()
-except Exception as e:
-    print(f"[Warning] Unable to dynamically set CMDSTAN: {e}")
-
 from prophet.serialize import model_from_json
-
 from fastapi import FastAPI, HTTPException, Query
-
 from typing import Optional, List, Dict, Any
-
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
@@ -32,7 +19,6 @@ from shared_core.data_sync import sync_clean_bucket
 from shared_core.tasks import TASKS, GROUPS
 from shared_core.config import *
 from shared_core.preprocessing import build_advanced_features
-
 from .predictor import recursive_multistep_inference, ensemble_multistep_inference
 from .sensor_payload import SensorData
 
@@ -40,7 +26,7 @@ app = FastAPI(title="Greenhouse IoT Inference API")
 
 loaded_models = {}
 loaded_info = {}
-loaded_env_prophets = {}  
+loaded_env_prophets = {}
 
 sync_lock = threading.Lock()
 LAST_SYNC_TIME = {} 
@@ -58,28 +44,24 @@ def calculate_vpd(t_leaf: float, t_air: float, rh: float) -> float:
     ea_air = svp(t_air) * (rh / 100.0)
     return max(0.0, es_leaf - ea_air)
 
-def format_series(timestamps: List[Any], values: List[float]) -> List[Dict[str, Any]]:
-    """
-        Homologates time series data to a standardized dictionary format.
-    """
+
+def format_series(timestamps: list, values: List[float]) -> List[Dict[str, Any]]:
     return [{"timestamp": t.isoformat() if hasattr(t, 'isoformat') else t, "value": round(v, 4)} 
                 for t, v in zip(timestamps, values)]
 
+
 def get_soft_task(task_or_group: str) -> str:
-    """
-        Maps a task or group to its corresponding soft sensor task for leaf_temp imputation.
-    """
     task_or_group = task_or_group.upper()
     if task_or_group in ['T1', 'T2', 'T3', 'A']: return 't1'
     if task_or_group in ['T4', 'T5', 'T6', 'T8', 'T9', 'B' 'C']: return 't4'
     return 't4' 
 
+
+
+
 def save_predictions_to_influx(board_id: str, freq_minutes: int, source_name: str, 
                                timestamps: list, values: list, 
                                air_preds: list = None, hum_preds: list = None):
-    """
-        Saves future predictions to both the operational clean bucket and the Caveaux.
-    """
     client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
     write_api = client.write_api(write_options=SYNCHRONOUS)
     
@@ -134,9 +116,6 @@ def fetch_historical_data(board_id: str, limit: int, freq_minutes: int) -> pd.Da
             except Exception as e:
                 print(f"[API] Error during Sync ({freq_minutes}m): {e}")
 
-    
-
-
     client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
     bucket_clean = f"{BUCKET_CLEAN_PREFIX}{freq_minutes}m"
     query = f'''
@@ -168,6 +147,7 @@ def fetch_historical_data(board_id: str, limit: int, freq_minutes: int) -> pd.Da
         return pd.DataFrame()
 
 
+
 def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: str, 
                                custom_data: Optional[SensorData] = None, 
                                use_real_leaf_temp: bool = False) -> tuple:
@@ -182,8 +162,6 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
         raise HTTPException(status_code=400, detail=f"Insufficient historical data for board {board_id}.")
 
     
-
-
     if custom_data:
         last_idx = df_history.index[-1]
         custom_values = custom_data.dict(exclude_none=True)
@@ -192,8 +170,6 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
                 df_history.loc[last_idx, k] = v
 
     
-
-
     soft_task = get_soft_task(task_or_group)
     soft_model = loaded_models.get(freq_key, {}).get(soft_task)
     
@@ -284,14 +260,19 @@ def load_assets():
             print(f"[RAM {freq_folder}] Prophet models loaded for: {loaded_feats}")
 
 
+
+
+
+
+
 @app.on_event("startup")
 def start_scheduler():
     load_assets()
     
     scheduler = BackgroundScheduler()
-    
     scheduler.add_job(scheduled_inference_job, 'cron', minute=0)
     scheduler.start()
+
 
 @app.get("/info/{freq_minutes}m/{task}")
 def get_task_info(freq_minutes: int, task: str):
@@ -310,6 +291,30 @@ def reload_models():
         raise HTTPException(status_code=500, detail=f"Error: {e}")
 
 
+
+def formalize_return(summary_msg, freq_minutes, hist_leaf, fut_leaf, hist_air, hist_hum, fut_air, fut_hum, hist_vpd, fut_vpd):
+    return {
+        "message": summary_msg,
+        "frequency": f"{freq_minutes}m",
+        "leaf_temperature": {
+            "historical": hist_leaf,
+            "forecast": fut_leaf
+        },
+        "environmental_data": {
+            "historical": {
+                "air_temp": hist_air,
+                "humidity": hist_hum
+            },
+            "forecast": {
+                "air_temp": fut_air,
+                "humidity": fut_hum
+            }
+        },
+        "vpd": {
+            "historical": hist_vpd,
+            "forecast": fut_vpd
+        }
+    }
 
 
 
@@ -359,6 +364,8 @@ def _run_standard_inference(freq_minutes: int, task: str, board_id: str,
                 hum_preds if len(hum_preds) > 0 else None
             )
     
+
+    
     hist_leaf = format_series(df_history.index, df_history.get('leaf_temp', []))
     hist_air = format_series(df_history.index, df_history.get('air_temp', []))
     hist_hum = format_series(df_history.index, df_history.get('humidity', []))
@@ -369,31 +376,18 @@ def _run_standard_inference(freq_minutes: int, task: str, board_id: str,
     fut_hum = format_series(future_timestamps, hum_preds) if len(hum_preds) > 0 else []
     fut_vpd = format_series(future_timestamps, future_vpd) if len(future_vpd) > 0 else []
 
-    summary_msg = f"Standard inference for task {task.upper()} on board {board_id} executed." if save_to_db else f"What-if (manual) inference for task {task.upper()} on board {board_id} executed. Data not saved to InfluxDB."
+    summary_msg = f"Standard inference for task {task.upper()} on board {board_id} executed."
+    
+    if not save_to_db:
+        summary_msg = f"What-if (manual) inference for task {task.upper()} on board {board_id} executed. Data not saved to InfluxDB."
 
-    return {
-        "message": summary_msg,
-        "task": task,
-        "frequency": f"{freq_minutes}m",
-        "leaf_temperature": {
-            "historical": hist_leaf,
-            "forecast": fut_leaf
-        },
-        "environmental_data": {
-            "historical": {
-                "air_temp": hist_air,
-                "humidity": hist_hum
-            },
-            "forecast": {
-                "air_temp": fut_air,
-                "humidity": fut_hum
-            }
-        },
-        "vpd": {
-            "historical": hist_vpd,
-            "forecast": fut_vpd
-        }
-    }
+    tmp = formalize_return(summary_msg, freq_minutes,
+                           hist_leaf, fut_leaf, 
+                           hist_air, hist_hum,
+                           fut_air, fut_hum,
+                           hist_vpd, fut_vpd)
+    tmp["task"] = task
+    return tmp
 
 
 
@@ -482,6 +476,8 @@ def _run_ensemble_inference(freq_minutes: int, group: str, board_id: str,
             hum_preds if len(hum_preds) > 0 else None
         )
     
+
+
     hist_leaf = format_series(df_history.index, df_history.get('leaf_temp', []))
     hist_air = format_series(df_history.index, df_history.get('air_temp', []))
     hist_hum = format_series(df_history.index, df_history.get('humidity', []))
@@ -492,36 +488,25 @@ def _run_ensemble_inference(freq_minutes: int, group: str, board_id: str,
     fut_hum = format_series(future_timestamps, hum_preds) if len(hum_preds) > 0 else []
     fut_vpd = format_series(future_timestamps, future_vpd) if len(future_vpd) > 0 else []
 
-    summary_msg = f"Ensemble inference for group {group.upper()} on board {board_id} executed." if save_to_db else f"What-if (manual) ensemble inference for group {group.upper()} on board {board_id} executed. Data not saved to InfluxDB."
+    summary_msg = f"Ensemble inference for group {group.upper()} on board {board_id} executed."
 
-    return {
-        "message": summary_msg,
-        "group": group,
-        "frequency": f"{freq_minutes}m",
-        "leaf_temperature": {
-            "historical": hist_leaf,
-            "forecast": fut_leaf
-        },
-        "environmental_data": {
-            "historical": {
-                "air_temp": hist_air,
-                "humidity": hist_hum
-            },
-            "forecast": {
-                "air_temp": fut_air,
-                "humidity": fut_hum
-            }
-        },
-        "vpd": {
-            "historical": hist_vpd,
-            "forecast": fut_vpd
-        },
-        "ensemble_details": {
+    if not save_to_db:
+        summary_msg = f"What-if (manual) ensemble inference for group {group.upper()} on board {board_id} executed. Data not saved to InfluxDB."
+
+    tmp = formalize_return(summary_msg, freq_minutes,
+                           hist_leaf, fut_leaf, 
+                           hist_air, hist_hum,
+                           fut_air, fut_hum,
+                           hist_vpd, fut_vpd)
+    tmp["group"] = group
+    ens_det = {
             "weights": result.get("weights", {}),
             "forecast_env": format_series(future_timestamps, result.get("forecast_env", [])),
             "forecast_auto": format_series(future_timestamps, result.get("forecast_auto", []))
         }
-    }
+    tmp["ensemble_details"] = ens_det
+    return tmp
+
 
 @app.get("/predict/{freq_minutes}m/ensemble/{group}/latest")
 def predict_ensemble(freq_minutes: int, group: str = "B", board_id: str = DEFAULT_BOARD_ID,

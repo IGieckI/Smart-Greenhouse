@@ -57,10 +57,13 @@ def identify_leaf_steps(df: pd.DataFrame) -> pd.DataFrame:
     df.loc[df['leaf_temp'].isna(), 'leaf_weight'] = 1 
     return df
 
+
+
 def apply_leaf_gaussian_interpolation(df: pd.DataFrame) -> pd.DataFrame:
     if 'leaf_temp' not in df.columns:
         return df
     return gaussian_weighted_interpolation(df, 'leaf_temp', weight_col='leaf_weight')
+
 
 
 def clean_anomalies(df: pd.DataFrame) -> pd.DataFrame:
@@ -77,6 +80,8 @@ def clean_anomalies(df: pd.DataFrame) -> pd.DataFrame:
         df = gaussian_weighted_interpolation(df, 'tds')
     return df
 
+
+
 def remove_erroneus_tds(df: pd.DataFrame) -> pd.DataFrame:
     if 'tds' in df.columns:
         df.loc[df['tds'] < 30, 'tds'] = np.nan
@@ -90,7 +95,7 @@ def remove_erroneus_tds(df: pd.DataFrame) -> pd.DataFrame:
 
 
 BOARD_PIPELINES = {
-    BOARD_324: [identify_leaf_steps, apply_leaf_gaussian_interpolation, clean_anomalies],
+    BOARD_324: [remove_erroneus_tds, identify_leaf_steps, apply_leaf_gaussian_interpolation, clean_anomalies],
     BOARD_944: [remove_erroneus_tds, apply_leaf_gaussian_interpolation, clean_anomalies]
 }
 
@@ -108,7 +113,7 @@ def apply_board_pipeline(df: pd.DataFrame, board_id: str) -> pd.DataFrame:
 
 
 
-def build_advanced_features(df: pd.DataFrame, base_features: list, use_lags: bool, virtual_ratio: int) -> pd.DataFrame:
+def build_advanced_features(df: pd.DataFrame, base_features: list, use_lags: bool) -> pd.DataFrame:
     df_out : pd.DataFrame = df.copy()
     
     if not isinstance(df_out.index, pd.DatetimeIndex):
@@ -126,10 +131,9 @@ def build_advanced_features(df: pd.DataFrame, base_features: list, use_lags: boo
         for col in base_features:
             if col in df_out.columns:
                 temp_series = df_out[col].ffill()
-                df_out[f'{col}_diff'] = temp_series.diff(virtual_ratio)
+                df_out[f'{col}_diff'] = temp_series.diff(1)
                 
     return df_out
-
 
 
 def get_extended_features_list(base_features: list, use_lags: bool) -> list:
@@ -141,7 +145,7 @@ def get_extended_features_list(base_features: list, use_lags: bool) -> list:
 
 
 
-def create_lagged_features(df: pd.DataFrame, target_col: str, feature_cols: list, virtual_ratio: int, lags: int = DEFAULT_LAGS, lag_target: bool = True) -> pd.DataFrame:
+def create_lagged_features(df: pd.DataFrame, target_col: str, feature_cols: list, lags: int = DEFAULT_LAGS, lag_target: bool = True) -> pd.DataFrame:
     cols_to_lag = feature_cols.copy()
     if lag_target: 
         cols_to_lag.append(target_col)
@@ -151,7 +155,7 @@ def create_lagged_features(df: pd.DataFrame, target_col: str, feature_cols: list
     for col in cols_to_lag:
         if col in df.columns:
             for i in range(1, lags + 1):
-                lagged_data[f'{col}_lag_{i}'] = df[col].shift(i * virtual_ratio)
+                lagged_data[f'{col}_lag_{i}'] = df[col].shift(i)
                 
     if lagged_data:
         df_lagged = pd.concat([df, pd.DataFrame(lagged_data, index=df.index)], axis=1)
@@ -159,4 +163,3 @@ def create_lagged_features(df: pd.DataFrame, target_col: str, feature_cols: list
         df_lagged = df.copy()
         
     return df_lagged
-

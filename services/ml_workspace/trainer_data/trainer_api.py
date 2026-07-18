@@ -1,8 +1,6 @@
-import sys
 import os
 import threading
 import queue
-import time
 import requests
 import json
 import zipfile
@@ -10,11 +8,9 @@ import io
 from fastapi import FastAPI, HTTPException
 import uvicorn
 from fastapi.responses import StreamingResponse
-
 import shutil
 
 from analytics_plotter import generate_task_plots, generate_global_plots
-
 from shared_core.data_sync import sync_clean_bucket
 from train import fetch_clean_data, train_environmental_prophet, run_pipeline_for_task
 from shared_core.config import *
@@ -22,7 +18,6 @@ from shared_core.tasks import TASKS
 
 app = FastAPI(title="ML Trainer API Worker")
 INFERENCE_API_URL = "http://ml-inference:8000"
-
 
 training_queue = queue.Queue()
 
@@ -61,12 +56,10 @@ def run_full_pipeline_for_freq(freq_minutes: int):
             
         print(f"[Pipeline] Process for {freq_minutes}m completed successfully!")
         
-        
         global_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", "global_analytics")
         if os.path.exists(global_dir):
             shutil.rmtree(global_dir)
             
-        
         print(f"[Pipeline] Generating Local PNG Analytics for {freq_minutes}m...")
         for task_name in TASKS.keys():
             task_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", task_name)
@@ -76,7 +69,6 @@ def run_full_pipeline_for_freq(freq_minutes: int):
         generate_global_plots(base_dir, freq_minutes)
         print(f"[Pipeline] Local Analytics generated successfully.")
         
-
         try:
             res = requests.post(f"{INFERENCE_API_URL}/reload-models", timeout=5)
             if res.status_code == 200:
@@ -126,7 +118,6 @@ def bootstrap_check():
     if not any_training_queued:
         print("\n[Trainer API] Existing models fully verified. System ready for on-demand requests.")
 
-
 @app.post("/train/standard")
 def trigger_standard_training():
     tmp = ','.join([f"{i}" for i in DEFAULT_FREQS])
@@ -152,13 +143,8 @@ def get_queue_status():
 
 
 
-
-
 @app.get("/analytics/{freq_minutes}/summary")
 def get_global_summary(freq_minutes: int):
-    """
-        Returns a JSON summary of all trained models and their MAE/metrics.
-    """
     base_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m")
     if not os.path.exists(base_dir):
         raise HTTPException(status_code=404, detail="Frequency not found. Train the system first.")
@@ -182,13 +168,8 @@ def get_global_summary(freq_minutes: int):
             
     return {"freq_minutes": freq_minutes, "tasks_available": list(summary.keys()), "details": summary}
 
-
-
 @app.get("/analytics/{freq_minutes}/plots/global")
 def get_global_plots_zip(freq_minutes: int):
-    """
-        Generates on-the-fly and returns an in-memory ZIP file containing all global comparison matrices.
-    """
     base_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m")
     if not os.path.exists(base_dir):
         raise HTTPException(status_code=404, detail="Model directory not found.")
@@ -197,7 +178,6 @@ def get_global_plots_zip(freq_minutes: int):
     if not generated_files:
         raise HTTPException(status_code=404, detail="Insufficient data to generate global plots.")
         
-    
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
         for file in generated_files:
@@ -212,9 +192,6 @@ def get_global_plots_zip(freq_minutes: int):
 
 @app.get("/analytics/{freq_minutes}/plots/task/{task_name}")
 def get_task_plots_zip(freq_minutes: int, task_name: str):
-    """
-        Generates on-the-fly and returns an in-memory ZIP file containing plots for a specific task.
-    """
     task_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", task_name)
     if not os.path.exists(task_dir):
         raise HTTPException(status_code=404, detail="Task directory not found.")
@@ -223,7 +200,6 @@ def get_task_plots_zip(freq_minutes: int, task_name: str):
     if not generated_files:
         raise HTTPException(status_code=404, detail="No JSON data found. Train the model first.")
 
-    
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
         for file in generated_files:
