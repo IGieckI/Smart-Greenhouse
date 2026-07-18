@@ -52,7 +52,7 @@ const influxDB = new InfluxDB({ url: INFLUX_URL, token: INFLUX_TOKEN });
 const writeApi = influxDB.getWriteApi(INFLUX_ORG, INFLUX_BUCKET);
 const mqttClient = mqtt.connect(MQTT_URL);
 
-
+const MY_TAG = "[Controller]"
 
 function loadTopology() {
     try {
@@ -60,44 +60,35 @@ function loadTopology() {
             ? JSON.parse(fs.readFileSync(TOPOLOGY_FILE, 'utf8'))
             : {};
     } catch (e) {
-        console.error('[Controller] Could not load topology file:', e.message);
+        console.error(`${MY_TAG} Could not load topology file:`, e.message);
     }
     return topology;
 }
-loadTopology();
-
 
 function saveTopology() {
-    try {fs.mkdirSync(path.dirname(TOPOLOGY_FILE), { recursive: true });
+    try {
+        fs.mkdirSync(path.dirname(TOPOLOGY_FILE), { recursive: true });
         fs.writeFileSync(TOPOLOGY_FILE, JSON.stringify(topology, null, 2));
+    } catch (e) {
+        console.error(`${MY_TAG} Could not save topology file:`, e.message);
     }
-    catch (e) { console.error('[Controller] Could not save topology file:', e.message); }
 }
-
-
-
-
-mqttClient.on('connect', () => {
-    console.log('[Controller] MQTT connected to mosquitto');
-    mqttClient.subscribe('greenhouse/acks', { qos: 1 });
-});
-mqttClient.on('error', (e) => console.error('[Controller] MQTT error:', e.message));
-
 
 function publishCommand(node_id, star_id, payload, attempt) {
     const topic = `greenhouse/commands/${star_id}`;
     mqttClient.publish(topic, payload, { qos: 1 });
-    console.log(`[Controller] Command -> ${topic} (attempt ${attempt}/${COMMAND_MAX_ATTEMPTS}): ${payload}`);
+    console.log(`${MY_TAG} Command -> ${topic} (attempt ${attempt}/${COMMAND_MAX_ATTEMPTS}): ${payload}`);
 }
 
 function scheduleRetry(node_id) {
     const key = String(node_id);
     const pending = pendingCommands[key];
     if (!pending) return;
+    
     pending.timer = setTimeout(() => {
         if (!pendingCommands[key]) return;
         if (pending.attempts >= COMMAND_MAX_ATTEMPTS) {
-            console.error(`[Controller] Command to node ${node_id} unacknowledged after ${COMMAND_MAX_ATTEMPTS} attempts`);
+            console.error(`${MY_TAG} Command to node ${node_id} unacknowledged after ${COMMAND_MAX_ATTEMPTS} attempts`);
             delete pendingCommands[key];
             return;
         }
@@ -107,27 +98,7 @@ function scheduleRetry(node_id) {
     }, COMMAND_TIMEOUT_MS);
 }
 
-mqttClient.on('message', (topic, message) => {
-    if (topic !== 'greenhouse/acks') return;
-    try {
-        const data = JSON.parse(message.toString());
-        if (data.ack && data.nid !== undefined) {
-            const key = String(data.nid);
-            if (pendingCommands[key]) {
-                clearTimeout(pendingCommands[key].timer);
-                delete pendingCommands[key];
-                console.log(`[Controller] ACK received for node ${key}`);
-            }
-        }
-    } catch (_) {}
-});
-
-let fallbackUsageCount = {};
-let currentFallbackIds = {};
-
-
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
 
 const playBeeps = async (times) => {
     for (let i = 0; i < times; i++) {
@@ -139,15 +110,34 @@ const playBeeps = async (times) => {
                 resolve();
             });
         });
-        
-        await delay(400); 
+        await delay(400);
     }
 };
+
+mqttClient.on('connect', () => {
+    console.log(`${MY_TAG} MQTT connected to mosquitto`);
+    mqttClient.subscribe('greenhouse/acks', { qos: 1 });
+});
+mqttClient.on('error', (e) => console.error(`${MY_TAG} MQTT error:`, e.message));
+
+mqttClient.on('message', (topic, message) => {
+    if (topic !== 'greenhouse/acks') return;
+    try {
+        const data = JSON.parse(message.toString());
+        if (data.ack && data.nid !== undefined) {
+            const key = String(data.nid);
+            if (pendingCommands[key]) {
+                clearTimeout(pendingCommands[key].timer);
+                delete pendingCommands[key];
+                console.log(`${MY_TAG} ACK received for node ${key}`);
+            }
+        }
+    } catch (_) {}
+});
 
 
 app.post('/api/data', async (req, res) => {
     let data = req.body;
-
     const timestamp = new Date().toISOString();
 
     console.log(`[${timestamp}] Incoming data:`, data);
@@ -161,19 +151,19 @@ app.post('/api/data', async (req, res) => {
         if (topology[key] !== String(data.star_id)) {
             topology[key] = String(data.star_id);
             saveTopology();
-            console.log(`[Controller] Topology: node ${data.node_id} -> star ${data.star_id}`);
+            console.log(`${MY_TAG} Topology: node ${data.node_id} -> star ${data.star_id}`);
         }
     }
 
-        if ((data[LEAF_TEMP_LABEL] === undefined) || (data[LEAF_TEMP_LABEL] < 5.0)) {
+    if ((data[LEAF_TEMP_LABEL] === undefined) || (data[LEAF_TEMP_LABEL] < 5.0)) {
         try {
             if (fs.existsSync(FALLBACK_FILE_PATH)) {
-                const fileContent = fs.readFileSync(FALLBACK_FILE_PATH, 'utf8').trim(); 
-                                const lines = fileContent.split(/\r?\n/).filter(line => line.trim() !== '');
+                const fileContent = fs.readFileSync(FALLBACK_FILE_PATH, 'utf8').trim();
+                const lines = fileContent.split(/\r?\n/).filter(line => line.trim() !== '');
                 
                 let boardFallback = null;
                 
-                                for (const line of lines) {
+                for (const line of lines) {
                     const parts = line.split('/');
                     if (parts.length === 3 && parts[0] === String(data.node_id)) {
                         boardFallback = parts;
@@ -185,35 +175,35 @@ app.post('/api/data', async (req, res) => {
                     const nodeIdStr = String(data.node_id);
                     const tempVal = parseFloat(boardFallback[1].replace(',', '.'));
                     const tempId = boardFallback[2].trim();
-                    const usageKey = `${nodeIdStr}_${tempId}`; 
-                                        if (currentFallbackIds[nodeIdStr] !== tempId) {
+                    const usageKey = `${nodeIdStr}_${tempId}`;
+                    
+                    if (currentFallbackIds[nodeIdStr] !== tempId) {
                         currentFallbackIds[nodeIdStr] = tempId;
-                        fallbackUsageCount[usageKey] = 0; 
+                        fallbackUsageCount[usageKey] = 0;
                     }
 
                     if (fallbackUsageCount[usageKey] < FALLBACK_THR) {
                         data[LEAF_TEMP_LABEL] = tempVal;
-
                         const currentCount = fallbackUsageCount[usageKey];
-                        fallbackUsageCount[usageKey]++; 
+                        fallbackUsageCount[usageKey]++;
                         
-                        console.log(`[Controller] Leaf temp read: ${tempVal}°C for board ${nodeIdStr} (ID: ${tempId}, Usage: ${currentCount + 1}/${FALLBACK_THR})`);
+                        console.log(`${MY_TAG} Leaf temp read: ${tempVal}°C for board ${nodeIdStr} (ID: ${tempId}, Usage: ${currentCount + 1}/${FALLBACK_THR})`);
                         
                         if (currentCount % SAMPLING_FREQ_MIN === 0) {
                             const numBeeps = (currentCount / SAMPLING_FREQ_MIN) + 1;
                             playBeeps(numBeeps);
                         }
                     } else {
-                        console.log(`[Controller] WARNING: ID '${tempId}' for board ${nodeIdStr} has been used ${FALLBACK_THR} times. Leaf data DISCARDED. Update the txt file!`);
+                        console.log(`${MY_TAG} WARNING: ID '${tempId}' for board ${nodeIdStr} has been used ${FALLBACK_THR} times. Leaf data DISCARDED. Update the txt file!`);
                         playBeeps(5);
                     }
                 } else {
-                    console.error(`[Controller] leaf_temp undefined -> No fallback entry found for board ${data.node_id} (Use layout: 3750846324/21.5/A)`);
+                    console.error(`${MY_TAG} leaf_temp undefined -> No fallback entry found for board ${data.node_id} (Use layout: 3750846324/21.5/A)`);
                     data[LEAF_TEMP_LABEL] = undefined;
                 }
             }
         } catch (error) {
-            console.error(`[Controller] Fallback file read error: ${error.message}`);
+            console.error(`${MY_TAG} Fallback file read error: ${error.message}`);
         }
     }
 
@@ -227,12 +217,12 @@ app.post('/api/data', async (req, res) => {
         }
 
         writeApi.writePoint(point);
-        await writeApi.flush(); 
+        await writeApi.flush();
 
-        console.log(`[Controller] - ${timestamp} - Data successfully written to Influx for board: ${data.node_id}`);
+        console.log(`${MY_TAG} - ${timestamp} - Data successfully written to Influx for board: ${data.node_id}`);
         res.status(200).send({ status: "success" });
     } catch (error) {
-        console.error(`[Controller] - ${timestamp} - Influx write error:`, error);
+        console.error(`${MY_TAG} - ${timestamp} - Influx write error:`, error);
         res.status(500).send({ error: "Database error" });
     }
 });
@@ -255,14 +245,14 @@ app.post('/api/command', (req, res) => {
     let dur = Number(duration_s) || 0;
     if (dur < 0) dur = 0;
     if (dur > MAX_COMMAND_DURATION_S) {
-        console.log(`[Controller] Duration ${dur}s exceeds max, clamping to ${MAX_COMMAND_DURATION_S}s`);
+        console.log(`${MY_TAG} Duration ${dur}s exceeds max, clamping to ${MAX_COMMAND_DURATION_S}s`);
         dur = MAX_COMMAND_DURATION_S;
     }
 
     let val = Number(value) || 0;
     if (val < 0) val = 0;
     if (val > 255) {
-        console.log(`[Controller] Value ${val} exceeds max, clamping to 255`);
+        console.log(`${MY_TAG} Value ${val} exceeds max, clamping to 255`);
         val = 255;
     }
 
@@ -287,7 +277,7 @@ app.get('/api/topology', (req, res) => {
     res.status(200).json(loadTopology());
 });
 
-
+loadTopology();
 
 app.listen(PORT, () => {
     console.log(`Controller listening on port ${PORT}`);
