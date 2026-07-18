@@ -95,7 +95,8 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    if not TOKEN: return logger.error("TELEGRAM_BOT_TOKEN missing in .env file!")
+    if not TOKEN:
+    	return logger.error("TELEGRAM_BOT_TOKEN missing in .env file!")
     application = Application.builder().token(TOKEN).post_init(setup_commands).build()
     
     

@@ -118,14 +118,16 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
             df_prophet_full = pd.DataFrame()
             for b_id in ACTIVE_BOARDS:
                 df_b = df_train[df_train['id_board'] == b_id]
-                if feat not in df_b.columns: continue
+                if feat not in df_b.columns:
+                    continue
                 
                 cols_to_extract = [feat]
                 if USE_INDOOR_FEATURE and 'is_indoor' in df_b.columns:
                     cols_to_extract.append('is_indoor')
                     
                 df_b = df_b[cols_to_extract].dropna().tail(tail_samples)
-                if len(df_b) < 100 or df_b[feat].nunique() <= 1: continue
+                if len(df_b) < 100 or df_b[feat].nunique() <= 1:
+                    continue
                 
                 timestamps = df_b.index.tz_localize(None) if df_b.index.tz is not None else df_b.index
                 tmp = pd.DataFrame({
@@ -225,41 +227,44 @@ def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> d
             "model": Pipeline(scaler_and_poly + [('regressor', Ridge())]),
             "params": {"regressor__alpha": [0.01, 0.1, 1.0, 10.0, 100.0]}
         },
-        "RandomForest": {
-            "model": Pipeline(scaler_only + [('regressor', RandomForestRegressor(random_state=42, n_jobs=1))]),
-            "params": {
-                "regressor__n_estimators": [100, 300], 
-                "regressor__max_depth": [10, 20, None], 
-                "regressor__min_samples_split": [2, 5, 10],
-                "regressor__max_features": ["sqrt", 1.0]
-            }
-        },
-        "LightGBM": {
-            "model": Pipeline(scaler_only + [('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
-            "params": {
-                "regressor__n_estimators": [100, 300],
-                "regressor__learning_rate": [0.01, 0.05, 0.1],
-                "regressor__num_leaves": [31, 63],
-                "regressor__subsample": [0.8, 1.0] 
-            }
-        },
-        "SVR": {
-            "model": Pipeline(scaler_only + [('regressor', SVR())]),
-            "params": [
-                {
-                    "regressor__kernel": ["linear"],
-                    "regressor__C": [0.1, 1.0, 10.0],
-                    "regressor__epsilon": [0.001, 0.01, 0.1]
-                },
-                {
-                    "regressor__kernel": ["rbf"],
-                    "regressor__C": [0.1, 1.0, 10.0],
-                    "regressor__gamma": ["scale", 0.1, 0.01], 
-                    "regressor__epsilon": [0.001, 0.01, 0.1]
-                }
-            ]
-        },
+        # "RandomForest": {
+        #     "model": Pipeline(scaler_only + [('regressor', RandomForestRegressor(random_state=42, n_jobs=1))]),
+        #     "params": {
+        #         "regressor__n_estimators": [100, 300], 
+        #         "regressor__max_depth": [10, 20, None], 
+        #         "regressor__min_samples_split": [2, 5, 10],
+        #         "regressor__max_features": ["sqrt", 1.0]
+        #     }
+        # },
+        # "LightGBM": {
+        #     "model": Pipeline(scaler_only + [('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
+        #     "params": {
+        #         "regressor__n_estimators": [100, 300],
+        #         "regressor__learning_rate": [0.01, 0.05, 0.1],
+        #         "regressor__num_leaves": [31, 63],
+        #         "regressor__subsample": [0.8, 1.0] 
+        #     }
+        # },
+        # "SVR": {
+        #     "model": Pipeline(scaler_only + [('regressor', SVR())]),
+        #     "params": [
+        #         {
+        #             "regressor__kernel": ["linear"],
+        #             "regressor__C": [0.1, 1.0, 10.0],
+        #             "regressor__epsilon": [0.001, 0.01, 0.1]
+        #         },
+        #         {
+        #             "regressor__kernel": ["rbf"],
+        #             "regressor__C": [0.1, 1.0, 10.0],
+        #             "regressor__gamma": ["scale", 0.1, 0.01], 
+        #             "regressor__epsilon": [0.001, 0.01, 0.1]
+        #         }
+        #     ]
+        # },
     }
+
+
+
 
 def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
     print(f"\n{'='*60}\n[Trainer {freq_minutes}m] STARTING PIPELINE: {task_name.upper()}\n{'='*60}")
@@ -274,7 +279,6 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
     lag_target = config.get("lag_target", True) 
     task_lags = config.get("lags", DEFAULT_LAGS)
 
-    virtual_ratio = get_virtual_ratio(freq_minutes)
     task_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", task_name)
     archive_dir, best_dir = [os.path.join(task_dir, p) for p in ["models_archive", "best_model"]]
     
@@ -310,10 +314,10 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
             print(f"[{task_name}] Target '{target_col}' not found for board {board_id}. Skipping.")
             continue
 
-        df_b = build_advanced_features(df_b, features_list, use_lags, virtual_ratio)
+        df_b = build_advanced_features(df_b, features_list, use_lags)
         if use_lags:
             print(f"[{task_name}] Generating lags (Depth: {task_lags}) for Board {board_id}...")
-            df_b = create_lagged_features(df_b, target_col, extended_features_list, virtual_ratio, lags=task_lags, lag_target=lag_target)
+            df_b = create_lagged_features(df_b, target_col, extended_features_list, lags=task_lags, lag_target=lag_target)
 
         if use_lags:
             model_features = [col for col in df_b.columns if ('lag' in col and (lag_target or target_col not in col)) or col in extended_features_list]
@@ -394,27 +398,3 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
     joblib.dump(best_overall_model, os.path.join(best_dir, "best_model.joblib"))
     with open(os.path.join(best_dir, "best_model_info.json"), "w") as f:
         json.dump({"best_model": best_model_name, "mae": best_overall_mae, "target": target_col}, f)
-
-def main():
-    print("[Trainer] Starting Multi-Frequency Global Pipeline...")
-    
-    for freq in DEFAULT_FREQS:
-        print(f"\n=== BEGIN TRAINING FOR FREQUENCY {freq} MINUTES ===")
-        
-        df_clean = fetch_clean_data(freq)
-        
-        if df_clean.empty:
-            print(f"[Trainer] Insufficient data for {freq}m. Please run cleaner.py first.")
-            continue
-        
-        all_env_features = TASKS["t1"]["features"]
-        env_output_dir = os.path.join(BASE_MODEL_DIR, f"{freq}m", "env_forecasters")
-        train_environmental_prophet(df_clean, all_env_features, env_output_dir, freq)
-
-        for task_name, config in TASKS.items():
-            run_pipeline_for_task(task_name, config, df_clean, freq)
-                
-    print(f"\n[Trainer] Pipeline completed successfully! Artifacts & Visualizations saved in {BASE_MODEL_DIR}.")
-
-if __name__ == "__main__":
-    main()

@@ -36,7 +36,8 @@ async def handle_predict_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.edit_message_text("Which greenhouse (Board)?", reply_markup=build_keyboard(buttons, "menu_predict"))
 
     elif data.startswith("pred_go_"):
-        if await check_spam_lock(update, context): return
+        if await check_spam_lock(update, context):
+            return None
         try:
             _, _, type_mod, param, board_id = data.split("_")
             mode = "ensemble" if type_mod == "ens" else "standard"

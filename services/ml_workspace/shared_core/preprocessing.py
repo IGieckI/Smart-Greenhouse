@@ -25,7 +25,8 @@ def gaussian_weighted_interpolation(df: pd.DataFrame, target_col: str, weight_co
                 continue
         
         neighbors = pd.concat([before, after])
-        if neighbors.empty: continue
+        if neighbors.empty: 
+            continue
 
         time_diffs = np.abs((neighbors.index - idx).total_seconds() / 60.0)
         gauss_weights = np.exp(-(time_diffs**2) / (2 * INTERPOLATION_SIGMA_MIN**2))

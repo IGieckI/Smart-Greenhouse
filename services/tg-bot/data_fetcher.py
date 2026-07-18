@@ -44,7 +44,8 @@ def fetch_history_data(board_id: str, hours: int) -> pd.DataFrame:
         with InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG) as client:
             df = client.query_api().query_data_frame(query)
         if isinstance(df, list):
-            if not df: return pd.DataFrame()
+            if not df:
+            	return pd.DataFrame()
             df = pd.concat(df, ignore_index=True)
             
         if not df.empty:

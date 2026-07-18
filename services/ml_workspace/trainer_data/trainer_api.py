@@ -154,7 +154,8 @@ def get_global_summary(freq_minutes: int):
     summary = {}
     for task in tasks:
         archive_dir = os.path.join(base_dir, task, "models_archive")
-        if not os.path.exists(archive_dir): continue
+        if not os.path.exists(archive_dir):
+            continue
             
         json_files = [f for f in os.listdir(archive_dir) if f.endswith("_metrics.json")]
         models_info = {}

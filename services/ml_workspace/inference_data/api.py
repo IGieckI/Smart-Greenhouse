@@ -52,8 +52,10 @@ def format_series(timestamps: list, values: List[float]) -> List[Dict[str, Any]]
 
 def get_soft_task(task_or_group: str) -> str:
     task_or_group = task_or_group.upper()
-    if task_or_group in ['T1', 'T2', 'T3', 'A']: return 't1'
-    if task_or_group in ['T4', 'T5', 'T6', 'T8', 'T9', 'B' 'C']: return 't4'
+    if task_or_group in ['T1', 'T2', 'T3', 'A']:
+        return 't1'
+    if task_or_group in ['T4', 'T5', 'T6', 'T8', 'T9', 'B' 'C']:
+        return 't4'
     return 't4' 
 
 
@@ -131,7 +133,8 @@ def fetch_historical_data(board_id: str, limit: int, freq_minutes: int) -> pd.Da
     try:
         df = client.query_api().query_data_frame(query)
         if isinstance(df, list):
-            if len(df) == 0: return pd.DataFrame()
+            if len(df) == 0: 
+                return pd.DataFrame()
             df = pd.concat(df, ignore_index=True)
         if not df.empty:
             df.set_index('_time', inplace=True)
@@ -222,9 +225,11 @@ def scheduled_inference_job():
             print(f"[Scheduler] Error running inference on task {t}: {e}")
 
 def load_assets():
-    if not os.path.exists(BASE_MODEL_DIR): return
+    if not os.path.exists(BASE_MODEL_DIR):
+        return
     for freq_folder in os.listdir(BASE_MODEL_DIR):
-        if not freq_folder.endswith('m'): continue
+        if not freq_folder.endswith('m'):
+            continue
         freq_key = freq_folder.replace('m', '') 
         freq_path = os.path.join(BASE_MODEL_DIR, freq_folder)
         loaded_models[freq_key] = {}
@@ -365,7 +370,7 @@ def _run_standard_inference(freq_minutes: int, task: str, board_id: str,
             )
     
 
-    
+
     hist_leaf = format_series(df_history.index, df_history.get('leaf_temp', []))
     hist_air = format_series(df_history.index, df_history.get('air_temp', []))
     hist_hum = format_series(df_history.index, df_history.get('humidity', []))
