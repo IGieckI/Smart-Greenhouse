@@ -14,13 +14,19 @@ from handlers_inference import (
     start_whatif, choose_whatif_task, choose_whatif_board, whatif_ask_values, process_whatif_values, cancel_whatif
 )
 from handlers_history import handle_history_menu
-from handlers_training import show_training_menu, handle_training_menu
+from handlers_training import handle_training_menu
+
+
+
 
 async def setup_commands(application: Application):
     await application.bot.set_my_commands([
         BotCommand("menu", "🎛 Open Control Panel"),
         BotCommand("reload", "🔄 Reload API Models into RAM")
     ])
+
+
+
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['is_processing'] = False 
@@ -96,7 +102,8 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     if not TOKEN:
-    	return logger.error("TELEGRAM_BOT_TOKEN missing in .env file!")
+        return logger.error("TELEGRAM_BOT_TOKEN missing in .env file!")
+    
     application = Application.builder().token(TOKEN).post_init(setup_commands).build()
     
     
@@ -134,11 +141,21 @@ def main():
     application.add_handler(actuator_conv)
 
 
-    application.add_handler(CallbackQueryHandler(handle_main_menu, pattern="^menu_(predict|history|main)$"))
-    application.add_handler(CallbackQueryHandler(handle_history_menu, pattern="^hist_"))
-    application.add_handler(CallbackQueryHandler(handle_predict_menu, pattern="^pred_"))
-    application.add_handler(CallbackQueryHandler(handle_training_menu, pattern="^train_"))
-    application.add_handler(CallbackQueryHandler(handle_actuator_routing, pattern="^act_(menu$|board_|cmd_)"))
+    application.add_handler(
+        entry_points=CallbackQueryHandler(handle_main_menu, pattern="^menu_(predict|history|main)$")
+    )
+    application.add_handler(
+        entry_points=CallbackQueryHandler(handle_history_menu, pattern="^hist_")
+    )
+    application.add_handler(
+        entry_points=CallbackQueryHandler(handle_predict_menu, pattern="^pred_")
+    )
+    application.add_handler(
+        entry_points=CallbackQueryHandler(handle_training_menu, pattern="^train_")
+    )
+    application.add_handler(
+        entry_points=CallbackQueryHandler(handle_actuator_routing, pattern="^act_(menu$|board_|cmd_)")
+    )
 
     application.add_error_handler(error_handler)
 

@@ -20,7 +20,7 @@ def _finalize_and_save_plot(title: str, xlabel: str = 'Time (Local)', ylabel: st
     return buf
 
 def _is_humidity_series(label: str) -> bool:
-    return "Humidity" in label or "(%)" in label
+    return ("Humidity" in label) or ("(%)" in label)
 
 def create_series_plot(df_hist: pd.DataFrame, series_dict: dict, title: str, hide_real_history: bool = False) -> io.BytesIO:
     fig, ax_temp = plt.subplots(figsize=(10, 5))
@@ -57,7 +57,8 @@ def create_series_plot(df_hist: pd.DataFrame, series_dict: dict, title: str, hid
     }
 
     for label, data in series_dict.items():
-        if not data: continue
+        if not data:
+            continue
         times = [pd.to_datetime(d['timestamp']).astimezone(TZ_ROME) for d in data]
         vals = [d['value'] for d in data]
 

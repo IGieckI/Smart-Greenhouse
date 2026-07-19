@@ -66,6 +66,7 @@ async def handle_actuator_routing(update: Update, context: ContextTypes.DEFAULT_
         await wait_msg.edit_text(_format_command_result(res, actuator, value, duration), parse_mode='Markdown')
 
 
+
 async def start_custom_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Entry point: user tapped 'Custom Command' for a board. Ask for the free-form command."""
     query = update.callback_query
@@ -82,6 +83,7 @@ async def start_custom_command(update: Update, context: ContextTypes.DEFAULT_TYP
         parse_mode='Markdown'
     )
     return AWAIT_ACT_CUSTOM
+
 
 
 async def process_custom_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -112,13 +114,14 @@ async def process_custom_command(update: Update, context: ContextTypes.DEFAULT_T
         return AWAIT_ACT_CUSTOM
 
     if not (0 <= value <= 255) or duration < 0:
-        await update.message.reply_text("⚠️ Value must be 0–255 and duration ≥ 0. Try again:")
+        await update.message.reply_text("⚠️ Value must be in [0,255] and duration ≥ 0. Try again:")
         return AWAIT_ACT_CUSTOM
 
     wait_msg = await update.message.reply_text("⏳ Sending command to the Controller...")
     res = await _dispatch_command(node_id, actuator, value, duration)
     await wait_msg.edit_text(_format_command_result(res, actuator, value, duration), parse_mode='Markdown')
     return ConversationHandler.END
+
 
 
 async def cancel_custom(update: Update, context: ContextTypes.DEFAULT_TYPE):

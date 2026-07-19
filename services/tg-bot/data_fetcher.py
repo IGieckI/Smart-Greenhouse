@@ -5,6 +5,8 @@ from datetime import datetime, timedelta
 from influxdb_client import InfluxDBClient
 from config import INFLUX_URL, INFLUX_TOKEN, INFLUX_ORG, BUCKET, TZ_ROME, CONTROLLER_URL, logger
 
+
+
 def calculate_vpd(df: pd.DataFrame) -> pd.DataFrame:
     """ Unified Vectorized calculation of Air and Leaf VPD, including historical predictions. """
     if 'air_temp' in df.columns and 'humidity' in df.columns:
@@ -31,41 +33,16 @@ def calculate_vpd(df: pd.DataFrame) -> pd.DataFrame:
             
     return df
 
-def fetch_history_data(board_id: str, hours: int) -> pd.DataFrame:
-    """ Standard fast fetcher for ML Inference. """
-    query = f'''
-        from(bucket: "{BUCKET}")
-          |> range(start: -{hours}h)
-          |> filter(fn: (r) => r._measurement == "sensor_measurements")
-          |> filter(fn: (r) => r.id_board == "{board_id}")
-          |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
-    '''
-    try:
-        with InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG) as client:
-            df = client.query_api().query_data_frame(query)
-        if isinstance(df, list):
-            if not df:
-            	return pd.DataFrame()
-            df = pd.concat(df, ignore_index=True)
-            
-        if not df.empty:
-            df.set_index('_time', inplace=True)
-            df.sort_index(inplace=True)
-            if df.index.tz is None:
-                df.index = df.index.tz_localize('UTC')
-            df.index = df.index.tz_convert(TZ_ROME)
-            df = calculate_vpd(df)
-        return df
-    except Exception as e:
-        logger.error(f"InfluxDB history fetch error: {e}")
-        return pd.DataFrame()
+
 
 def _fmt_influx_time(ts) -> str:
-    """ Format a datetime/Timestamp as an UTC string for Flux. """
     ts = pd.Timestamp(ts)
     if ts.tz is not None:
         ts = ts.tz_convert('UTC').tz_localize(None)
     return ts.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+
 
 def _query_history_window(client: InfluxDBClient, board_id: str, start, stop, min_window: int) -> pd.DataFrame:
     """ Aggregated, pivoted history for a board over an explicit [start, stop] window. """
@@ -113,6 +90,41 @@ def _latest_board_timestamp(client: InfluxDBClient, board_id: str, lookback_days
         return None
     return pd.Timestamp(df['_time'].max())
 
+
+
+
+
+def fetch_history_data(board_id: str, hours: int) -> pd.DataFrame:
+    query = f'''
+        from(bucket: "{BUCKET}")
+          |> range(start: -{hours}h)
+          |> filter(fn: (r) => r._measurement == "sensor_measurements")
+          |> filter(fn: (r) => r.id_board == "{board_id}")
+          |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+    '''
+    try:
+        with InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG) as client:
+            df = client.query_api().query_data_frame(query)
+        if isinstance(df, list):
+            if not df:
+                return pd.DataFrame()
+            df = pd.concat(df, ignore_index=True)
+            
+        if not df.empty:
+            df.set_index('_time', inplace=True)
+            df.sort_index(inplace=True)
+            if df.index.tz is None:
+                df.index = df.index.tz_localize('UTC')
+            df.index = df.index.tz_convert(TZ_ROME)
+            df = calculate_vpd(df)
+        return df
+    except Exception as e:
+        logger.error(f"InfluxDB history fetch error: {e}")
+        return pd.DataFrame()
+
+
+
+
 def fetch_history_with_preds(board_id: str, hours_past: int, hours_future: int = 3, min_window: int = 6) -> pd.DataFrame:
     """ Dedicated fetcher for History Plots. Grabs future data & aligns timestamps.
 
@@ -146,6 +158,8 @@ def fetch_history_with_preds(board_id: str, hours_past: int, hours_future: int =
         return pd.DataFrame()
     finally:
         client.close()
+
+
 
 def fetch_topology_boards() -> set[str] | None:
     """ Node (board) IDs registered in the controller's topology, or None if unreachable. """

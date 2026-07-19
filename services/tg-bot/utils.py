@@ -1,12 +1,12 @@
 import httpx
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import ContextTypes
 from config import logger
+import io
+import zipfile
+
 
 async def fetch_api(url: str, payload: dict = None, timeout: float = 120.0, surface_errors: bool = False) -> dict:
-    """
-        Fetches JSON from the given absolute URL.
-    """
     try:
         async with httpx.AsyncClient() as client:
             if payload is not None:
@@ -30,10 +30,10 @@ async def fetch_api(url: str, payload: dict = None, timeout: float = 120.0, surf
         logger.error(f"API JSON Error at {url}: {e}")
         return {"error": "Could not reach the server."} if surface_errors else {}
 
+
+
+
 async def fetch_api_raw(url: str, timeout: float = 120.0) -> bytes:
-    """
-        Fetches raw bytes (e.g. for ZIP files) from the given URL.
-    """
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(url, timeout=timeout)
@@ -45,6 +45,38 @@ async def fetch_api_raw(url: str, timeout: float = 120.0) -> bytes:
 
 
 
+async def unzip_and_send(update: Update, wait_msg, zip_bytes: bytes, title: str):
+    
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
+            media_group = []
+            for filename in z.namelist():
+                if filename.endswith(".png"):
+                    img_data = z.read(filename)
+                    media_group.append(InputMediaPhoto(media=img_data))
+
+            if not media_group:
+                await wait_msg.edit_text("⚠️ The ZIP archive is empty or contains no PNGs.")
+                return
+            
+            chunks = [media_group[i:i + 10] for i in range(0, len(media_group), 10)]
+            for idx, chunk in enumerate(chunks):
+                if idx == 0:
+                    chunk[0] = InputMediaPhoto(
+                        media=chunk[0].media,
+                        caption=f"📊 **{title}**",
+                        parse_mode='Markdown'
+                    )
+                await update.get_bot().send_media_group(chat_id=wait_msg.chat_id, media=chunk)
+                
+            await wait_msg.delete()
+    except Exception as e:
+        await wait_msg.edit_text(f"⚠️ Error extracting ZIP: {e}")
+
+
+
+
+
 def build_keyboard(buttons: list[list[tuple[str, str]]], back_data: str = None) -> InlineKeyboardMarkup:
     keyboard = [[InlineKeyboardButton(text, callback_data=data) for text, data in row] for row in buttons]
     if back_data:
@@ -53,9 +85,6 @@ def build_keyboard(buttons: list[list[tuple[str, str]]], back_data: str = None) 
 
 
 async def check_spam_lock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """
-        Prevents users from spamming heavy backend processes.
-    """
     if context.user_data.get('is_processing'):
         await update.callback_query.answer("⏳ An operation is already in progress! Please wait...", show_alert=True)
         return True

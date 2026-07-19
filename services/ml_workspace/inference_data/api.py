@@ -32,11 +32,7 @@ sync_lock = threading.Lock()
 LAST_SYNC_TIME = {} 
 SYNC_COOLDOWN_SECONDS = 30.0  
 
-
 def calculate_vpd(t_leaf: float, t_air: float, rh: float) -> float:
-    """
-        Calculates Vapor Pressure Deficit (VPD) in kPa.
-    """
     def svp(t):
         return 0.61078 * np.exp((17.27 * t) / (t + 237.3))
     
@@ -44,11 +40,9 @@ def calculate_vpd(t_leaf: float, t_air: float, rh: float) -> float:
     ea_air = svp(t_air) * (rh / 100.0)
     return max(0.0, es_leaf - ea_air)
 
-
 def format_series(timestamps: list, values: List[float]) -> List[Dict[str, Any]]:
     return [{"timestamp": t.isoformat() if hasattr(t, 'isoformat') else t, "value": round(v, 4)} 
                 for t, v in zip(timestamps, values)]
-
 
 def get_soft_task(task_or_group: str) -> str:
     task_or_group = task_or_group.upper()
@@ -105,7 +99,6 @@ def save_predictions_to_influx(board_id: str, freq_minutes: int, source_name: st
 
 
 def fetch_historical_data(board_id: str, limit: int, freq_minutes: int) -> pd.DataFrame:
-    
     global LAST_SYNC_TIME
     
     with sync_lock:
@@ -154,9 +147,6 @@ def fetch_historical_data(board_id: str, limit: int, freq_minutes: int) -> pd.Da
 def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: str, 
                                custom_data: Optional[SensorData] = None, 
                                use_real_leaf_temp: bool = False) -> tuple:
-    """
-        DRY Function to handle fetching, injecting, imputing leaf_temp, and Prophet prep.
-    """
     freq_key = str(freq_minutes)
     fetch_latest, _ = get_fetch_limits(freq_minutes)
     df_history = fetch_historical_data(board_id, limit=fetch_latest, freq_minutes=freq_minutes)
@@ -164,7 +154,6 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
     if len(df_history) < get_min_history_records(freq_minutes):
         raise HTTPException(status_code=400, detail=f"Insufficient historical data for board {board_id}.")
 
-    
     if custom_data:
         last_idx = df_history.index[-1]
         custom_values = custom_data.dict(exclude_none=True)
@@ -172,13 +161,11 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
             if k in df_history.columns:
                 df_history.loc[last_idx, k] = v
 
-    
     soft_task = get_soft_task(task_or_group)
     soft_model = loaded_models.get(freq_key, {}).get(soft_task)
     
     if not use_real_leaf_temp and soft_model:
         soft_config = TASKS[soft_task]
-        virtual_ratio = get_virtual_ratio(freq_minutes)
         
         soft_features = soft_config["features"].copy()
         if USE_INDOOR_FEATURE and 'is_indoor' not in soft_features:
@@ -187,11 +174,13 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
         df_history_adv = build_advanced_features(
             df_history, 
             soft_features, 
-            soft_config.get("use_lags", False), 
-            virtual_ratio
+            soft_config.get("use_lags", False)
         )
         
         expected_features = list(soft_model.feature_names_in_)
+        if hasattr(soft_model, 'named_steps') and 'drop_diff' in soft_model.named_steps:
+             expected_features = [f for f in expected_features if not f.endswith('_diff')]
+
         valid_idx = df_history_adv.dropna(subset=expected_features).index
         
         if not valid_idx.empty:
@@ -206,7 +195,6 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
     local_env_prophets = loaded_env_prophets.get(freq_key, {})
 
     return df_history, local_env_prophets
-
 
 
 
@@ -278,14 +266,12 @@ def start_scheduler():
     scheduler.add_job(scheduled_inference_job, 'cron', minute=0)
     scheduler.start()
 
-
 @app.get("/info/{freq_minutes}m/{task}")
 def get_task_info(freq_minutes: int, task: str):
     freq_key = str(freq_minutes)
     if freq_key not in loaded_info or task not in loaded_info[freq_key]:
         raise HTTPException(status_code=404, detail="Metrics not found.")
     return loaded_info[freq_key][task]
-
 
 @app.post("/reload-models")
 def reload_models():
@@ -294,6 +280,8 @@ def reload_models():
         return {"message": "Models successfully reloaded in RAM.", "status": "ok"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {e}")
+
+
 
 
 
@@ -368,8 +356,6 @@ def _run_standard_inference(freq_minutes: int, task: str, board_id: str,
                 air_preds if len(air_preds) > 0 else None,
                 hum_preds if len(hum_preds) > 0 else None
             )
-    
-
 
     hist_leaf = format_series(df_history.index, df_history.get('leaf_temp', []))
     hist_air = format_series(df_history.index, df_history.get('air_temp', []))
@@ -394,13 +380,10 @@ def _run_standard_inference(freq_minutes: int, task: str, board_id: str,
     tmp["task"] = task
     return tmp
 
-
-
 @app.get("/predict/{freq_minutes}m/standard/{task}/latest")
 def predict_latest(freq_minutes: int, task: str, board_id: str = DEFAULT_BOARD_ID, 
                    use_real_leaf_temp: bool = Query(False, description="Set True to use physical sensor historical data instead of Soft Sensor")):
     return _run_standard_inference(freq_minutes, task, board_id, None, use_real_leaf_temp, save_to_db=True)
-
 
 @app.post("/predict/{freq_minutes}m/standard/{task}/manual")
 def predict_manual(freq_minutes: int, task: str, custom_data: SensorData, board_id: str = DEFAULT_BOARD_ID,
@@ -480,8 +463,6 @@ def _run_ensemble_inference(freq_minutes: int, group: str, board_id: str,
             air_preds if len(air_preds) > 0 else None,
             hum_preds if len(hum_preds) > 0 else None
         )
-    
-
 
     hist_leaf = format_series(df_history.index, df_history.get('leaf_temp', []))
     hist_air = format_series(df_history.index, df_history.get('air_temp', []))
@@ -512,12 +493,10 @@ def _run_ensemble_inference(freq_minutes: int, group: str, board_id: str,
     tmp["ensemble_details"] = ens_det
     return tmp
 
-
 @app.get("/predict/{freq_minutes}m/ensemble/{group}/latest")
 def predict_ensemble(freq_minutes: int, group: str = "B", board_id: str = DEFAULT_BOARD_ID,
                      use_real_leaf_temp: bool = Query(False, description="Set True to use physical sensor historical data instead of Soft Sensor")):
     return _run_ensemble_inference(freq_minutes, group, board_id, None, use_real_leaf_temp, save_to_db=True)
-
 
 @app.post("/predict/{freq_minutes}m/ensemble/{group}/manual")
 def predict_ensemble_manual(freq_minutes: int, group: str, custom_data: SensorData, board_id: str = DEFAULT_BOARD_ID,

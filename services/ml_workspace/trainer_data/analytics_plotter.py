@@ -106,14 +106,15 @@ def _plot_timing_comparison(models_data, model_names, task_name, output_dir, bes
     ax1.bar(model_names, train_times, color=color, alpha=0.6, width=0.4, align='center', label='Training')
     ax1.tick_params(axis='y', labelcolor=color, labelsize=FONT_TICK)
     
+    x_pos = np.arange(len(model_names))
+    ax1.set_xticks(x_pos)
+    
     xtick_labels = [f"{m} (Best)" if m == best_model else m for m in model_names]
-    # /app/trainer/analytics_plotter.py:110: UserWarning: FixedFormatter should only be used together with FixedLocator
     ax1.set_xticklabels(xtick_labels, rotation=45, ha="right", fontsize=FONT_TICK)
 
     ax2 = ax1.twinx()
     color = 'tab:blue'
     ax2.set_ylabel('Inference Time (s)', color=color, fontsize=FONT_AXIS)
-    x_pos = np.arange(len(model_names))
     ax2.bar(x_pos + 0.2, inf_times, color=color, alpha=0.8, width=0.4, align='edge', label='Inference')
     ax2.tick_params(axis='y', labelcolor=color, labelsize=FONT_TICK)
 

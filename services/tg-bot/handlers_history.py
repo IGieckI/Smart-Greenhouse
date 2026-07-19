@@ -13,6 +13,8 @@ def _svp(t: float) -> float:
     """ Saturation vapor pressure (kPa) — same formula used by the inference service. """
     return 0.61078 * math.exp((17.27 * t) / (t + 237.3))
 
+
+
 async def _fetch_vpd_forecast(board_id: str, task: str = "t5", freq_min: int = 6, horizon_hours: int = 2):
     """ Ask the ML inference service (best model for `task`) for the next-`horizon_hours`
         VPD forecast. Returns {"air": [...], "leaf": [...]} of {timestamp, value}, or None. """
@@ -41,6 +43,8 @@ async def _fetch_vpd_forecast(board_id: str, task: str = "t5", freq_min: int = 6
     if not air_vpd_fc and not leaf_vpd_fc:
         return None
     return {"air": air_vpd_fc, "leaf": leaf_vpd_fc}
+
+
 
 async def handle_history_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query

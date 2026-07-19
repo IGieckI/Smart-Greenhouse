@@ -7,7 +7,7 @@ import numpy as np
 import joblib
 import matplotlib.pyplot as plt
 from influxdb_client import InfluxDBClient
-
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.inspection import permutation_importance
@@ -15,7 +15,6 @@ from sklearn.model_selection import TimeSeriesSplit, GridSearchCV
 from sklearn.linear_model import Ridge
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.svm import SVR
-
 from lightgbm import LGBMRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
@@ -30,6 +29,15 @@ from shared_core.tasks import TASKS
 
 from analytics_plotter import FONT_TITLE, FONT_AXIS, FONT_LEGEND, FONT_TICK, FIGSIZE_WIDE, FIGSIZE_STANDARD
 
+class DropDiffFeatures(BaseEstimator, TransformerMixin):
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        if isinstance(X, pd.DataFrame):
+            cols = [c for c in X.columns if not c.endswith('_diff')]
+            return X[cols]
+        return X
 
 def fetch_clean_data(freq_minutes: int):
     print(f"[Data Fetch] Pulling clean data from bucket for {freq_minutes}m frequency...")
@@ -59,17 +67,17 @@ def fetch_clean_data(freq_minutes: int):
         print(f"[Data Fetch] Successfully retrieved {len(df)} records.")
     return df
 
-
-
-
 def log_and_evaluate(y_test, y_pred, features_names, model, model_name, training_time, inf_time, best_params, archive_dir, X_test=None):
     mae = mean_absolute_error(y_test, y_pred)
     rmse = np.sqrt(mean_squared_error(y_test, y_pred))
     r2 = r2_score(y_test, y_pred)
 
-    if hasattr(model, 'named_steps') and 'poly_features' in model.named_steps:
-        try: features_names = model.named_steps['poly_features'].get_feature_names_out()
-        except: pass
+    if hasattr(model, 'named_steps'):
+        if 'drop_diff' in model.named_steps:
+            features_names = [f for f in features_names if not f.endswith('_diff')]
+        if 'poly_features' in model.named_steps:
+            try: features_names = model.named_steps['poly_features'].get_feature_names_out()
+            except: pass
     
     importance_dict = {}
     final_estimator = model.named_steps['regressor'] if hasattr(model, 'named_steps') else model
@@ -112,9 +120,6 @@ def log_and_evaluate(y_test, y_pred, features_names, model, model_name, training
         
     return report, mae
 
-
-
-
 def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
     print(f"\n{'='*60}\n[Trainer {freq_minutes}m] INDEPENDENT ENVIRONMENTAL PROPHET TRAINING\n{'='*60}")
     os.makedirs(output_dir, exist_ok=True)
@@ -131,14 +136,16 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
             df_prophet_full = pd.DataFrame()
             for b_id in ACTIVE_BOARDS:
                 df_b = df_train[df_train['id_board'] == b_id]
-                if feat not in df_b.columns: continue
+                if feat not in df_b.columns:
+                    continue
                 
                 cols_to_extract = [feat]
                 if USE_INDOOR_FEATURE and 'is_indoor' in df_b.columns:
                     cols_to_extract.append('is_indoor')
                     
                 df_b = df_b[cols_to_extract].dropna().tail(tail_samples)
-                if len(df_b) < 100 or df_b[feat].nunique() <= 1: continue
+                if len(df_b) < 100 or df_b[feat].nunique() <= 1:
+                    continue
                 
                 timestamps = df_b.index.tz_localize(None) if df_b.index.tz is not None else df_b.index
                 tmp = pd.DataFrame({
@@ -214,6 +221,7 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
 
 def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> dict:
     is_high_freq = freq_minutes < 6
+    drop_diff = [('drop_diff', DropDiffFeatures())]
     scaler_and_poly = [('poly_features', poly_transformer), ('scaler', MinMaxScaler())]
     scaler_only = [('scaler', MinMaxScaler())]
 
@@ -223,8 +231,20 @@ def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> d
                 "model": Pipeline(scaler_only + [('regressor', Ridge())]),
                 "params": {"regressor__alpha": [0.1, 1.0, 10.0]} 
             },
+            "Ridge_linear_no_diff": {
+                "model": Pipeline(drop_diff + scaler_only + [('regressor', Ridge())]),
+                "params": {"regressor__alpha": [0.1, 1.0, 10.0]} 
+            },
             "LightGBM": {
                 "model": Pipeline(scaler_only + [('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
+                "params": {
+                    "regressor__n_estimators": [100, 300], 
+                    "regressor__learning_rate": [0.05, 0.1],
+                    "regressor__num_leaves": [31]
+                }
+            },
+            "LightGBM_no_diff": {
+                "model": Pipeline(drop_diff + scaler_only + [('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
                 "params": {
                     "regressor__n_estimators": [100, 300], 
                     "regressor__learning_rate": [0.05, 0.1],
@@ -238,8 +258,16 @@ def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> d
             "model": Pipeline(scaler_only + [('regressor', Ridge())]),
             "params": {"regressor__alpha": [0.01, 0.1, 1.0, 10.0, 100.0]}
         },
+        "Ridge_linear_no_diff": {
+            "model": Pipeline(drop_diff + scaler_only + [('regressor', Ridge())]),
+            "params": {"regressor__alpha": [0.01, 0.1, 1.0, 10.0, 100.0]}
+        },
         "Ridge_poly": { 
             "model": Pipeline(scaler_and_poly + [('regressor', Ridge())]),
+            "params": {"regressor__alpha": [0.01, 0.1, 1.0, 10.0, 100.0]}
+        },
+        "Ridge_poly_no_diff": { 
+            "model": Pipeline(drop_diff + scaler_and_poly + [('regressor', Ridge())]),
             "params": {"regressor__alpha": [0.01, 0.1, 1.0, 10.0, 100.0]}
         },
         "RandomForest": {
@@ -251,8 +279,26 @@ def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> d
                 "regressor__max_features": ["sqrt", 1.0]
             }
         },
+        "RandomForest_no_diff": {
+            "model": Pipeline(drop_diff + scaler_only + [('regressor', RandomForestRegressor(random_state=42, n_jobs=1))]),
+            "params": {
+                "regressor__n_estimators": [100, 300], 
+                "regressor__max_depth": [10, 20, None], 
+                "regressor__min_samples_split": [2, 5, 10],
+                "regressor__max_features": ["sqrt", 1.0]
+            }
+        },
         "LightGBM": {
             "model": Pipeline(scaler_only + [('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
+            "params": {
+                "regressor__n_estimators": [100, 300],
+                "regressor__learning_rate": [0.01, 0.05, 0.1],
+                "regressor__num_leaves": [31, 63],
+                "regressor__subsample": [0.8, 1.0] 
+            }
+        },
+        "LightGBM_no_diff": {
+            "model": Pipeline(drop_diff + scaler_only + [('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
             "params": {
                 "regressor__n_estimators": [100, 300],
                 "regressor__learning_rate": [0.01, 0.05, 0.1],
@@ -276,9 +322,23 @@ def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> d
                 }
             ]
         },
+        "SVR_no_diff": {
+            "model": Pipeline(drop_diff + scaler_only + [('regressor', SVR())]),
+            "params": [
+                {
+                    "regressor__kernel": ["linear"],
+                    "regressor__C": [0.1, 1.0, 10.0],
+                    "regressor__epsilon": [0.001, 0.01, 0.1]
+                },
+                {
+                    "regressor__kernel": ["rbf"],
+                    "regressor__C": [0.1, 1.0, 10.0],
+                    "regressor__gamma": ["scale", 0.1, 0.01], 
+                    "regressor__epsilon": [0.001, 0.01, 0.1]
+                }
+            ]
+        },
     }
-
-
 
 def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
     print(f"\n{'='*60}\n[Trainer {freq_minutes}m] STARTING PIPELINE: {task_name.upper()}\n{'='*60}")
