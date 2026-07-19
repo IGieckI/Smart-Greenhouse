@@ -40,7 +40,7 @@ def _extract_top_features(feat_imp: dict, target_variance: float = 0.75, max_fea
         clean_k = _clean_feature_name(k)
         top_feats.append((clean_k, v))
         cumulative += abs(v) / total_imp
-        if cumulative >= target_variance or i >= (max_feats - 1):
+        if (cumulative >= target_variance) or (i >= (max_feats - 1)):
             break
             
     used_keys = set([k for k, v in top_feats])
@@ -223,7 +223,7 @@ def _generate_global_heatmap(all_data, model_names, key, category, out_dir, freq
     if not df_matrix.empty:
         for row_idx, task in enumerate(df_matrix.index):
             best_model = best_models.get(task)
-            if pd.notna(best_model) and best_model in df_matrix.columns:
+            if (pd.notna(best_model)) and (best_model in df_matrix.columns):
                 col_idx = df_matrix.columns.get_loc(best_model)
                 ax.add_patch(patches.Rectangle((col_idx, row_idx), 1, 1, fill=False, edgecolor='red', lw=4))
             
@@ -287,7 +287,7 @@ def _generate_global_feature_importance_grid(all_data, model_names, out_dir, fre
     rows = len(tasks)
     
     fig, axes = plt.subplots(rows, cols, figsize=(FIGSIZE_GRID_BASE * cols, FIGSIZE_GRID_BASE * 0.7 * rows))
-    if rows == 1 and cols == 1:
+    if (rows == 1) and (cols == 1):
         axes = np.array([[axes]])
     elif rows == 1:
         axes = np.array([axes])

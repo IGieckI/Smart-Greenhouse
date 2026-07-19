@@ -10,7 +10,7 @@ def _get_max_time(query_api, query):
         res = query_api.query_data_frame(query)
         if isinstance(res, list):
             res = pd.concat(res, ignore_index=True) if len(res) > 0 else pd.DataFrame()
-        if res is not None and not res.empty and '_time' in res.columns:
+        if (res is not None and not res.empty) and ('_time' in res.columns):
             return res['_time'].max()
     except Exception as e:
         print(f"[Sync] Error extracting max time: {e}")
@@ -60,7 +60,7 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
     if isinstance(df_raw, list):
         df_raw = pd.concat(df_raw, ignore_index=True) if len(df_raw) > 0 else pd.DataFrame()
 
-    if df_raw is not None and not df_raw.empty:
+    if (df_raw is not None) and (not df_raw.empty):
         print(f"[Sync {freq_minutes}m] Pre-processing {len(df_raw)} raw records...")
 
         if 'tds_value' in df_raw.columns:
@@ -145,7 +145,7 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
         if isinstance(df_caveaux, list):
             df_caveaux = pd.concat(df_caveaux, ignore_index=True) if len(df_caveaux) > 0 else pd.DataFrame()
             
-        if df_caveaux is not None and not df_caveaux.empty:
+        if (df_caveaux is not None) and (not df_caveaux.empty):
             cav_points = []
             for _, row in df_caveaux.iterrows():
                 p = (Point("sensor_measurements")
@@ -155,7 +155,7 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
                      .time(row['_time']))
                 
                 for pred_field in ['leaf_temp_pred', 'air_temp_pred', 'humidity_pred']:
-                    if pred_field in row and pd.notna(row[pred_field]):
+                    if (pred_field in row) and (pd.notna(row[pred_field])):
                         p.field(pred_field, float(row[pred_field]))
                         
                 cav_points.append(p)

@@ -60,7 +60,7 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("🔄 Requesting API server to reload models into RAM...")
     data = await fetch_api(f"{INFERENCE_URL}/reload-models", payload={})
-    if data and data.get("status") == "ok":
+    if (data) and (data.get("status") == "ok"):
         await msg.edit_text("✅ **Models reloaded successfully!**", parse_mode='Markdown')
     else:
         await msg.edit_text("⚠️ **Failed to reload models.** Check API logs.", parse_mode='Markdown')

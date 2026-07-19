@@ -66,7 +66,7 @@ def on_message(client, userdata, msg):
         payload = _normalize(raw)
 
         star_id = payload.get("star_id")
-        if star_id and star_id not in _subscribed_stars:
+        if (star_id) and (star_id not in _subscribed_stars):
             _subscribed_stars.add(star_id)
             client.subscribe(f"greenhouse/commands/{star_id}")
             logger.info(f"Subscribed to commands for star {star_id}")

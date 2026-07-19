@@ -15,7 +15,7 @@ async def _dispatch_command(node_id, actuator: str, value: int, duration: int) -
 
 
 def _format_command_result(res: dict, actuator: str, value: int, duration: int) -> str:
-    if res and res.get("status") == "sent":
+    if (res) and (res.get("status") == "sent"):
         return (
             f"✅ **Command Sent!**\n"
             f"**Star ID:** `{res.get('star_id')}`\n"
@@ -108,7 +108,7 @@ async def process_custom_command(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("⚠️ Value and duration must be whole numbers. Try again:")
         return AWAIT_ACT_CUSTOM
 
-    if not (0 <= value <= 255) or duration < 0:
+    if (not (0 <= value <= 255)) or (duration < 0):
         await update.message.reply_text("⚠️ Value must be in [0,255] and duration ≥ 0. Try again:")
         return AWAIT_ACT_CUSTOM
 

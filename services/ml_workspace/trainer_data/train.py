@@ -140,11 +140,11 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
                     continue
                 
                 cols_to_extract = [feat]
-                if USE_INDOOR_FEATURE and 'is_indoor' in df_b.columns:
+                if (USE_INDOOR_FEATURE) and ('is_indoor' in df_b.columns):
                     cols_to_extract.append('is_indoor')
                     
                 df_b = df_b[cols_to_extract].dropna().tail(tail_samples)
-                if len(df_b) < 100 or df_b[feat].nunique() <= 1:
+                if (len(df_b) < 100) or (df_b[feat].nunique() <= 1):
                     continue
                 
                 timestamps = df_b.index.tz_localize(None) if df_b.index.tz is not None else df_b.index
@@ -152,12 +152,12 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
                     'ds': pd.to_datetime(timestamps),
                     'y': pd.to_numeric(df_b[feat].values, errors='coerce')
                 })
-                if USE_INDOOR_FEATURE and 'is_indoor' in df_b.columns:
+                if (USE_INDOOR_FEATURE) and ('is_indoor' in df_b.columns):
                     tmp['is_indoor'] = df_b['is_indoor'].values
                 
                 df_prophet_full = pd.concat([df_prophet_full, tmp], ignore_index=True)
                 
-            if len(df_prophet_full) < 20 or df_prophet_full['y'].nunique() <= 1:
+            if (len(df_prophet_full) < 20) or (df_prophet_full['y'].nunique() <= 1):
                 print(f"[Prophet Warning] Data for '{feat}' is insufficient or constant. Skipping.")
                 continue
 
@@ -175,7 +175,7 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
                                   weekly_seasonality=False, 
                                   stan_backend='CMDSTANPY')
 
-            if USE_INDOOR_FEATURE and 'is_indoor' in df_train_prophet.columns:
+            if (USE_INDOOR_FEATURE) and ('is_indoor' in df_train_prophet.columns):
                 final_model.add_regressor('is_indoor')
                 print(f"[Prophet - {feat}] Using 'is_indoor' as an Extra Regressor.")
             
@@ -183,7 +183,7 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
             
             print(f"[Prophet - {feat}] Generating forecast for evaluation...")
             future = df_test_prophet[['ds']].copy()
-            if USE_INDOOR_FEATURE and 'is_indoor' in df_test_prophet.columns:
+            if (USE_INDOOR_FEATURE) and ('is_indoor' in df_test_prophet.columns):
                 future['is_indoor'] = df_test_prophet['is_indoor'].values
                 
             forecast = final_model.predict(future)
@@ -204,7 +204,7 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
 
             print(f"[Prophet - {feat}] Refitting on 100% of available data for production...")
             prod_model = Prophet(daily_seasonality=True, yearly_seasonality=False, weekly_seasonality=False, stan_backend='CMDSTANPY')
-            if USE_INDOOR_FEATURE and 'is_indoor' in df_prophet_full.columns:
+            if (USE_INDOOR_FEATURE) and ('is_indoor' in df_prophet_full.columns):
                 prod_model.add_regressor('is_indoor')
             prod_model.fit(df_prophet_full)
 
@@ -346,7 +346,7 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
     target_col = config["target"]
     
     features_list = config["features"].copy() 
-    if USE_INDOOR_FEATURE and 'is_indoor' not in features_list:
+    if (USE_INDOOR_FEATURE) and ('is_indoor' not in features_list):
         features_list.append('is_indoor')
         
     use_lags = config.get("use_lags", False)
@@ -415,7 +415,7 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
         df_train_final_list.append(df_train_b)
         df_test_final_list.append(df_test_b)
 
-    if not df_train_final_list or not df_test_final_list:
+    if (not df_train_final_list) or (not df_test_final_list):
         print(f"[{task_name}] Error: Empty datasets after processing all boards. Skipping task.")
         return
 

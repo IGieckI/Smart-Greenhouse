@@ -15,7 +15,7 @@ def recursive_multistep_inference(
 ) -> list:
     
     features = task_config["features"].copy()
-    if USE_INDOOR_FEATURE and 'is_indoor' not in features:
+    if (USE_INDOOR_FEATURE) and ('is_indoor' not in features):
         features.append('is_indoor')
         
     use_lags = task_config.get("use_lags", False)
@@ -34,7 +34,7 @@ def recursive_multistep_inference(
     future_dates_naive = [t.tz_localize(None) if t.tz is not None else t for t in future_dates]
     df_prophet_future = pd.DataFrame({'ds': future_dates_naive})
 
-    if USE_INDOOR_FEATURE and 'is_indoor' in T_current_data.columns:
+    if (USE_INDOOR_FEATURE) and ('is_indoor' in T_current_data.columns):
         board_indoor_val = T_current_data['is_indoor'].iloc[-1]
         df_prophet_future['is_indoor'] = board_indoor_val
     
@@ -52,13 +52,13 @@ def recursive_multistep_inference(
     target_predictions = []
     
     cols_to_keep = features + ['leaf_temp']
-    if 'is_indoor' in T_current_data.columns and 'is_indoor' not in cols_to_keep:
+    if ('is_indoor' in T_current_data.columns) and ('is_indoor' not in cols_to_keep):
         cols_to_keep.append('is_indoor')
         
     history = T_current_data[cols_to_keep].copy()
 
     expected_features = list(ml_model_pipeline.feature_names_in_)
-    if hasattr(ml_model_pipeline, 'named_steps') and 'drop_diff' in ml_model_pipeline.named_steps:
+    if (hasattr(ml_model_pipeline, 'named_steps')) and ('drop_diff' in ml_model_pipeline.named_steps):
         expected_features = [f for f in expected_features if not f.endswith('_diff')]
 
     for step_i in range(steps):
@@ -117,7 +117,7 @@ def ensemble_multistep_inference(
     soft_cfg = task_configs["soft"]
     
     soft_features = soft_cfg["features"].copy()
-    if USE_INDOOR_FEATURE and 'is_indoor' not in soft_features:
+    if (USE_INDOOR_FEATURE) and ('is_indoor' not in soft_features):
         soft_features.append('is_indoor')
     
     history_adv = build_advanced_features(df_patched, soft_features, soft_cfg.get("use_lags", False))
@@ -128,7 +128,7 @@ def ensemble_multistep_inference(
     generated_history = []
     if not X_soft.empty:
         soft_expected_features = list(ml_models["soft"].feature_names_in_)
-        if hasattr(ml_models["soft"], 'named_steps') and 'drop_diff' in ml_models["soft"].named_steps:
+        if (hasattr(ml_models["soft"], 'named_steps')) and ('drop_diff' in ml_models["soft"].named_steps):
              soft_expected_features = [f for f in soft_expected_features if not f.endswith('_diff')]
 
         X_soft = X_soft[soft_expected_features]

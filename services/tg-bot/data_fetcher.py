@@ -12,7 +12,7 @@ def calculate_svp(t):
 
 
 def calculate_vpd(df: pd.DataFrame) -> pd.DataFrame:
-    if 'air_temp' in df.columns and 'humidity' in df.columns:
+    if ('air_temp' in df.columns) and ('humidity' in df.columns):
         svp_air = calculate_svp(df['air_temp'])
         avp_air = svp_air * (df['humidity'] / 100.0)
         df['vpd_air'] = np.maximum(0, svp_air - avp_air)
@@ -25,7 +25,7 @@ def calculate_vpd(df: pd.DataFrame) -> pd.DataFrame:
         else:
             df['vpd'] = df['vpd_air']
 
-    if 'air_temp_pred' in df.columns and 'humidity_pred' in df.columns:
+    if ('air_temp_pred' in df.columns) and ('humidity_pred' in df.columns):
         svp_air_pred = calculate_svp(df['air_temp_pred'])
         avp_pred = svp_air_pred * (df['humidity_pred'] / 100.0)
         df['vpd_air_pred'] = np.maximum(0, svp_air_pred - avp_pred)
@@ -87,7 +87,7 @@ def _latest_board_timestamp(client: InfluxDBClient, board_id: str, lookback_days
         if not df:
             return None
         df = pd.concat(df, ignore_index=True)
-    if df.empty or '_time' not in df.columns:
+    if (df.empty) or ('_time' not in df.columns):
         return None
     return pd.Timestamp(df['_time'].max())
 

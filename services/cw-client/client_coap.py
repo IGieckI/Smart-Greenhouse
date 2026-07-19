@@ -131,7 +131,7 @@ class TelemetryObserver:
 
         timestamp, node_id, water_temp, tds, soil_moisture, light_lux, air_temp, humidity, pressure, leaf_temp = fields
 
-        if timestamp == 0 and node_id == 0:
+        if (timestamp == 0) and (node_id == 0):
             logger.info("Star not yet populated with node data, waiting...")
             return
 
@@ -182,7 +182,7 @@ class TelemetryObserver:
                 logger.error(f"Connection error ({e}), retrying in 5s...")
                 await asyncio.sleep(5)
             finally:
-                if observation and not observation.observation.cancelled:
+                if (observation) and (not observation.observation.cancelled):
                     observation.observation.cancel()
 
     async def shutdown(self):

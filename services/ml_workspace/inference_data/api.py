@@ -16,7 +16,7 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 
 sys.path.append('/app')
 from shared_core.data_sync import sync_clean_bucket
-from shared_core.tasks import TASKS, GROUPS
+from shared_core.tasks import TASKS, GROUPS, ENV_FEATURES
 from shared_core.config import *
 from shared_core.preprocessing import build_advanced_features
 from .predictor import recursive_multistep_inference, ensemble_multistep_inference
@@ -77,9 +77,9 @@ def save_predictions_to_influx(board_id: str, freq_minutes: int, source_name: st
             .field("leaf_temp_pred", float(v)) \
             .time(t.isoformat() if hasattr(t, 'isoformat') else t)
             
-        if air_preds is not None and i < len(air_preds):
+        if (air_preds is not None) and (i < len(air_preds)):
             p.field("air_temp_pred", float(air_preds[i]))
-        if hum_preds is not None and i < len(hum_preds):
+        if (hum_preds is not None) and (i < len(hum_preds)):
             p.field("humidity_pred", float(hum_preds[i]))
 
         points.append(p)
@@ -154,7 +154,7 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
     if len(df_history) < get_min_history_records(freq_minutes):
         raise HTTPException(status_code=400, detail=f"Insufficient historical data for board {board_id}.")
 
-    if custom_data:
+    if custom_data is not None:
         last_idx = df_history.index[-1]
         custom_values = custom_data.dict(exclude_none=True)
         for k, v in custom_values.items():
@@ -164,11 +164,11 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
     soft_task = get_soft_task(task_or_group)
     soft_model = loaded_models.get(freq_key, {}).get(soft_task)
     
-    if not use_real_leaf_temp and soft_model:
+    if (not use_real_leaf_temp) and (soft_model is not None):
         soft_config = TASKS[soft_task]
         
         soft_features = soft_config["features"].copy()
-        if USE_INDOOR_FEATURE and 'is_indoor' not in soft_features:
+        if (USE_INDOOR_FEATURE) and ('is_indoor' not in soft_features):
             soft_features.append('is_indoor')
         
         df_history_adv = build_advanced_features(
@@ -178,7 +178,7 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
         )
         
         expected_features = list(soft_model.feature_names_in_)
-        if hasattr(soft_model, 'named_steps') and 'drop_diff' in soft_model.named_steps:
+        if (hasattr(soft_model, 'named_steps')) and ('drop_diff' in soft_model.named_steps):
              expected_features = [f for f in expected_features if not f.endswith('_diff')]
 
         valid_idx = df_history_adv.dropna(subset=expected_features).index
@@ -239,7 +239,7 @@ def load_assets():
         if os.path.exists(env_dir):
             loaded_feats = []
             missing_feats = []
-            for feat in TASKS["t1"]["features"]:
+            for feat in ENV_FEATURES:
                 prophet_path = os.path.join(env_dir, f"prophet_{feat}.json")
                 if os.path.exists(prophet_path):
                     with open(prophet_path, "r") as f:
@@ -272,7 +272,7 @@ def start_scheduler():
 @app.get("/info/{freq_minutes}m/{task}")
 def get_task_info(freq_minutes: int, task: str):
     freq_key = str(freq_minutes)
-    if freq_key not in loaded_info or task not in loaded_info[freq_key]:
+    if (freq_key not in loaded_info) or (task not in loaded_info[freq_key]):
         raise HTTPException(status_code=404, detail="Metrics not found.")
     return loaded_info[freq_key][task]
 
@@ -319,7 +319,7 @@ def _run_standard_inference(freq_minutes: int, task: str, board_id: str,
                             use_real_leaf_temp: bool = False,
                             save_to_db: bool = True):
     freq_key = str(freq_minutes)
-    if freq_key not in loaded_models or task not in loaded_models[freq_key]:
+    if (freq_key not in loaded_models) or (task not in loaded_models[freq_key]):
         raise HTTPException(status_code=404, detail=f"Task {task} not configured or trained.")
         
     df_history, local_prophets = _prepare_inference_context(
@@ -342,7 +342,7 @@ def _run_standard_inference(freq_minutes: int, task: str, board_id: str,
     if len(pred_list) > 0:
         future_dates_naive = [t.tz_localize(None) if t.tz is not None else t for t in future_timestamps]
         df_future = pd.DataFrame({'ds': future_dates_naive})
-        if USE_INDOOR_FEATURE and 'is_indoor' in df_history.columns:
+        if (USE_INDOOR_FEATURE) and ('is_indoor' in df_history.columns):
             df_future['is_indoor'] = df_history['is_indoor'].iloc[-1]
             
         if "air_temp" in local_prophets:
@@ -350,7 +350,7 @@ def _run_standard_inference(freq_minutes: int, task: str, board_id: str,
         if "humidity" in local_prophets:
             hum_preds = local_prophets["humidity"].predict(df_future)['yhat'].values
 
-        if TASKS[task]["target"] == "leaf_temp" and len(air_preds) > 0 and len(hum_preds) > 0:
+        if (TASKS[task]["target"] == "leaf_temp" and len(air_preds) > 0) and (len(hum_preds) > 0):
             future_vpd = [calculate_vpd(lt, at, rh) for lt, at, rh in zip(pred_list, air_preds, hum_preds)]
     
         if save_to_db:
@@ -415,7 +415,7 @@ def _run_ensemble_inference(freq_minutes: int, group: str, board_id: str,
     group_targets = GROUPS[group]
     
     for t in group_targets:
-        if freq_key not in loaded_models or t not in loaded_models[freq_key]:
+        if (freq_key not in loaded_models) or (t not in loaded_models[freq_key]):
             raise HTTPException(status_code=404, detail="Incomplete models for this ensemble.")    
     
     t_soft, t_env, t_auto = group_targets
@@ -450,7 +450,7 @@ def _run_ensemble_inference(freq_minutes: int, group: str, board_id: str,
     
     future_dates_naive = [t.tz_localize(None) if t.tz is not None else t for t in future_timestamps]
     df_future = pd.DataFrame({'ds': future_dates_naive})
-    if USE_INDOOR_FEATURE and 'is_indoor' in df_history.columns:
+    if (USE_INDOOR_FEATURE) and ('is_indoor' in df_history.columns):
         df_future['is_indoor'] = df_history['is_indoor'].iloc[-1]
         
     air_preds = []
@@ -461,10 +461,10 @@ def _run_ensemble_inference(freq_minutes: int, group: str, board_id: str,
         hum_preds = local_prophets["humidity"].predict(df_future)['yhat'].values
 
     future_vpd = []
-    if len(air_preds) > 0 and len(hum_preds) > 0:
+    if (len(air_preds) > 0) and (len(hum_preds) > 0):
         future_vpd = [calculate_vpd(lt, at, rh) for lt, at, rh in zip(result["forecast_blended"], air_preds, hum_preds)]
 
-    if save_to_db and len(result["forecast_blended"]) > 0:
+    if (save_to_db) and (len(result["forecast_blended"]) > 0):
         save_predictions_to_influx(
             board_id, freq_minutes, f"ENSEMBLE_{group}", future_timestamps, result["forecast_blended"],
             air_preds if len(air_preds) > 0 else None,

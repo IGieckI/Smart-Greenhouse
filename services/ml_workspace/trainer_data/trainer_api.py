@@ -134,7 +134,7 @@ def trigger_standard_training():
 
 @app.post("/train/custom/{freq_minutes}")
 def trigger_custom_training(freq_minutes: int):
-    if freq_minutes <= 0 or freq_minutes > TARGET_FREQ_MINUTES or TARGET_FREQ_MINUTES % freq_minutes != 0:
+    if (freq_minutes <= 0 or freq_minutes > TARGET_FREQ_MINUTES) or (TARGET_FREQ_MINUTES % freq_minutes != 0):
         raise HTTPException(status_code=400, detail=f"Invalid frequency or not a divisor of the target. Actual target = {TARGET_FREQ_MINUTES}")
     training_queue.put(freq_minutes)
     return {

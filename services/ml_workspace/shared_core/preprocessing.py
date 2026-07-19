@@ -13,7 +13,7 @@ def gaussian_weighted_interpolation(df: pd.DataFrame, target_col: str, weight_co
         before = valid_data.loc[:idx].iloc[-INTERPOLATION_WIN_BEFORE:] if not valid_data.loc[:idx].empty else pd.DataFrame()
         after = valid_data.loc[idx:].iloc[:INTERPOLATION_WIN_AFTER] if not valid_data.loc[idx:].empty else pd.DataFrame()
         
-        if not before.empty and not after.empty:
+        if (not before.empty) and (not after.empty):
             gap_minutes = (after.index[0] - before.index[-1]).total_seconds() / 60.0
             if gap_minutes > MAX_INTERPOLATION_GAP_MINUTES:
                 continue 
@@ -31,7 +31,7 @@ def gaussian_weighted_interpolation(df: pd.DataFrame, target_col: str, weight_co
         time_diffs = np.abs((neighbors.index - idx).total_seconds() / 60.0)
         gauss_weights = np.exp(-(time_diffs**2) / (2 * INTERPOLATION_SIGMA_MIN**2))
         
-        if weight_col and weight_col in neighbors.columns:
+        if (weight_col) and (weight_col in neighbors.columns):
             custom_weights = neighbors[weight_col].values
             final_weights = gauss_weights * custom_weights
         else:
@@ -45,7 +45,7 @@ def gaussian_weighted_interpolation(df: pd.DataFrame, target_col: str, weight_co
 
 
 def identify_leaf_steps(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty or 'leaf_temp' not in df.columns:
+    if (df.empty) or ('leaf_temp' not in df.columns):
         return df
 
     time_diff = df.index.to_series().diff()

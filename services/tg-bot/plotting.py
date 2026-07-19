@@ -42,7 +42,7 @@ def create_series_plot(df_hist: pd.DataFrame, series_dict: dict, title: str, hid
     def _axis_for(label: str):
         return ax_hum if (ax_hum is not None and _is_humidity_series(label)) else ax_temp
 
-    if not df_hist.empty and 'leaf_temp' in df_hist.columns:
+    if (not df_hist.empty) and ('leaf_temp' in df_hist.columns):
         df_plot = df_hist.dropna(subset=['leaf_temp'])
         if not df_plot.empty:
             last_time = df_plot.index[-1]
@@ -71,7 +71,7 @@ def create_series_plot(df_hist: pd.DataFrame, series_dict: dict, title: str, hid
         times = [pd.to_datetime(d['timestamp']).astimezone(TZ_ROME) for d in data]
         vals = [d['value'] for d in data]
 
-        if "History" not in label and "Forecast" not in label and last_val is not None:
+        if (("History" not in label and "Forecast" not in label)) and ((last_val is not None)):
             times = [last_time] + times
             vals = [last_val] + vals
 
@@ -119,7 +119,7 @@ def create_vpd_plot(df_hist: pd.DataFrame, future_vpd: list = None, historical_v
             last_time = times[-1]
             last_val = vals[-1]
         has_data = True
-    elif not df_hist.empty and 'vpd' in df_hist.columns:
+    elif (not df_hist.empty) and ('vpd' in df_hist.columns):
         df_plot = df_hist.dropna(subset=['vpd'])
         if not df_plot.empty:
             plt.plot(df_plot.index, df_plot['vpd'], label='Historical VPD (Sensor)', color='magenta', linewidth=2)
@@ -169,7 +169,7 @@ def create_semantic_category_plots(df_hist: pd.DataFrame) -> list[io.BytesIO]:
 def _forecast_xy(series: list, anchor_time=None, anchor_val=None):
     times = [pd.to_datetime(d['timestamp']).astimezone(TZ_ROME) for d in series]
     vals = [d['value'] for d in series]
-    if anchor_time is not None and anchor_val is not None:
+    if (anchor_time is not None) and (anchor_val is not None):
         times = [anchor_time] + times
         vals = [anchor_val] + vals
     return times, vals
@@ -182,26 +182,26 @@ def create_history_vpd_plot(df_hist: pd.DataFrame, vpd_forecast: dict = None) ->
     last_leaf_time = last_leaf_val = None
 
     if not df_hist.empty:
-        if 'vpd_air' in df_hist.columns and not df_hist['vpd_air'].dropna().empty:
+        if ('vpd_air' in df_hist.columns) and (not df_hist['vpd_air'].dropna().empty):
             df_plot = df_hist.dropna(subset=['vpd_air'])
             plt.plot(df_plot.index, df_plot['vpd_air'], label='Actual VPD (Air)', color='blue', linewidth=1.5, linestyle='-.', alpha=0.6)
             last_time = df_plot.index[-1]
             last_air_time, last_air_val = df_plot.index[-1], df_plot['vpd_air'].iloc[-1]
             has_data = True
 
-        if 'vpd_leaf' in df_hist.columns and not df_hist['vpd_leaf'].dropna().empty:
+        if ('vpd_leaf' in df_hist.columns) and (not df_hist['vpd_leaf'].dropna().empty):
             df_plot = df_hist.dropna(subset=['vpd_leaf'])
             plt.plot(df_plot.index, df_plot['vpd_leaf'], label='Actual VPD (Leaf)', color='magenta', linewidth=2)
             last_time = df_plot.index[-1]
             last_leaf_time, last_leaf_val = df_plot.index[-1], df_plot['vpd_leaf'].iloc[-1]
             has_data = True
 
-        if 'vpd_air_pred' in df_hist.columns and not df_hist['vpd_air_pred'].dropna().empty:
+        if ('vpd_air_pred' in df_hist.columns) and (not df_hist['vpd_air_pred'].dropna().empty):
             df_plot = df_hist.dropna(subset=['vpd_air_pred'])
             plt.plot(df_plot.index, df_plot['vpd_air_pred'], label='Predicted VPD (Air)', color='cyan', linewidth=1.5, linestyle='--')
             has_data = True
 
-        if 'vpd_leaf_pred' in df_hist.columns and not df_hist['vpd_leaf_pred'].dropna().empty:
+        if ('vpd_leaf_pred' in df_hist.columns) and (not df_hist['vpd_leaf_pred'].dropna().empty):
             df_plot = df_hist.dropna(subset=['vpd_leaf_pred'])
             plt.plot(df_plot.index, df_plot['vpd_leaf_pred'], label='Predicted VPD (Leaf)', color='orange', linewidth=1.5, linestyle='--')
             has_data = True
@@ -254,7 +254,7 @@ def create_history_plots(df_hist: pd.DataFrame, vpd_forecast: dict = None) -> li
         avail_actuals = [c for c in actual_cols if c in df_hist.columns]
         avail_preds = [c for c in pred_cols if c in df_hist.columns]
         
-        if not avail_actuals and not avail_preds: 
+        if (not avail_actuals) and (not avail_preds): 
             continue
         
         plt.figure(figsize=FIGSIZE_SUBPLOT)

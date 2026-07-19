@@ -123,7 +123,7 @@ class GreenhouseDashboard(tk.Tk):
                     self.after(0, lambda: self.btn_sync_time.config(state=tk.NORMAL))
                     self.after(0, self.log_message, "OK | Connected to Star Node. Commands enabled.")
             else:
-                if self.is_connected or not hasattr(self, 'first_check_done'):
+                if (self.is_connected) or (not hasattr(self, 'first_check_done')):
                     self.is_connected = False
                     self.first_check_done = True
                     self.after(0, lambda: self.btn_download.config(state=tk.DISABLED))
@@ -195,7 +195,7 @@ class GreenhouseDashboard(tk.Tk):
             return
 
         for row in data:
-            if 'timestamp' in row and row['timestamp'] > 10000:
+            if ('timestamp' in row) and (row['timestamp'] > 10000):
                 row['timestamp'] = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(row['timestamp']))
 
         self.downloaded_data.extend(data)

@@ -10,7 +10,7 @@ from plotting import create_history_plots
 async def _fetch_vpd_forecast(board_id: str, task: str = "t5", freq_min: int = 6, horizon_hours: int = 2):
     endpoint = f"{INFERENCE_URL}/predict/{freq_min}m/standard/{task}/latest?board_id={board_id}"
     data = await fetch_api(endpoint)
-    if not data or "error" in data:
+    if (not data) or ("error" in data):
         return None
 
     env_fc = data.get("environmental_data", {}).get("forecast", {})
@@ -30,7 +30,7 @@ async def _fetch_vpd_forecast(board_id: str, task: str = "t5", freq_min: int = 6
         return [d for d in series if pd.to_datetime(d["timestamp"]) <= cutoff]
 
     air_vpd_fc, leaf_vpd_fc = _limit(air_vpd_fc), _limit(leaf_vpd_fc)
-    if not air_vpd_fc and not leaf_vpd_fc:
+    if (not air_vpd_fc) and (not leaf_vpd_fc):
         return None
     return {"air": air_vpd_fc, "leaf": leaf_vpd_fc}
 

@@ -62,7 +62,7 @@ async def _send_prediction_results(update: Update, wait_msg, df_hist: pd.DataFra
     if arima_series:
         plots.append(InputMediaPhoto(media=create_series_plot(pd.DataFrame(), arima_series, f"{title_prefix} Prophet Forecast", hide_real_history = True)))
 
-    if historical_vpd or future_vpd: 
+    if (historical_vpd) or (future_vpd): 
         plots.append(InputMediaPhoto(media=create_vpd_plot(df_hist, future_vpd, historical_vpd)))
 
     action_type = "What-If Simulation" if is_whatif else "ML Prediction"
@@ -74,7 +74,7 @@ async def _send_prediction_results(update: Update, wait_msg, df_hist: pd.DataFra
     )
 
     weights = ens_details.get("weights", {})
-    if mode == "ensemble" and weights:
+    if (mode == "ensemble") and (weights):
         w_auto = weights.get("autoregressive", 0) * 100
         w_env = weights.get("environmental", 0) * 100
         summary += (
@@ -230,7 +230,7 @@ async def process_whatif_values(update: Update, context: ContextTypes.DEFAULT_TY
     mode = context.user_data.get('wi_mode')
     task = context.user_data.get('wi_task')
     board_id = context.user_data.get('wi_board')
-    if not (mode and task and board_id):
+    if (not (mode and task) and (board_id)):
         await update.message.reply_text("⚠️ Simulation context lost. Send /menu to restart.")
         return ConversationHandler.END
 
