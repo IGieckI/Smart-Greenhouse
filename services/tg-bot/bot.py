@@ -18,13 +18,11 @@ from handlers_training import handle_training_menu
 
 
 
-
 async def setup_commands(application: Application):
     await application.bot.set_my_commands([
         BotCommand("menu", "🎛 Open Control Panel"),
         BotCommand("reload", "🔄 Reload API Models into RAM")
     ])
-
 
 
 
@@ -59,7 +57,6 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "menu_main":
         await show_main_menu(update, context)
 
-
 async def handle_reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("🔄 Requesting API server to reload models into RAM...")
     data = await fetch_api(f"{INFERENCE_URL}/reload-models", payload={})
@@ -69,13 +66,10 @@ async def handle_reload_command(update: Update, context: ContextTypes.DEFAULT_TY
         await msg.edit_text("⚠️ **Failed to reload models.** Check API logs.", parse_mode='Markdown')
 
 async def menu_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Escape hatch out of a conversation: show the main menu and end the conversation cleanly."""
     await show_main_menu(update, context)
     return ConversationHandler.END
 
-
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    """Log any uncaught handler exception and tell the user, so failures never look like a silent hang."""
     logger.error("Unhandled exception while processing update", exc_info=context.error)
 
     if context.user_data is not None:
@@ -99,17 +93,14 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-
 def main():
     if not TOKEN:
         return logger.error("TELEGRAM_BOT_TOKEN missing in .env file!")
     
     application = Application.builder().token(TOKEN).post_init(setup_commands).build()
     
-    
     application.add_handler(CommandHandler(["start", "menu"], show_main_menu))
     application.add_handler(CommandHandler("reload", handle_reload_command))
-    
     
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_whatif, pattern='^menu_whatif$')],
@@ -139,7 +130,6 @@ def main():
         allow_reentry=True,
     )
     application.add_handler(actuator_conv)
-
 
     application.add_handler(
         entry_points=CallbackQueryHandler(handle_main_menu, pattern="^menu_(predict|history|main)$")

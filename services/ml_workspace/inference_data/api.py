@@ -260,6 +260,9 @@ def load_assets():
 
 @app.on_event("startup")
 def start_scheduler():
+    for mins in DEFAULT_FREQS:
+        sync_clean_bucket(INFLUX_URL, INFLUX_TOKEN, INFLUX_ORG, freq_minutes=mins)
+
     load_assets()
     
     scheduler = BackgroundScheduler()
@@ -389,6 +392,10 @@ def predict_latest(freq_minutes: int, task: str, board_id: str = DEFAULT_BOARD_I
 def predict_manual(freq_minutes: int, task: str, custom_data: SensorData, board_id: str = DEFAULT_BOARD_ID,
                    use_real_leaf_temp: bool = Query(False, description="Set True to use physical sensor historical data instead of Soft Sensor")):
     return _run_standard_inference(freq_minutes, task, board_id, custom_data, use_real_leaf_temp, save_to_db=False)
+
+
+
+
 
 def _run_ensemble_inference(freq_minutes: int, group: str, board_id: str, 
                             custom_data: Optional[SensorData] = None, 

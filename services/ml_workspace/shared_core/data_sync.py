@@ -2,7 +2,6 @@ import os
 import pandas as pd
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
-
 from shared_core.config import *
 from shared_core.preprocessing import apply_board_pipeline
 
@@ -16,7 +15,6 @@ def _get_max_time(query_api, query):
     except Exception as e:
         print(f"[Sync] Error extracting max time: {e}")
     return None
-
 
 def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
     """
@@ -34,6 +32,7 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
         if buckets_api.find_bucket_by_name(bucket) is None:
             print(f"[Sync] Bucket '{bucket}' not found. Creating...")
             buckets_api.create_bucket(bucket_name=bucket, org=influx_org)
+            
     query_last_raw = f'''
         from(bucket: "{bucket_clean}")
           |> range(start: {SYNC_LOOKBACK_DAYS})
@@ -45,10 +44,9 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
     
     last_time = _get_max_time(query_api, query_last_raw)
 
-
     time_filter_raw = "|> range(start: 0)"
-    if last_time: #<<-- weak control?
-        f"|> range(start: {(last_time - pd.Timedelta(minutes=60)).isoformat()})"
+    if last_time is not None:
+        time_filter_raw = f"|> range(start: {(last_time - pd.Timedelta(minutes=60)).isoformat()})"
 
     print(f"[Sync {freq_minutes}m] Querying RAW bucket (Time filter: {time_filter_raw})...")
     query_raw = f'''
@@ -95,7 +93,7 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
             cols_to_drop = ['result', 'table', '_start', '_stop', '_measurement', 'block_id', 'leaf_weight']
             df_clean.drop(columns=[c for c in cols_to_drop if c in df_clean.columns], inplace=True)
 
-            if last_time:
+            if last_time is not None:
                 df_clean = df_clean[df_clean.index > last_time]
             
             df_clean.dropna(how='all', inplace=True)
@@ -129,7 +127,10 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
     
     last_pred_time = _get_max_time(query_api, query_last_pred)
     
-    time_filter_pred = f"|> range(start: {(last_pred_time - pd.Timedelta(minutes=60)).isoformat()})" if last_pred_time else f"|> range(start: {INFERENCE_LOOKBACK_DAYS})"
+
+    time_filter_pred = f"|> range(start: {INFERENCE_LOOKBACK_DAYS})"
+    if last_time is not None:
+        time_filter_pred = f"|> range(start: {(last_pred_time - pd.Timedelta(minutes=60)).isoformat()})"
 
     query_caveaux = f'''
         from(bucket: "{BUCKET_CAVEAUX}")

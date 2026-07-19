@@ -7,32 +7,34 @@ from config import INFLUX_URL, INFLUX_TOKEN, INFLUX_ORG, BUCKET, TZ_ROME, CONTRO
 
 
 
+def calculate_svp(t):
+    return 0.61078 * np.exp((17.27 * t) / (t + 237.3))
+
+
 def calculate_vpd(df: pd.DataFrame) -> pd.DataFrame:
-    """ Unified Vectorized calculation of Air and Leaf VPD, including historical predictions. """
     if 'air_temp' in df.columns and 'humidity' in df.columns:
-        svp_air = 0.61078 * np.exp((17.27 * df['air_temp']) / (df['air_temp'] + 237.3))
+        svp_air = calculate_svp(df['air_temp'])
         avp_air = svp_air * (df['humidity'] / 100.0)
         df['vpd_air'] = np.maximum(0, svp_air - avp_air)
         
         if 'leaf_temp' in df.columns:
             valid_leaf = df['leaf_temp'] > -20.0
-            svp_leaf = 0.61078 * np.exp((17.27 * df['leaf_temp']) / (df['leaf_temp'] + 237.3))
+            svp_leaf = calculate_svp(df['leaf_temp'])
             df['vpd_leaf'] = np.where(valid_leaf, np.maximum(0, svp_leaf - avp_air), np.nan)
             df['vpd'] = df['vpd_leaf'] 
         else:
             df['vpd'] = df['vpd_air']
 
     if 'air_temp_pred' in df.columns and 'humidity_pred' in df.columns:
-        svp_air_pred = 0.61078 * np.exp((17.27 * df['air_temp_pred']) / (df['air_temp_pred'] + 237.3))
+        svp_air_pred = calculate_svp(df['air_temp_pred'])
         avp_pred = svp_air_pred * (df['humidity_pred'] / 100.0)
         df['vpd_air_pred'] = np.maximum(0, svp_air_pred - avp_pred)
         
         if 'leaf_temp_pred' in df.columns:
-            svp_leaf_pred = 0.61078 * np.exp((17.27 * df['leaf_temp_pred']) / (df['leaf_temp_pred'] + 237.3))
+            svp_leaf_pred = calculate_svp(df['leaf_temp_pred'])
             df['vpd_leaf_pred'] = np.maximum(0, svp_leaf_pred - avp_pred)
             
     return df
-
 
 
 def _fmt_influx_time(ts) -> str:
@@ -44,8 +46,8 @@ def _fmt_influx_time(ts) -> str:
 
 
 
+
 def _query_history_window(client: InfluxDBClient, board_id: str, start, stop, min_window: int) -> pd.DataFrame:
-    """ Aggregated, pivoted history for a board over an explicit [start, stop] window. """
     query = f'''
         from(bucket: "{BUCKET}")
           |> range(start: {_fmt_influx_time(start)}, stop: {_fmt_influx_time(stop)})
@@ -72,7 +74,6 @@ def _query_history_window(client: InfluxDBClient, board_id: str, start, stop, mi
     return df
 
 def _latest_board_timestamp(client: InfluxDBClient, board_id: str, lookback_days: int = 180):
-    """ Most recent reading time for a board, or None if it has no data at all. """
     query = f'''
         from(bucket: "{BUCKET}")
           |> range(start: -{lookback_days}d)
@@ -89,7 +90,6 @@ def _latest_board_timestamp(client: InfluxDBClient, board_id: str, lookback_days
     if df.empty or '_time' not in df.columns:
         return None
     return pd.Timestamp(df['_time'].max())
-
 
 
 
@@ -162,7 +162,6 @@ def fetch_history_with_preds(board_id: str, hours_past: int, hours_future: int =
 
 
 def fetch_topology_boards() -> set[str] | None:
-    """ Node (board) IDs registered in the controller's topology, or None if unreachable. """
     try:
         resp = httpx.get(f"{CONTROLLER_URL}/api/topology", timeout=5.0)
         resp.raise_for_status()

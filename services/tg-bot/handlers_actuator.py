@@ -3,9 +3,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 from config import CONTROLLER_URL, AWAIT_ACT_CUSTOM, logger
 from utils import build_keyboard, fetch_api
 
-
 async def _dispatch_command(node_id, actuator: str, value: int, duration: int) -> dict:
-    """POST an actuator command to the controller and return its (possibly error) response."""
     payload = {
         "node_id": int(node_id),
         "actuator": actuator,
@@ -17,7 +15,6 @@ async def _dispatch_command(node_id, actuator: str, value: int, duration: int) -
 
 
 def _format_command_result(res: dict, actuator: str, value: int, duration: int) -> str:
-    """Build the user-facing message for a command attempt (success or the real error reason)."""
     if res and res.get("status") == "sent":
         return (
             f"✅ **Command Sent!**\n"
@@ -68,7 +65,6 @@ async def handle_actuator_routing(update: Update, context: ContextTypes.DEFAULT_
 
 
 async def start_custom_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Entry point: user tapped 'Custom Command' for a board. Ask for the free-form command."""
     query = update.callback_query
     await query.answer()
     node_id = query.data.split("_")[2]
@@ -87,7 +83,6 @@ async def start_custom_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def process_custom_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Parse and dispatch the typed '<actuator> <value> <duration>' command."""
     node_id = context.user_data.get('ac_node')
     if not node_id:
         await update.message.reply_text("⚠️ Context lost. Send /menu to restart.")

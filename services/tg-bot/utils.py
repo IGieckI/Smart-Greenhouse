@@ -1,10 +1,10 @@
 import httpx
+import numpy as np
+import io
+import zipfile
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import ContextTypes
 from config import logger
-import io
-import zipfile
-
 
 async def fetch_api(url: str, payload: dict = None, timeout: float = 120.0, surface_errors: bool = False) -> dict:
     try:
@@ -32,7 +32,6 @@ async def fetch_api(url: str, payload: dict = None, timeout: float = 120.0, surf
 
 
 
-
 async def fetch_api_raw(url: str, timeout: float = 120.0) -> bytes:
     try:
         async with httpx.AsyncClient() as client:
@@ -46,7 +45,6 @@ async def fetch_api_raw(url: str, timeout: float = 120.0) -> bytes:
 
 
 async def unzip_and_send(update: Update, wait_msg, zip_bytes: bytes, title: str):
-    
     try:
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
             media_group = []
@@ -76,13 +74,11 @@ async def unzip_and_send(update: Update, wait_msg, zip_bytes: bytes, title: str)
 
 
 
-
 def build_keyboard(buttons: list[list[tuple[str, str]]], back_data: str = None) -> InlineKeyboardMarkup:
     keyboard = [[InlineKeyboardButton(text, callback_data=data) for text, data in row] for row in buttons]
     if back_data:
         keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data=back_data)])
     return InlineKeyboardMarkup(keyboard)
-
 
 async def check_spam_lock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     if context.user_data.get('is_processing'):
@@ -90,5 +86,4 @@ async def check_spam_lock(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return True
     
     context.user_data['is_processing'] = True
-    
     return False

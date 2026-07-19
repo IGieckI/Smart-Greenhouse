@@ -5,13 +5,22 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from config import TZ_ROME
 
+FIGSIZE_STANDARD = (12, 7)
+FIGSIZE_WIDE = (16, 7)
+FIGSIZE_SUBPLOT = (14, 6)
+FONT_TITLE = 18
+FONT_AXIS = 14
+FONT_TICK = 12
+FONT_LEGEND = 12
+
 def _finalize_and_save_plot(title: str, xlabel: str = 'Time (Local)', ylabel: str = 'Value') -> io.BytesIO:
-    plt.title(title)
-    plt.xlabel(xlabel)
-    plt.ylabel(ylabel)
+    plt.title(title, fontsize=FONT_TITLE)
+    plt.xlabel(xlabel, fontsize=FONT_AXIS)
+    plt.ylabel(ylabel, fontsize=FONT_AXIS)
     plt.grid(True, alpha=0.3)
-    plt.legend()
-    plt.xticks(rotation=45)
+    plt.legend(fontsize=FONT_LEGEND)
+    plt.xticks(rotation=45, fontsize=FONT_TICK)
+    plt.yticks(fontsize=FONT_TICK)
     plt.tight_layout()
     buf = io.BytesIO()
     plt.savefig(buf, format='png', dpi=100)
@@ -23,7 +32,7 @@ def _is_humidity_series(label: str) -> bool:
     return ("Humidity" in label) or ("(%)" in label)
 
 def create_series_plot(df_hist: pd.DataFrame, series_dict: dict, title: str, hide_real_history: bool = False) -> io.BytesIO:
-    fig, ax_temp = plt.subplots(figsize=(10, 5))
+    fig, ax_temp = plt.subplots(figsize=FIGSIZE_STANDARD)
     last_time = pd.Timestamp.now(tz=TZ_ROME)
     last_val = None
 
@@ -71,20 +80,23 @@ def create_series_plot(df_hist: pd.DataFrame, series_dict: dict, title: str, hid
 
     ax_temp.axvline(x=last_time, color='red', linestyle=':', alpha=0.6, label='Now')
 
-    ax_temp.set_title(title)
-    ax_temp.set_xlabel('Time (Local)')
-    ax_temp.set_ylabel('Temperature (°C)' if ax_hum is not None else 'Value')
+    ax_temp.set_title(title, fontsize=FONT_TITLE)
+    ax_temp.set_xlabel('Time (Local)', fontsize=FONT_AXIS)
+    ax_temp.set_ylabel('Temperature (°C)' if ax_hum is not None else 'Value', fontsize=FONT_AXIS)
     ax_temp.grid(True, alpha=0.3)
+    
+    ax_temp.tick_params(axis='both', which='major', labelsize=FONT_TICK)
     for label in ax_temp.get_xticklabels():
         label.set_rotation(45)
 
     if ax_hum is not None:
-        ax_hum.set_ylabel('Humidity (%)')
+        ax_hum.set_ylabel('Humidity (%)', fontsize=FONT_AXIS)
+        ax_hum.tick_params(axis='y', which='major', labelsize=FONT_TICK)
         handles, labels = ax_temp.get_legend_handles_labels()
         h2, l2 = ax_hum.get_legend_handles_labels()
-        ax_temp.legend(handles + h2, labels + l2, loc='best')
+        ax_temp.legend(handles + h2, labels + l2, loc='best', fontsize=FONT_LEGEND)
     else:
-        ax_temp.legend(loc='best')
+        ax_temp.legend(loc='best', fontsize=FONT_LEGEND)
 
     fig.tight_layout()
     buf = io.BytesIO()
@@ -94,7 +106,7 @@ def create_series_plot(df_hist: pd.DataFrame, series_dict: dict, title: str, hid
     return buf
 
 def create_vpd_plot(df_hist: pd.DataFrame, future_vpd: list = None, historical_vpd: list = None) -> io.BytesIO:
-    plt.figure(figsize=(10, 5))
+    plt.figure(figsize=FIGSIZE_STANDARD)
     last_time = pd.Timestamp.now(tz=TZ_ROME)
     last_val = None
     has_data = False
@@ -125,7 +137,7 @@ def create_vpd_plot(df_hist: pd.DataFrame, future_vpd: list = None, historical_v
         has_data = True
 
     if not has_data:
-        plt.text(0.5, 0.5, 'VPD Data Unavailable', horizontalalignment='center', verticalalignment='center', transform=plt.gca().transAxes)
+        plt.text(0.5, 0.5, 'VPD Data Unavailable', horizontalalignment='center', verticalalignment='center', transform=plt.gca().transAxes, fontsize=FONT_AXIS)
 
     plt.axvline(x=last_time, color='red', linestyle=':', alpha=0.6, label='Now')
     return _finalize_and_save_plot("Vapor Pressure Deficit (VPD)", ylabel="VPD (kPa)")
@@ -144,7 +156,7 @@ def create_semantic_category_plots(df_hist: pd.DataFrame) -> list[io.BytesIO]:
         available_cols = [c for c in columns if c in df_hist.columns]
         if not available_cols: 
             continue
-        plt.figure(figsize=(10, 4))
+        plt.figure(figsize=FIGSIZE_SUBPLOT)
         for idx, col in enumerate(available_cols):
             df_plot = df_hist.dropna(subset=[col])
             if not df_plot.empty:
@@ -155,8 +167,6 @@ def create_semantic_category_plots(df_hist: pd.DataFrame) -> list[io.BytesIO]:
     return plots
 
 def _forecast_xy(series: list, anchor_time=None, anchor_val=None):
-    """ Convert an API series [{timestamp, value}] to (times, values), optionally
-        prepended with an anchor point so the forecast line connects to the actuals. """
     times = [pd.to_datetime(d['timestamp']).astimezone(TZ_ROME) for d in series]
     vals = [d['value'] for d in series]
     if anchor_time is not None and anchor_val is not None:
@@ -165,7 +175,7 @@ def _forecast_xy(series: list, anchor_time=None, anchor_val=None):
     return times, vals
 
 def create_history_vpd_plot(df_hist: pd.DataFrame, vpd_forecast: dict = None) -> io.BytesIO:
-    plt.figure(figsize=(10, 5))
+    plt.figure(figsize=FIGSIZE_STANDARD)
     last_time = pd.Timestamp.now(tz=TZ_ROME)
     has_data = False
     last_air_time = last_air_val = None
@@ -207,7 +217,7 @@ def create_history_vpd_plot(df_hist: pd.DataFrame, vpd_forecast: dict = None) ->
             has_data = True
 
     if not has_data:
-        plt.text(0.5, 0.5, 'VPD Data Unavailable', horizontalalignment='center', verticalalignment='center', transform=plt.gca().transAxes)
+        plt.text(0.5, 0.5, 'VPD Data Unavailable', horizontalalignment='center', verticalalignment='center', transform=plt.gca().transAxes, fontsize=FONT_AXIS)
 
     plt.axvline(x=last_time, color='red', linestyle=':', alpha=0.6, label='Now')
     return _finalize_and_save_plot("Vapor Pressure Deficit (VPD) [History]", ylabel="VPD (kPa)")
@@ -247,7 +257,7 @@ def create_history_plots(df_hist: pd.DataFrame, vpd_forecast: dict = None) -> li
         if not avail_actuals and not avail_preds: 
             continue
         
-        plt.figure(figsize=(10, 4))
+        plt.figure(figsize=FIGSIZE_SUBPLOT)
         
         for idx, col in enumerate(avail_actuals):
             df_plot = df_hist.dropna(subset=[col])

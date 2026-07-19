@@ -1,23 +1,13 @@
 import asyncio
-import math
 import pandas as pd
 from telegram import Update, InputMediaPhoto
 from telegram.ext import ContextTypes
 from config import INFERENCE_URL
 from utils import build_keyboard, check_spam_lock, fetch_api
-from data_fetcher import fetch_history_with_preds, fetch_available_boards
+from data_fetcher import fetch_history_with_preds, fetch_available_boards, calculate_svp
 from plotting import create_history_plots
 
-
-def _svp(t: float) -> float:
-    """ Saturation vapor pressure (kPa) — same formula used by the inference service. """
-    return 0.61078 * math.exp((17.27 * t) / (t + 237.3))
-
-
-
 async def _fetch_vpd_forecast(board_id: str, task: str = "t5", freq_min: int = 6, horizon_hours: int = 2):
-    """ Ask the ML inference service (best model for `task`) for the next-`horizon_hours`
-        VPD forecast. Returns {"air": [...], "leaf": [...]} of {timestamp, value}, or None. """
     endpoint = f"{INFERENCE_URL}/predict/{freq_min}m/standard/{task}/latest?board_id={board_id}"
     data = await fetch_api(endpoint)
     if not data or "error" in data:
@@ -29,7 +19,7 @@ async def _fetch_vpd_forecast(board_id: str, task: str = "t5", freq_min: int = 6
     leaf_vpd_fc = data.get("vpd", {}).get("forecast", []) or []
 
     air_vpd_fc = [
-        {"timestamp": a["timestamp"], "value": round(max(0.0, _svp(a["value"]) * (1 - h["value"] / 100.0)), 4)}
+        {"timestamp": a["timestamp"], "value": round(max(0.0, calculate_svp(a["value"]) * (1 - h["value"] / 100.0)), 4)}
         for a, h in zip(air_fc, hum_fc)
     ]
 
