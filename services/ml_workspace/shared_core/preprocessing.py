@@ -1,7 +1,18 @@
 import pandas as pd
 import numpy as np
+from sklearn.base import BaseEstimator, TransformerMixin
 from shared_core.config import *
 
+
+class DropDiffFeatures(BaseEstimator, TransformerMixin):
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        if isinstance(X, pd.DataFrame):
+            cols = [c for c in X.columns if not c.endswith('_diff')]
+            return X[cols]
+        return X
 
 
 def gaussian_weighted_interpolation(df: pd.DataFrame, target_col: str, weight_col: str = None) -> pd.DataFrame:

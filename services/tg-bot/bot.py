@@ -132,19 +132,19 @@ def main():
     application.add_handler(actuator_conv)
 
     application.add_handler(
-        entry_points=CallbackQueryHandler(handle_main_menu, pattern="^menu_(predict|history|main)$")
+        CallbackQueryHandler(handle_main_menu, pattern="^menu_(predict|history|main)$")
     )
     application.add_handler(
-        entry_points=CallbackQueryHandler(handle_history_menu, pattern="^hist_")
+        CallbackQueryHandler(handle_history_menu, pattern="^hist_")
     )
     application.add_handler(
-        entry_points=CallbackQueryHandler(handle_predict_menu, pattern="^pred_")
+        CallbackQueryHandler(handle_predict_menu, pattern="^pred_")
     )
     application.add_handler(
-        entry_points=CallbackQueryHandler(handle_training_menu, pattern="^train_")
+        CallbackQueryHandler(handle_training_menu, pattern="^train_")
     )
     application.add_handler(
-        entry_points=CallbackQueryHandler(handle_actuator_routing, pattern="^act_(menu$|board_|cmd_)")
+        CallbackQueryHandler(handle_actuator_routing, pattern="^act_(menu$|board_|cmd_)")
     )
 
     application.add_error_handler(error_handler)

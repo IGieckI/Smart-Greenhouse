@@ -1,13 +1,32 @@
 const mqttService = require('./mqtt');
 const config = require('./config');
 
-const SOIL_MOISTURE_THRESHOLD = 30.0; 
+const lowMoistureCounters = {};
 
 const rules = [
     {
         id: 'low_soil_moisture_pump_activation',
         evaluate: (nodeId, data) => {
-            return data.soil_moisture !== undefined && data.soil_moisture < SOIL_MOISTURE_THRESHOLD;
+            if (data.soil_moisture === undefined) {
+                return false;
+            }
+
+            if (lowMoistureCounters[nodeId] === undefined) {
+                lowMoistureCounters[nodeId] = 0;
+            }
+
+            if (data.soil_moisture < config.SOIL_MOISTURE_THRESHOLD) {
+                lowMoistureCounters[nodeId]++;
+                
+                if (lowMoistureCounters[nodeId] >= config.PUMP_PATIENCE_COUNT) {
+                    lowMoistureCounters[nodeId] = 0;
+                    return true;
+                }
+            } else {
+                lowMoistureCounters[nodeId] = 0;
+            }
+
+            return false;
         },
         execute: (nodeId, data) => {
             const actuator = "pump"; 

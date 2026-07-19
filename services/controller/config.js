@@ -25,5 +25,10 @@ module.exports = {
     COMMAND_TIMEOUT_MS: 3000,
     COMMAND_MAX_ATTEMPTS: 3,
     MAX_COMMAND_DURATION_S: 300,
+
+
+    SOIL_MOISTURE_LOWER_THRESHOLD: 60.0,
+    PUMP_PATIENCE_COUNT: 5,
+    
     MY_TAG: "[Controller]"
 };

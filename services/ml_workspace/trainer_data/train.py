@@ -29,16 +29,6 @@ from shared_core.tasks import TASKS
 
 from analytics_plotter import FONT_TITLE, FONT_AXIS, FONT_LEGEND, FONT_TICK, FIGSIZE_WIDE, FIGSIZE_STANDARD
 
-class DropDiffFeatures(BaseEstimator, TransformerMixin):
-    def fit(self, X, y=None):
-        return self
-
-    def transform(self, X):
-        if isinstance(X, pd.DataFrame):
-            cols = [c for c in X.columns if not c.endswith('_diff')]
-            return X[cols]
-        return X
-
 def fetch_clean_data(freq_minutes: int):
     print(f"[Data Fetch] Pulling clean data from bucket for {freq_minutes}m frequency...")
     bucket_clean = f"{BUCKET_CLEAN_PREFIX}{freq_minutes}m"
