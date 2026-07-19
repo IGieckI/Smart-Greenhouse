@@ -10,8 +10,10 @@ def _get_max_time(query_api, query):
         res = query_api.query_data_frame(query)
         if isinstance(res, list):
             res = pd.concat(res, ignore_index=True) if len(res) > 0 else pd.DataFrame()
-        if (res is not None and not res.empty) and ('_time' in res.columns):
-            return res['_time'].max()
+        if (res is not None) and (not res.empty) and ('_time' in res.columns):
+            max_val = res['_time'].max()
+            if pd.notna(max_val):
+                return max_val
     except Exception as e:
         print(f"[Sync] Error extracting max time: {e}")
     return None
@@ -112,8 +114,6 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
     else:
         print(f"[Sync {freq_minutes}m] No new raw data found.")
 
-
-
     print(f"[Sync {freq_minutes}m] Importing historical forecasts from caveaux bucket...")
     
     query_last_pred = f'''
@@ -127,9 +127,8 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
     
     last_pred_time = _get_max_time(query_api, query_last_pred)
     
-
     time_filter_pred = f"|> range(start: {INFERENCE_LOOKBACK_DAYS})"
-    if last_time is not None:
+    if last_pred_time is not None:
         time_filter_pred = f"|> range(start: {(last_pred_time - pd.Timedelta(minutes=60)).isoformat()})"
 
     query_caveaux = f'''

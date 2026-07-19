@@ -7,7 +7,6 @@ import numpy as np
 import joblib
 import matplotlib.pyplot as plt
 from influxdb_client import InfluxDBClient
-from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.inspection import permutation_importance
@@ -23,7 +22,7 @@ from prophet import Prophet
 from prophet.serialize import model_to_json
 
 sys.path.append('/app')
-from shared_core.preprocessing import build_advanced_features, get_extended_features_list, create_lagged_features
+from shared_core.preprocessing import build_advanced_features, get_extended_features_list, create_lagged_features, DropDiffFeatures
 from shared_core.config import *
 from shared_core.tasks import TASKS
 
