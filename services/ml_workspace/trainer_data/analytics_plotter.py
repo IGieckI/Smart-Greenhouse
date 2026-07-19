@@ -6,13 +6,15 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
+from sklearn.inspection import permutation_importance
+
 FIGSIZE_STANDARD = (16, 10)
 FIGSIZE_WIDE = (20, 10)
-FIGSIZE_GRID_BASE = 20
-FIGSIZE_HEATMAP_BASE = 20
-FONT_TITLE = 20
-FONT_AXIS = 16
-FONT_TICK = 12
+FIGSIZE_GRID_BASE = 11
+FIGSIZE_HEATMAP_BASE = 9
+FONT_TITLE = 21
+FONT_AXIS = 17
+FONT_TICK = 14
 FONT_LEGEND = 14
 
 global_subtitle = "Red box highlight best MAE performer"
@@ -105,6 +107,7 @@ def _plot_timing_comparison(models_data, model_names, task_name, output_dir, bes
     ax1.tick_params(axis='y', labelcolor=color, labelsize=FONT_TICK)
     
     xtick_labels = [f"{m} (Best)" if m == best_model else m for m in model_names]
+    # /app/trainer/analytics_plotter.py:110: UserWarning: FixedFormatter should only be used together with FixedLocator
     ax1.set_xticklabels(xtick_labels, rotation=45, ha="right", fontsize=FONT_TICK)
 
     ax2 = ax1.twinx()
@@ -319,19 +322,15 @@ def _generate_global_feature_importance_grid(all_data, model_names, out_dir, fre
                 rect = patches.Rectangle((0, 0), 1, 1, linewidth=5, edgecolor='red', facecolor='none', transform=ax.transAxes)
                 ax.add_patch(rect)
 
-    plt.suptitle(f"Feature Importance Matrix ({freq}m), foreach model in a task\nShowing top features capturing >= 75% variance (Max 10)", fontsize=FONT_TITLE, y=1.02)
+    
+    title = f"Feature Importance Matrix ({freq}m), foreach model in a task \n \
+        Showing top features capturing >= 75% variance (Max 10) \n \
+        {global_subtitle}" 
+    plt.suptitle(title, fontsize=FONT_TITLE + 10, y=1.02)
     plt.tight_layout()
     plt.savefig(file_path, bbox_inches='tight')
     plt.close()
     return file_path
-
-
-
-
-
-
-
-
 
 
 

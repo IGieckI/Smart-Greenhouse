@@ -7,12 +7,15 @@ import numpy as np
 import joblib
 import matplotlib.pyplot as plt
 from influxdb_client import InfluxDBClient
+
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.inspection import permutation_importance
 from sklearn.model_selection import TimeSeriesSplit, GridSearchCV
 from sklearn.linear_model import Ridge
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.svm import SVR
+
 from lightgbm import LGBMRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
@@ -24,6 +27,9 @@ sys.path.append('/app')
 from shared_core.preprocessing import build_advanced_features, get_extended_features_list, create_lagged_features
 from shared_core.config import *
 from shared_core.tasks import TASKS
+
+from analytics_plotter import FONT_TITLE, FONT_AXIS, FONT_LEGEND, FONT_TICK, FIGSIZE_WIDE, FIGSIZE_STANDARD
+
 
 def fetch_clean_data(freq_minutes: int):
     print(f"[Data Fetch] Pulling clean data from bucket for {freq_minutes}m frequency...")
@@ -56,7 +62,7 @@ def fetch_clean_data(freq_minutes: int):
 
 
 
-def log_and_evaluate(y_test, y_pred, features_names, model, model_name, task_name, training_time, inf_time, best_params, archive_dir):
+def log_and_evaluate(y_test, y_pred, features_names, model, model_name, training_time, inf_time, best_params, archive_dir, X_test=None):
     mae = mean_absolute_error(y_test, y_pred)
     rmse = np.sqrt(mean_squared_error(y_test, y_pred))
     r2 = r2_score(y_test, y_pred)
@@ -76,6 +82,10 @@ def log_and_evaluate(y_test, y_pred, features_names, model, model_name, task_nam
         importances = np.ravel(final_estimator.coef_)
         importance_dict = {feat: float(imp) for feat, imp in zip(features_names, importances)}
         importance_dict = dict(sorted(importance_dict.items(), key=lambda item: np.abs(item[1]), reverse=True))
+    else:
+        result = permutation_importance(model, X_test, y_test, n_repeats=5, random_state=42)
+        importance_dict = {feat: float(imp) for feat, imp in zip(features_names, result.importances_mean)}
+        importance_dict = dict(sorted(importance_dict.items(), key=lambda item: item[1], reverse=True))
 
     report = {
         "model_name": model_name,
@@ -102,6 +112,9 @@ def log_and_evaluate(y_test, y_pred, features_names, model, model_name, task_nam
         
     return report, mae
 
+
+
+
 def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
     print(f"\n{'='*60}\n[Trainer {freq_minutes}m] INDEPENDENT ENVIRONMENTAL PROPHET TRAINING\n{'='*60}")
     os.makedirs(output_dir, exist_ok=True)
@@ -118,16 +131,14 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
             df_prophet_full = pd.DataFrame()
             for b_id in ACTIVE_BOARDS:
                 df_b = df_train[df_train['id_board'] == b_id]
-                if feat not in df_b.columns:
-                    continue
+                if feat not in df_b.columns: continue
                 
                 cols_to_extract = [feat]
                 if USE_INDOOR_FEATURE and 'is_indoor' in df_b.columns:
                     cols_to_extract.append('is_indoor')
                     
                 df_b = df_b[cols_to_extract].dropna().tail(tail_samples)
-                if len(df_b) < 100 or df_b[feat].nunique() <= 1:
-                    continue
+                if len(df_b) < 100 or df_b[feat].nunique() <= 1: continue
                 
                 timestamps = df_b.index.tz_localize(None) if df_b.index.tz is not None else df_b.index
                 tmp = pd.DataFrame({
@@ -139,8 +150,8 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
                 
                 df_prophet_full = pd.concat([df_prophet_full, tmp], ignore_index=True)
                 
-            if df_prophet_full.empty: 
-                print(f"[Prophet Warning] Not enough data accumulated for '{feat}'. Skipping.")
+            if len(df_prophet_full) < 20 or df_prophet_full['y'].nunique() <= 1:
+                print(f"[Prophet Warning] Data for '{feat}' is insufficient or constant. Skipping.")
                 continue
 
             df_prophet_full.dropna(inplace=True)
@@ -152,7 +163,11 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
             
             print(f"[Prophet - {feat}] Temporal 80/20 Split | Train: {len(df_train_prophet)} | Test: {len(df_test_prophet)}")
             
-            final_model = Prophet(daily_seasonality=True, yearly_seasonality=False, weekly_seasonality=False)
+            final_model = Prophet(daily_seasonality=True, 
+                                  yearly_seasonality=False,
+                                  weekly_seasonality=False, 
+                                  stan_backend='CMDSTANPY')
+
             if USE_INDOOR_FEATURE and 'is_indoor' in df_train_prophet.columns:
                 final_model.add_regressor('is_indoor')
                 print(f"[Prophet - {feat}] Using 'is_indoor' as an Extra Regressor.")
@@ -170,18 +185,18 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
             
             print(f"[Prophet - {feat}] Evaluation Completed -> MAE: {mae:.2f}, RMSE: {rmse:.2f}")
 
-            plt.figure(figsize=(12, 6))
+            plt.figure(figsize=FIGSIZE_STANDARD)
             plt.scatter(df_train_prophet['ds'], df_train_prophet['y'], label='Train Data', color='blue', alpha=0.3, s=5)
             plt.scatter(df_test_prophet['ds'], df_test_prophet['y'], label='Test Actual', color='black', alpha=0.5, s=5)
             plt.scatter(forecast['ds'], forecast['yhat'], label='Forecast', color='red', s=5)
-            plt.title(f'Prophet Global Forecast vs Actuals: {feat.upper()} ({freq_minutes}m)')
+            plt.title(f'Prophet Global Forecast vs Actuals: {feat.upper()} ({freq_minutes}m)', fontsize=FONT_TITLE)
             plt.legend()
             plt.grid(True)
             plt.savefig(os.path.join(output_dir, f"prophet_plot_{feat}.png"))
             plt.close()
 
             print(f"[Prophet - {feat}] Refitting on 100% of available data for production...")
-            prod_model = Prophet(daily_seasonality=True, yearly_seasonality=False, weekly_seasonality=False)
+            prod_model = Prophet(daily_seasonality=True, yearly_seasonality=False, weekly_seasonality=False, stan_backend='CMDSTANPY')
             if USE_INDOOR_FEATURE and 'is_indoor' in df_prophet_full.columns:
                 prod_model.add_regressor('is_indoor')
             prod_model.fit(df_prophet_full)
@@ -227,42 +242,41 @@ def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> d
             "model": Pipeline(scaler_and_poly + [('regressor', Ridge())]),
             "params": {"regressor__alpha": [0.01, 0.1, 1.0, 10.0, 100.0]}
         },
-        # "RandomForest": {
-        #     "model": Pipeline(scaler_only + [('regressor', RandomForestRegressor(random_state=42, n_jobs=1))]),
-        #     "params": {
-        #         "regressor__n_estimators": [100, 300], 
-        #         "regressor__max_depth": [10, 20, None], 
-        #         "regressor__min_samples_split": [2, 5, 10],
-        #         "regressor__max_features": ["sqrt", 1.0]
-        #     }
-        # },
-        # "LightGBM": {
-        #     "model": Pipeline(scaler_only + [('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
-        #     "params": {
-        #         "regressor__n_estimators": [100, 300],
-        #         "regressor__learning_rate": [0.01, 0.05, 0.1],
-        #         "regressor__num_leaves": [31, 63],
-        #         "regressor__subsample": [0.8, 1.0] 
-        #     }
-        # },
-        # "SVR": {
-        #     "model": Pipeline(scaler_only + [('regressor', SVR())]),
-        #     "params": [
-        #         {
-        #             "regressor__kernel": ["linear"],
-        #             "regressor__C": [0.1, 1.0, 10.0],
-        #             "regressor__epsilon": [0.001, 0.01, 0.1]
-        #         },
-        #         {
-        #             "regressor__kernel": ["rbf"],
-        #             "regressor__C": [0.1, 1.0, 10.0],
-        #             "regressor__gamma": ["scale", 0.1, 0.01], 
-        #             "regressor__epsilon": [0.001, 0.01, 0.1]
-        #         }
-        #     ]
-        # },
+        "RandomForest": {
+            "model": Pipeline(scaler_only + [('regressor', RandomForestRegressor(random_state=42, n_jobs=1))]),
+            "params": {
+                "regressor__n_estimators": [100, 300], 
+                "regressor__max_depth": [10, 20, None], 
+                "regressor__min_samples_split": [2, 5, 10],
+                "regressor__max_features": ["sqrt", 1.0]
+            }
+        },
+        "LightGBM": {
+            "model": Pipeline(scaler_only + [('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
+            "params": {
+                "regressor__n_estimators": [100, 300],
+                "regressor__learning_rate": [0.01, 0.05, 0.1],
+                "regressor__num_leaves": [31, 63],
+                "regressor__subsample": [0.8, 1.0] 
+            }
+        },
+        "SVR": {
+            "model": Pipeline(scaler_only + [('regressor', SVR())]),
+            "params": [
+                {
+                    "regressor__kernel": ["linear"],
+                    "regressor__C": [0.1, 1.0, 10.0],
+                    "regressor__epsilon": [0.001, 0.01, 0.1]
+                },
+                {
+                    "regressor__kernel": ["rbf"],
+                    "regressor__C": [0.1, 1.0, 10.0],
+                    "regressor__gamma": ["scale", 0.1, 0.01], 
+                    "regressor__epsilon": [0.001, 0.01, 0.1]
+                }
+            ]
+        },
     }
-
 
 
 
@@ -384,8 +398,9 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
 
         report, mae = log_and_evaluate(
             y_test=y_test, y_pred=y_pred, features_names=model_features,
-            model=best_model, model_name=name, task_name=task_name, training_time=training_time, 
-            inf_time=inf_time, best_params=best_params, archive_dir=archive_dir
+            model=best_model, model_name=name, training_time=training_time, 
+            inf_time=inf_time, best_params=best_params, archive_dir=archive_dir,
+            X_test=X_test
         )
         print(f"[{task_name}] -> {name} Evaluation | MAE: {mae:.3f} | Inference Time: {inf_time:.4f}s")
         

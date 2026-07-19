@@ -7,7 +7,6 @@ from shared_core.config import *
 from shared_core.preprocessing import apply_board_pipeline
 
 def _get_max_time(query_api, query):
-    """Helper to safely execute a query and extract the maximum _time."""
     try:
         res = query_api.query_data_frame(query)
         if isinstance(res, list):
@@ -21,8 +20,8 @@ def _get_max_time(query_api, query):
 
 def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
     """
-    Synchronizes and processes RAW data into a dynamically sampled clean bucket.
-    Ensures that forecasting (predictions) from caveaux are re-integrated.
+        Synchronizes and processes RAW data into a dynamically sampled clean bucket.
+        Ensures that forecasting (predictions) from caveaux are re-integrated.
     """
     bucket_clean = f"{BUCKET_CLEAN_PREFIX}{freq_minutes}m"
     client = InfluxDBClient(url=influx_url, token=influx_token, org=influx_org)
@@ -47,7 +46,9 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
     last_time = _get_max_time(query_api, query_last_raw)
 
 
-    time_filter_raw = f"|> range(start: {(last_time - pd.Timedelta(minutes=60)).isoformat()})" if last_time else "|> range(start: 0)"
+    time_filter_raw = "|> range(start: 0)"
+    if last_time: #<<-- weak control?
+        f"|> range(start: {(last_time - pd.Timedelta(minutes=60)).isoformat()})"
 
     print(f"[Sync {freq_minutes}m] Querying RAW bucket (Time filter: {time_filter_raw})...")
     query_raw = f'''
@@ -112,8 +113,6 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
                 print(f"[Sync {freq_minutes}m] Inserted {len(points)} clean records for Board {board}")
     else:
         print(f"[Sync {freq_minutes}m] No new raw data found.")
-
-
 
 
 

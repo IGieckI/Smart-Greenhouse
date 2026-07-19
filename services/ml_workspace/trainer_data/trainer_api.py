@@ -14,15 +14,18 @@ from analytics_plotter import generate_task_plots, generate_global_plots
 from shared_core.data_sync import sync_clean_bucket
 from train import fetch_clean_data, train_environmental_prophet, run_pipeline_for_task
 from shared_core.config import *
-from shared_core.tasks import TASKS
+from shared_core.tasks import TASKS, ENV_FEATURES
 
 app = FastAPI(title="ML Trainer API Worker")
 INFERENCE_API_URL = "http://ml-inference:8000"
 
 training_queue = queue.Queue()
 
+local_tag = "[Pipeline]"
+
 def worker_daemon():
     print("[Worker Daemon] Initialized and waiting for tasks...")
+
     while True:
         freq_minutes = training_queue.get() 
         try:
@@ -38,46 +41,46 @@ def worker_daemon():
 
 def run_full_pipeline_for_freq(freq_minutes: int):
     try:
-        print(f"[Pipeline] Starting process for frequency {freq_minutes}m...")
+        print(f"{local_tag} Starting process for frequency {freq_minutes}m...")
         
         sync_clean_bucket(INFLUX_URL, INFLUX_TOKEN, INFLUX_ORG, freq_minutes=freq_minutes)
         
         df_clean = fetch_clean_data(freq_minutes)
         if df_clean.empty:
-            print(f"[Pipeline] Error: Insufficient data for {freq_minutes}m.")
+            print(f"{local_tag} Error: Insufficient data for {freq_minutes}m.")
             return
             
-        all_env_features = TASKS["t1"]["features"]
+        all_env_features = ENV_FEATURES
         env_output_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", "env_forecasters")
         train_environmental_prophet(df_clean, all_env_features, env_output_dir, freq_minutes)
         
         for task_name, config in TASKS.items():
             run_pipeline_for_task(task_name, config, df_clean, freq_minutes)
             
-        print(f"[Pipeline] Process for {freq_minutes}m completed successfully!")
+        print(f"{local_tag} Process for {freq_minutes}m completed successfully!")
         
         global_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", "global_analytics")
         if os.path.exists(global_dir):
             shutil.rmtree(global_dir)
             
-        print(f"[Pipeline] Generating Local PNG Analytics for {freq_minutes}m...")
+        print(f"{local_tag} Generating Local PNG Analytics for {freq_minutes}m...")
         for task_name in TASKS.keys():
             task_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", task_name)
             generate_task_plots(task_dir, task_name)
             
         base_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m")
         generate_global_plots(base_dir, freq_minutes)
-        print(f"[Pipeline] Local Analytics generated successfully.")
+        print(f"{local_tag} Local Analytics generated successfully.")
         
         try:
             res = requests.post(f"{INFERENCE_API_URL}/reload-models", timeout=5)
             if res.status_code == 200:
-                print(f"[Pipeline] ml-inference successfully reloaded new {freq_minutes}m models!")
+                print(f"{local_tag} ml-inference successfully reloaded new {freq_minutes}m models!")
         except Exception as ping_err:
-            print(f"[Pipeline] Failed to contact ml-inference for model reload: {ping_err}")
+            print(f"{local_tag} Failed to contact ml-inference for model reload: {ping_err}")
             
     except Exception as e:
-        print(f"[Pipeline] Critical error during {freq_minutes}m training: {e}")
+        print(f"{local_tag} Critical error during {freq_minutes}m training: {e}")
 
 
 
@@ -132,13 +135,18 @@ def trigger_standard_training():
 @app.post("/train/custom/{freq_minutes}")
 def trigger_custom_training(freq_minutes: int):
     if freq_minutes <= 0 or freq_minutes > TARGET_FREQ_MINUTES or TARGET_FREQ_MINUTES % freq_minutes != 0:
-        raise HTTPException(status_code=400, detail="Invalid frequency or not a divisor of the target.")
+        raise HTTPException(status_code=400, detail=f"Invalid frequency or not a divisor of the target. Actual target = {TARGET_FREQ_MINUTES}")
     training_queue.put(freq_minutes)
-    return {"message": f"Custom training ({freq_minutes}m) queued.", "queue_size": training_queue.qsize()}
+    return {
+        "message": f"Custom training ({freq_minutes}m) queued.", 
+        "queue_size": training_queue.qsize()
+        }
 
 @app.get("/queue/status")
 def get_queue_status():
-    return {"tasks_in_queue": training_queue.qsize()}
+    return {
+        "tasks_in_queue": training_queue.qsize()
+        }
 
 
 
