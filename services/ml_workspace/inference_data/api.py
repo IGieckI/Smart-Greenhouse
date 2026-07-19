@@ -18,7 +18,7 @@ sys.path.append('/app')
 from shared_core.data_sync import sync_clean_bucket
 from shared_core.tasks import TASKS, GROUPS, ENV_FEATURES
 from shared_core.config import *
-from shared_core.preprocessing import build_advanced_features
+from shared_core.preprocessing import build_advanced_features, DropDiffFeatures
 from .predictor import recursive_multistep_inference, ensemble_multistep_inference
 from .sensor_payload import SensorData
 

@@ -3,6 +3,7 @@ import numpy as np
 import httpx
 from datetime import datetime, timedelta
 from influxdb_client import InfluxDBClient
+from influxdb_client.client.flux_table import TableList
 from config import INFLUX_URL, INFLUX_TOKEN, INFLUX_ORG, BUCKET, TZ_ROME, CONTROLLER_URL, logger
 
 
@@ -177,8 +178,12 @@ def fetch_available_boards() -> list[str]:
         schema.tagValues(bucket: "{BUCKET}", tag: "id_board")
     '''
     try:
-        result = client.query_api().query(query)
+        result : TableList = client.query_api().query(query)
         boards = [record.get_value() for table in result for record in table.records]
+        print("\n\n\n")
+        print(boards)
+
+        print("\n\n\n")
     except Exception as e:
         logger.error(f"InfluxDB board fetch error: {e}")
         return []

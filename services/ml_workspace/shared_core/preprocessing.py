@@ -6,6 +6,8 @@ from shared_core.config import *
 
 class DropDiffFeatures(BaseEstimator, TransformerMixin):
     def fit(self, X, y=None):
+        if isinstance(X, pd.DataFrame):
+            self.feature_names_in_ = np.array(X.columns)
         return self
 
     def transform(self, X):

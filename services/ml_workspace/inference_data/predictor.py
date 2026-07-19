@@ -4,7 +4,7 @@ import sys
 
 sys.path.append('/app')
 from shared_core.config import *
-from shared_core.preprocessing import build_advanced_features, get_extended_features_list, create_lagged_features
+from shared_core.preprocessing import build_advanced_features, get_extended_features_list, create_lagged_features, DropDiffFeatures
 
 def recursive_multistep_inference(
     T_current_data: pd.DataFrame, 
@@ -94,6 +94,9 @@ def recursive_multistep_inference(
         history = history.tail(max_history_needed)
 
     return [p["value"] for p in target_predictions]
+
+
+
 
 def ensemble_multistep_inference(
     T_current_data: pd.DataFrame,

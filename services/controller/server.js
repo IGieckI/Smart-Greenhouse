@@ -21,6 +21,11 @@ app.post('/api/data', async (req, res) => {
         return res.status(400).send({ error: "Missing node_id" });
     }
 
+    console.log("\n\n\n")
+    console.log(data)
+    console.log(data.star_id)
+    console.log("\n\n\n")
+
     if (data.star_id) {
         topologyService.updateTopology(data.node_id, data.star_id);
     }
