@@ -1,8 +1,11 @@
+import os
+
+os.environ['AIOCOAP_CLIENT_TRANSPORT'] = 'simple6'
+
 import asyncio
 import json
 import logging
 import aiohttp
-import os
 import signal
 import struct
 import paho.mqtt.client as mqtt_paho
@@ -18,6 +21,10 @@ TIMEOUT_SECONDS = 180.0
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+
+
+
+
 # Must match TelemetryPacket.h
 _STRUCT_FMT = '<IIffffffff'
 _STRUCT_SIZE = struct.calcsize(_STRUCT_FMT)
@@ -32,22 +39,46 @@ class TelemetryObserver:
         self.star_id = ""
         self._star_id_task = None
 
+    # async def _ensure_star_id(self):
+    #     """
+    #     Poll the Star's /info until its id is known, then stop
+    #     """
+    #     while self.keep_running and not self.star_id:
+    #         ctx = await Context.create_client_context()
+    #         try:
+    #             request = Message(code=GET, uri=f"{STAR_COAP_BASE}/info")
+    #             response = await asyncio.wait_for(ctx.request(request).response, timeout=5)
+    #             self.star_id = str(json.loads(response.payload.decode())["star_id"])
+    #             logger.info(f"Discovered star_id={self.star_id}")
+    #         except Exception as e:
+    #             logger.warning(f"Star /info discovery failed, retrying in 30s: {e}")
+    #             await asyncio.sleep(30)
+    #         finally:
+    #             await ctx.shutdown()
     async def _ensure_star_id(self):
         """
         Poll the Star's /info until its id is known, then stop
         """
         while self.keep_running and not self.star_id:
-            ctx = await Context.create_client_context()
             try:
                 request = Message(code=GET, uri=f"{STAR_COAP_BASE}/info")
-                response = await asyncio.wait_for(ctx.request(request).response, timeout=5)
-                self.star_id = str(json.loads(response.payload.decode())["star_id"])
-                logger.info(f"Discovered star_id={self.star_id}")
+                response = await asyncio.wait_for(self.context.request(request).response, timeout=20.0)
+                payload_str = response.payload.decode('utf-8').strip()
+                
+                if payload_str:
+                    data = json.loads(payload_str)
+                    if "star_id" in data:
+                        self.star_id = str(data["star_id"])
+                        logger.info(f"Discovered star_id={self.star_id}")
+                        break
+                else:
+                    logger.warning("Star /info returned empty payload, retrying...")
+            except asyncio.TimeoutError:
+                logger.warning("Star /info discovery timed out, retrying in 5s...")
             except Exception as e:
-                logger.warning(f"Star /info discovery failed, retrying in 30s: {e}")
-                await asyncio.sleep(30)
-            finally:
-                await ctx.shutdown()
+                logger.warning(f"Star /info discovery failed, retrying in 5s: {e}")
+            
+            await asyncio.sleep(5)
 
     def _start_command_listener(self, loop: asyncio.AbstractEventLoop):
         """
@@ -59,7 +90,7 @@ class TelemetryObserver:
             """
             try:
                 request = Message(code=POST, uri=f"{STAR_COAP_BASE}/command", payload=payload)
-                response = await asyncio.wait_for(self.context.request(request).response, timeout=5)
+                response = await asyncio.wait_for(self.context.request(request).response, timeout=20.0)
                 if response.code.is_successful():
                     nid = json.loads(payload).get("nid")
                     self.mqtt_client.publish("greenhouse/acks",
@@ -67,6 +98,8 @@ class TelemetryObserver:
                     logger.info(f"Command forwarded and ACK published for node {nid}")
                 else:
                     logger.error(f"Star returned CoAP {response.code}, no ACK sent")
+            except asyncio.TimeoutError:
+                logger.error("Command to Star timed out")
             except Exception as e:
                 logger.error(f"Failed to forward command to Star: {e}")
 
@@ -75,12 +108,18 @@ class TelemetryObserver:
             Callback for MQTT connection. Subscribes to the command topic for this star
             """
             if rc == 0:
-                topic = (f"greenhouse/commands/{self.star_id}"
-                         if self.star_id else "greenhouse/commands/+")
+                topic = f"greenhouse/commands/{self.star_id}"
                 client.subscribe(topic)
                 logger.info(f"MQTT subscribed to {topic}")
             else:
                 logger.error(f"MQTT connect failed rc={rc}")
+            # if rc == 0:
+            #     topic = (f"greenhouse/commands/{self.star_id}"
+            #              if self.star_id else "greenhouse/commands/+")
+            #     client.subscribe(topic)
+            #     logger.info(f"MQTT subscribed to {topic}")
+            # else:
+            #     logger.error(f"MQTT connect failed rc={rc}")
 
         def on_message(client, userdata, msg):
             """
@@ -158,18 +197,31 @@ class TelemetryObserver:
         self.context = await Context.create_client_context()
         self.http_session = aiohttp.ClientSession()
 
-        self._star_id_task = asyncio.create_task(self._ensure_star_id())
+        await self._ensure_star_id()
+        if not self.keep_running:
+            return
+
+        # self._star_id_task = asyncio.create_task(self._ensure_star_id())
 
         self._start_command_listener(asyncio.get_event_loop())
 
         while self.keep_running:
-            observation = None
+            # observation = None
+            pr = None
             try:
                 request = Message(code=GET, uri=STAR_COAP_URI, observe=0)
-                observation = self.context.request(request)
+                pr = self.context.request(request)
+                # observation = self.context.request(request)
                 logger.info(f"Subscribing to {STAR_COAP_URI}...")
-                iterator = observation.observation.__aiter__()
+                # iterator = observation.observation.__aiter__()
 
+                # while self.keep_running:
+                #     response = await asyncio.wait_for(iterator.__anext__(), timeout=TIMEOUT_SECONDS)
+                #     self._parse(response.payload)
+                response = await asyncio.wait_for(pr.response, timeout=TIMEOUT_SECONDS)
+                self._parse(response.payload)
+
+                iterator = pr.observation.__aiter__()
                 while self.keep_running:
                     response = await asyncio.wait_for(iterator.__anext__(), timeout=TIMEOUT_SECONDS)
                     self._parse(response.payload)
@@ -182,16 +234,19 @@ class TelemetryObserver:
                 logger.error(f"Connection error ({e}), retrying in 5s...")
                 await asyncio.sleep(5)
             finally:
-                if (observation) and (not observation.observation.cancelled):
-                    observation.observation.cancel()
+                if pr and getattr(pr, 'observation', None) and not pr.observation.cancelled:
+                    pr.observation.cancel()
+            # finally:
+            #     if (observation) and (not observation.observation.cancelled):
+            #         observation.observation.cancel()
 
     async def shutdown(self):
         """
         Gracefully shutdown the observer, stopping CoAP observation, MQTT, and HTTP session
         """
         self.keep_running = False
-        if self._star_id_task:
-            self._star_id_task.cancel()
+        # if self._star_id_task:
+        #     self._star_id_task.cancel()
         if self.mqtt_client:
             self.mqtt_client.loop_stop()
         if self.http_session:

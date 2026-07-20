@@ -143,7 +143,6 @@ def fetch_historical_data(board_id: str, limit: int, freq_minutes: int) -> pd.Da
         return pd.DataFrame()
 
 
-
 def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: str, 
                                custom_data: Optional[SensorData] = None, 
                                use_real_leaf_temp: bool = False) -> tuple:
@@ -177,9 +176,14 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
             soft_config.get("use_lags", False)
         )
         
-        expected_features = list(soft_model.feature_names_in_)
+        if hasattr(soft_model, 'feature_names_in_'):
+            expected_features = list(soft_model.feature_names_in_)
+        else:
+            step_idx = 1 if (hasattr(soft_model, 'named_steps') and 'drop_diff' in soft_model.named_steps) else 0
+            expected_features = list(soft_model.steps[step_idx][1].feature_names_in_)
+
         if (hasattr(soft_model, 'named_steps')) and ('drop_diff' in soft_model.named_steps):
-             expected_features = [f for f in expected_features if not f.endswith('_diff')]
+            expected_features = [f for f in expected_features if not f.endswith('_diff')]
 
         valid_idx = df_history_adv.dropna(subset=expected_features).index
         
@@ -195,8 +199,6 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
     local_env_prophets = loaded_env_prophets.get(freq_key, {})
 
     return df_history, local_env_prophets
-
-
 
 def scheduled_inference_job():
     print("[Scheduler] Starting hourly automatic inference...")
@@ -311,7 +313,6 @@ def formalize_return(summary_msg, freq_minutes, hist_leaf, fut_leaf, hist_air, h
             "forecast": fut_vpd
         }
     }
-
 
 
 def _run_standard_inference(freq_minutes: int, task: str, board_id: str, 

@@ -75,7 +75,9 @@ static SemaphoreHandle_t lora_mutex = NULL;
 
 // Set by DIO1 interrupt when a LoRa packet arrives and cleared after readData()
 static volatile bool lora_rx_flag = false;
-void IRAM_ATTR setLoraRxFlag() { lora_rx_flag = true; }
+void IRAM_ATTR setLoraRxFlag() {
+    lora_rx_flag = true;
+}
 
 // Pending actuation commands keyed by node_id
 static SemaphoreHandle_t pending_cmds_mutex = NULL;

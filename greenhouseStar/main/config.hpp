@@ -13,7 +13,7 @@
 
 // If running the greenhouseStar on a Heltec board (with the display) 
 // should be left enabled, comment it otherwire
-#define IS_HELTEC
+// #define IS_HELTEC
 
 #ifdef IS_HELTEC
     #define VEXT_PIN   GPIO_NUM_36

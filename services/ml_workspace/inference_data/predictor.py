@@ -57,7 +57,12 @@ def recursive_multistep_inference(
         
     history = T_current_data[cols_to_keep].copy()
 
-    expected_features = list(ml_model_pipeline.feature_names_in_)
+    if hasattr(ml_model_pipeline, 'feature_names_in_'):
+        expected_features = list(ml_model_pipeline.feature_names_in_)
+    else:
+        step_idx = 1 if (hasattr(ml_model_pipeline, 'named_steps') and 'drop_diff' in ml_model_pipeline.named_steps) else 0
+        expected_features = list(ml_model_pipeline.steps[step_idx][1].feature_names_in_)
+
     if (hasattr(ml_model_pipeline, 'named_steps')) and ('drop_diff' in ml_model_pipeline.named_steps):
         expected_features = [f for f in expected_features if not f.endswith('_diff')]
 
@@ -130,7 +135,12 @@ def ensemble_multistep_inference(
     
     generated_history = []
     if not X_soft.empty:
-        soft_expected_features = list(ml_models["soft"].feature_names_in_)
+        if hasattr(ml_models["soft"], 'feature_names_in_'):
+            soft_expected_features = list(ml_models["soft"].feature_names_in_)
+        else:
+            step_idx = 1 if (hasattr(ml_models["soft"], 'named_steps') and 'drop_diff' in ml_models["soft"].named_steps) else 0
+            soft_expected_features = list(ml_models["soft"].steps[step_idx][1].feature_names_in_)
+
         if (hasattr(ml_models["soft"], 'named_steps')) and ('drop_diff' in ml_models["soft"].named_steps):
              soft_expected_features = [f for f in soft_expected_features if not f.endswith('_diff')]
 
