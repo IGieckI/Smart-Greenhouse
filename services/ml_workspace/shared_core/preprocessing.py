@@ -127,7 +127,7 @@ def apply_board_pipeline(df: pd.DataFrame, board_id: str) -> pd.DataFrame:
 
 
 
-def build_advanced_features(df: pd.DataFrame, base_features: list, use_lags: bool) -> pd.DataFrame:
+def build_advanced_features(df: pd.DataFrame, base_features: list, use_lags: bool, freq_minutes: int = None) -> pd.DataFrame:
     df_out : pd.DataFrame = df.copy()
     
     if not isinstance(df_out.index, pd.DatetimeIndex):
@@ -142,12 +142,17 @@ def build_advanced_features(df: pd.DataFrame, base_features: list, use_lags: boo
     df_out['time_cos'] = np.cos(2 * np.pi * minutes / 1440)
     
     if use_lags:
+        time_diff = df_out.index.to_series().diff().dt.total_seconds() / 60.0
+        
         for col in base_features:
             if col in df_out.columns:
                 temp_series = df_out[col].ffill()
                 df_out[f'{col}_diff'] = temp_series.diff(1)
+                if freq_minutes:
+                    df_out.loc[time_diff > (freq_minutes * 1.5), f'{col}_diff'] = np.nan
                 
     return df_out
+
 
 
 def get_extended_features_list(base_features: list, use_lags: bool) -> list:
@@ -159,7 +164,7 @@ def get_extended_features_list(base_features: list, use_lags: bool) -> list:
 
 
 
-def create_lagged_features(df: pd.DataFrame, target_col: str, feature_cols: list, lags: int = DEFAULT_LAGS, lag_target: bool = True) -> pd.DataFrame:
+def create_lagged_features(df: pd.DataFrame, target_col: str, feature_cols: list, lags: int = DEFAULT_LAGS, lag_target: bool = True, freq_minutes: int = None) -> pd.DataFrame:
     cols_to_lag = feature_cols.copy()
     if lag_target: 
         cols_to_lag.append(target_col)
@@ -169,7 +174,14 @@ def create_lagged_features(df: pd.DataFrame, target_col: str, feature_cols: list
     for col in cols_to_lag:
         if col in df.columns:
             for i in range(1, lags + 1):
-                lagged_data[f'{col}_lag_{i}'] = df[col].shift(i)
+                lag_col = f'{col}_lag_{i}'
+                shifted_series = df[col].shift(i)
+                
+                if freq_minutes:
+                    time_diff = (df.index.to_series() - df.index.to_series().shift(i)).dt.total_seconds() / 60.0
+                    shifted_series = shifted_series.where(time_diff <= (freq_minutes * i * 1.5), np.nan)
+                    
+                lagged_data[lag_col] = shifted_series
                 
     if lagged_data:
         df_lagged = pd.concat([df, pd.DataFrame(lagged_data, index=df.index)], axis=1)

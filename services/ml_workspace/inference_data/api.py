@@ -147,12 +147,17 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
                                custom_data: Optional[SensorData] = None, 
                                use_real_leaf_temp: bool = False) -> tuple:
     freq_key = str(freq_minutes)
-    fetch_latest, _ = get_fetch_limits(freq_minutes)
-    df_history = fetch_historical_data(board_id, limit=fetch_latest, freq_minutes=freq_minutes)
-    
-    if len(df_history) < get_min_history_records(freq_minutes):
-        raise HTTPException(status_code=400, detail=f"Insufficient historical data for board {board_id}.")
 
+    lags_needed_for_standard = int(FALLBACK_WINDOW_MINUTES_TIME / freq_minutes)
+    required_lags = max(15, lags_needed_for_standard)
+    
+    fetch_limit = required_lags + 5
+
+    df_history = fetch_historical_data(board_id, limit=fetch_limit, freq_minutes=freq_minutes)
+
+    if len(df_history) <= required_lags:
+        raise HTTPException(status_code=400, detail=f"Insufficient historical data for board {board_id}. Need at least {required_lags + 1} points.")
+    
     if custom_data is not None:
         last_idx = df_history.index[-1]
         custom_values = custom_data.dict(exclude_none=True)
@@ -173,7 +178,8 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
         df_history_adv = build_advanced_features(
             df_history, 
             soft_features, 
-            soft_config.get("use_lags", False)
+            soft_config.get("use_lags", False),
+            freq_minutes=freq_minutes
         )
         
         if hasattr(soft_model, 'feature_names_in_'):
@@ -198,7 +204,7 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
 
     local_env_prophets = loaded_env_prophets.get(freq_key, {})
 
-    return df_history, local_env_prophets
+    return df_history.tail(required_lags), local_env_prophets
 
 def scheduled_inference_job():
     print("[Scheduler] Starting hourly automatic inference...")
@@ -467,10 +473,10 @@ def _run_ensemble_inference(freq_minutes: int, group: str, board_id: str,
 
     if (save_to_db) and (len(result["forecast_blended"]) > 0):
         save_predictions_to_influx(
-            board_id, freq_minutes, f"ENSEMBLE_{group}", future_timestamps, result["forecast_blended"],
-            air_preds if len(air_preds) > 0 else None,
-            hum_preds if len(hum_preds) > 0 else None
-        )
+                board_id, freq_minutes, f"ENSEMBLE_{group}", future_timestamps, result["forecast_blended"],
+                air_preds if len(air_preds) > 0 else None,
+                hum_preds if len(hum_preds) > 0 else None
+            )
 
     hist_leaf = format_series(df_history.index, df_history.get('leaf_temp', []))
     hist_air = format_series(df_history.index, df_history.get('air_temp', []))

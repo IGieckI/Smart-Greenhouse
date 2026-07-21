@@ -5,6 +5,8 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 from shared_core.config import *
 from shared_core.preprocessing import apply_board_pipeline
 
+
+
 def _get_max_time(query_api, query):
     try:
         res = query_api.query_data_frame(query)
@@ -15,14 +17,18 @@ def _get_max_time(query_api, query):
             if pd.notna(max_val):
                 return max_val
     except Exception as e:
-        print(f"[Sync] Error extracting max time: {e}")
+        print(f"[_get_max_time] Error extracting max time: {e}")
     return None
+
+
 
 def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
     """
         Synchronizes and processes RAW data into a dynamically sampled clean bucket.
         Ensures that forecasting (predictions) from caveaux are re-integrated.
     """
+    local_tag = "Sync"
+
     bucket_clean = f"{BUCKET_CLEAN_PREFIX}{freq_minutes}m"
     client = InfluxDBClient(url=influx_url, token=influx_token, org=influx_org)
     
@@ -32,7 +38,7 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
 
     for bucket in [bucket_clean, BUCKET_CAVEAUX]:
         if buckets_api.find_bucket_by_name(bucket) is None:
-            print(f"[Sync] Bucket '{bucket}' not found. Creating...")
+            print(f"[{local_tag}] Bucket '{bucket}' not found. Creating...")
             buckets_api.create_bucket(bucket_name=bucket, org=influx_org)
             
     query_last_raw = f'''
@@ -50,7 +56,7 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
     if last_time is not None:
         time_filter_raw = f"|> range(start: {(last_time - pd.Timedelta(minutes=60)).isoformat()})"
 
-    print(f"[Sync {freq_minutes}m] Querying RAW bucket (Time filter: {time_filter_raw})...")
+    print(f"[{local_tag} {freq_minutes}m] Querying RAW bucket (Time filter: {time_filter_raw})...")
     query_raw = f'''
         from(bucket: "{BUCKET_RAW}")
           {time_filter_raw}
@@ -63,7 +69,7 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
         df_raw = pd.concat(df_raw, ignore_index=True) if len(df_raw) > 0 else pd.DataFrame()
 
     if (df_raw is not None) and (not df_raw.empty):
-        print(f"[Sync {freq_minutes}m] Pre-processing {len(df_raw)} raw records...")
+        print(f"[{local_tag} {freq_minutes}m] Pre-processing {len(df_raw)} raw records...")
 
         if 'tds_value' in df_raw.columns:
             df_raw['tds'] = df_raw['tds'].combine_first(df_raw['tds_value']) if 'tds' in df_raw.columns else df_raw['tds_value']
@@ -110,11 +116,11 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
             
             if points:
                 write_api.write(bucket=bucket_clean, org=influx_org, record=points)
-                print(f"[Sync {freq_minutes}m] Inserted {len(points)} clean records for Board {board}")
+                print(f"[{local_tag} {freq_minutes}m] Inserted {len(points)} clean records for Board {board}")
     else:
-        print(f"[Sync {freq_minutes}m] No new raw data found.")
+        print(f"[{local_tag} {freq_minutes}m] No new raw data found.")
 
-    print(f"[Sync {freq_minutes}m] Importing historical forecasts from caveaux bucket...")
+    print(f"[{local_tag} {freq_minutes}m] Importing historical forecasts from caveaux bucket...")
     
     query_last_pred = f'''
         from(bucket: "{bucket_clean}")
@@ -161,8 +167,8 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
                 
             if cav_points:
                 write_api.write(bucket=bucket_clean, org=influx_org, record=cav_points)
-                print(f"[Sync {freq_minutes}m] Re-integrated {len(cav_points)} forecasts by caveaux into {bucket_clean}.")
+                print(f"[{local_tag} {freq_minutes}m] Re-integrated {len(cav_points)} forecasts by caveaux into {bucket_clean}.")
         else:
-            print(f"[Sync {freq_minutes}m] No new forecasting found in caveaux.")
+            print(f"[{local_tag} {freq_minutes}m] No new forecasting found in caveaux.")
     except Exception as e:
-        print(f"[Sync {freq_minutes}m] Error while attempting import from caveaux: {e}")
+        print(f"[{local_tag} {freq_minutes}m] Error while attempting import from caveaux: {e}")

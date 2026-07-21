@@ -44,7 +44,7 @@ INFERENCE_LOOKBACK_DAYS = "-7d"
 ENV_MODELS_TRAIN_DAYS = 14
 
 
-
+FALLBACK_WINDOW_MINUTES_TIME = 180
 DEFAULT_LAGS = 6
 INTERPOLATION_WIN_BEFORE = 5
 INTERPOLATION_WIN_AFTER = 2
@@ -60,11 +60,3 @@ TDS_SPIKE_THRESHOLD = 1.3
 
 
 DEFAULT_FREQS = [6]
-
-def get_min_history_records(freq_minutes: int) -> int:
-    max_possible_lags = 15
-    return max_possible_lags + 2
-
-def get_fetch_limits(freq_minutes: int):
-    min_rec = get_min_history_records(freq_minutes)
-    return min_rec + 20, min_rec + 19

@@ -24,18 +24,19 @@ training_queue = queue.Queue()
 local_tag = "[Pipeline]"
 
 def worker_daemon():
-    print("[Worker Daemon] Initialized and waiting for tasks...")
+    tag = "Worker Daemon"
+    print(f"[{tag}] Initialized and waiting for tasks...")
 
     while True:
         freq_minutes = training_queue.get() 
         try:
-            print(f"\n[Worker Daemon] Extracted task from queue: Training {freq_minutes}m")
+            print(f"\n[{tag}] Extracted task from queue: Training {freq_minutes}m")
             run_full_pipeline_for_freq(freq_minutes)
         except Exception as e:
-            print(f"[Worker Daemon] Unexpected error executing task {freq_minutes}m: {e}")
+            print(f"[{tag}] Unexpected error executing task {freq_minutes}m: {e}")
         finally:
             training_queue.task_done()
-            print(f"[Worker Daemon] Task {freq_minutes}m completed. Awaiting new tasks...")
+            print(f"[{tag}] Task {freq_minutes}m completed. Awaiting new tasks...")
 
 
 

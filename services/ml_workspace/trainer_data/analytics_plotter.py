@@ -75,9 +75,9 @@ def _plot_metrics_comparison(models_data, model_names, task_name, output_dir, be
     width = 0.25
 
     fig, ax = plt.subplots(figsize=FIGSIZE_STANDARD)
-    ax.bar(x - width, maes, width, label='MAE', color='#ff9999')
-    ax.bar(x, rmses, width, label='RMSE', color='#66b3ff')
-    ax.bar(x + width, r2s, width, label='R² (Scaled)', color='#99ff99')
+    ax.bar(x - width, maes, width, label='Test MAE', color='#ff9999')
+    ax.bar(x, rmses, width, label='Test RMSE', color='#66b3ff')
+    ax.bar(x + width, r2s, width, label='Test R² (Scaled)', color='#99ff99')
 
     ax.set_ylabel('Metric Value', fontsize=FONT_AXIS)
     ax.set_title(f'[{task_name.upper()}] Metrics Comparison per Model', fontsize=FONT_TITLE)
@@ -135,9 +135,15 @@ def _plot_hyperparameters_table_task(models_data, model_names, task_name, output
         params_str = ", ".join([f"{k.split('__')[-1]}:{v}" for k, v in params.items()])
         if len(params_str) > 120:
             params_str = params_str[:117] + "..."
-        cell_text.append([m, params_str, models_data[m]["metrics"].get("MAE", "")])
+            
+        mae_test = models_data[m]["metrics"].get("MAE", "N/A")
+        mae_train = models_data[m]["metrics"].get("train_MAE", "N/A")
+        
+        mae_result_str = f"Tr: {mae_train} | Te: {mae_test}"
+        
+        cell_text.append([m, params_str, mae_result_str])
 
-    table = ax.table(cellText=cell_text, colLabels=['Model', 'Best Hyperparameters', 'MAE Result'], 
+    table = ax.table(cellText=cell_text, colLabels=['Model', 'Best Hyperparameters', 'MAE (Train | Test)'], 
                      cellLoc='left', loc='center')
     table.auto_set_font_size(False)
     table.set_fontsize(FONT_TICK)
@@ -162,7 +168,7 @@ def _plot_feature_importance_grid(models_data, model_names, task_name, output_di
     rows = (n_models + cols - 1) // cols
     
     fig, axes = plt.subplots(rows, cols, figsize=(FIGSIZE_GRID_BASE * cols, FIGSIZE_GRID_BASE * 0.7 * rows))
-    if n_models == 1:
+    if not isinstance(axes, np.ndarray):
         axes = np.array([axes])
     axes = axes.flatten()
 
@@ -206,19 +212,44 @@ def _generate_global_heatmap(all_data, model_names, key, category, out_dir, freq
     file_path = os.path.join(out_dir, f"global_{key}.png")
 
     df_dict = {}
+    annot_dict = {}
+    
     for task, models in all_data.items():
         df_dict[task] = {}
+        annot_dict[task] = {}
         for m in model_names:
             if m in models:
-                df_dict[task][m] = models[m].get(category, {}).get(key, np.nan)
+                val_test = models[m].get(category, {}).get(key, np.nan)
+                df_dict[task][m] = val_test
+                
+                if category == "metrics":
+                    train_key = f"train_{key}"
+                    val_train = models[m].get(category, {}).get(train_key, np.nan)
+                    
+                    if pd.notna(val_train) and pd.notna(val_test):
+                        annot_dict[task][m] = f"Tr: {val_train:.3f}\nTe: {val_test:.3f}"
+                    elif pd.notna(val_test):
+                        annot_dict[task][m] = f"Te: {val_test:.3f}"
+                    else:
+                        annot_dict[task][m] = "N/A"
+                else:
+                    # Per le performance (es. inference_time) c'è un solo valore
+                    annot_dict[task][m] = f"{val_test:.3f}" if pd.notna(val_test) else "N/A"
             else:
                 df_dict[task][m] = np.nan
+                annot_dict[task][m] = "N/A"
                 
     df_matrix = pd.DataFrame(df_dict).T
     df_matrix.sort_index(inplace=True)
     
-    fig, ax = plt.subplots(figsize=(max(FIGSIZE_HEATMAP_BASE, len(model_names) * 2.5), max(8, len(df_matrix) * 1.5)))
-    sns.heatmap(df_matrix, annot=True, cmap=cmap, fmt=".3f", linewidths=.5, cbar_kws={'label': key.replace("_", " ").title()}, ax=ax, annot_kws={"size": FONT_TICK})
+    annot_matrix = pd.DataFrame(annot_dict).T
+    annot_matrix.sort_index(inplace=True)
+    
+    fig, ax = plt.subplots(figsize=(max(FIGSIZE_HEATMAP_BASE, len(model_names) * 2.5), max(8, len(df_matrix) * 1.8)))
+    
+    sns.heatmap(df_matrix, annot=annot_matrix.values, fmt="", cmap=cmap, linewidths=.5, 
+                cbar_kws={'label': f'Test {key.replace("_", " ").title()}'}, ax=ax, 
+                annot_kws={"size": FONT_TICK - 2})
     
     if not df_matrix.empty:
         for row_idx, task in enumerate(df_matrix.index):
@@ -287,12 +318,13 @@ def _generate_global_feature_importance_grid(all_data, model_names, out_dir, fre
     rows = len(tasks)
     
     fig, axes = plt.subplots(rows, cols, figsize=(FIGSIZE_GRID_BASE * cols, FIGSIZE_GRID_BASE * 0.7 * rows))
-    if (rows == 1) and (cols == 1):
+    if not isinstance(axes, np.ndarray):
         axes = np.array([[axes]])
-    elif rows == 1:
-        axes = np.array([axes])
-    elif cols == 1:
-        axes = np.array([[ax] for ax in axes])
+    elif axes.ndim == 1:
+        if rows == 1:
+            axes = axes[np.newaxis, :]
+        else:
+            axes = axes[:, np.newaxis]
         
     for r_idx, task in enumerate(tasks):
         best_m = best_models.get(task)

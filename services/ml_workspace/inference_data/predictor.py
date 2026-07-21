@@ -6,6 +6,9 @@ sys.path.append('/app')
 from shared_core.config import *
 from shared_core.preprocessing import build_advanced_features, get_extended_features_list, create_lagged_features, DropDiffFeatures
 
+FUTURE_HORIZON_MINUTES = 180
+
+
 def recursive_multistep_inference(
     T_current_data: pd.DataFrame, 
     prophet_models: dict, 
@@ -20,12 +23,17 @@ def recursive_multistep_inference(
         
     use_lags = task_config.get("use_lags", False)
     lag_target = task_config.get("lag_target", True)
-    task_lags = task_config.get("lags", DEFAULT_LAGS)
-    
-    if use_lags:
-        steps = int(180 / freq_minutes)
+    task_lags = 0
+
+    if "lags" in task_config:
+        task_lags = task_config["lags"]
     else:
-        steps = 1 
+        task_lags = int(FALLBACK_WINDOW_MINUTES_TIME / freq_minutes)
+        
+    if use_lags:
+        steps = int(FUTURE_HORIZON_MINUTES / freq_minutes)
+    else:
+        steps = 1
         
     last_time = T_current_data.index[-1]
     
@@ -60,7 +68,9 @@ def recursive_multistep_inference(
     if hasattr(ml_model_pipeline, 'feature_names_in_'):
         expected_features = list(ml_model_pipeline.feature_names_in_)
     else:
-        step_idx = 1 if (hasattr(ml_model_pipeline, 'named_steps') and 'drop_diff' in ml_model_pipeline.named_steps) else 0
+        step_idx = 1 
+        if ((hasattr(ml_model_pipeline, 'named_steps')) and ('drop_diff' in ml_model_pipeline.named_steps)):
+            step_idx = 0
         expected_features = list(ml_model_pipeline.steps[step_idx][1].feature_names_in_)
 
     if (hasattr(ml_model_pipeline, 'named_steps')) and ('drop_diff' in ml_model_pipeline.named_steps):
@@ -72,18 +82,21 @@ def recursive_multistep_inference(
         current_env_row['leaf_temp'] = 0.0 
         history_temp = pd.concat([history, current_env_row])
         
-        history_advanced = build_advanced_features(history_temp, features, use_lags)
-        
+        history_advanced = build_advanced_features(history_temp, features, use_lags, freq_minutes=freq_minutes)
+
         if not use_lags:
             X_infer = history_advanced[expected_features].iloc[-1:]
         else:
             extended_features = get_extended_features_list(features, use_lags)
-            history_lagged = create_lagged_features(history_advanced, 'leaf_temp', extended_features, lags=task_lags, lag_target=lag_target)
+            
+            features_to_lag = [c for c in extended_features if c not in ['time_sin', 'time_cos']]
+            
+            history_lagged = create_lagged_features(
+                history_advanced, 'leaf_temp', features_to_lag, 
+                lags=task_lags, lag_target=lag_target, freq_minutes=freq_minutes
+            )
             
             X_infer = history_lagged[expected_features].iloc[-1:]
-            
-            if X_infer.empty:
-                raise ValueError(f"Unable to extract lags at step {step_i}. The dataset became empty.")
                 
         pred_leaf = ml_model_pipeline.predict(X_infer)[0]
 
@@ -128,7 +141,7 @@ def ensemble_multistep_inference(
     if (USE_INDOOR_FEATURE) and ('is_indoor' not in soft_features):
         soft_features.append('is_indoor')
     
-    history_adv = build_advanced_features(df_patched, soft_features, soft_cfg.get("use_lags", False))
+    history_adv = build_advanced_features(df_patched, soft_features, soft_cfg.get("use_lags", False), freq_minutes=freq_minutes)
     ext_feat_soft = get_extended_features_list(soft_features, soft_cfg.get("use_lags", False))
     
     X_soft = history_adv[ext_feat_soft].dropna()

@@ -58,14 +58,21 @@ def fetch_clean_data(freq_minutes: int):
 
 
 
-def log_and_evaluate(y_test, y_pred, features_names, model, model_name, training_time, inf_time, best_params, archive_dir, X_test=None):
-    mae = mean_absolute_error(y_test, y_pred)
-    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-    r2 = r2_score(y_test, y_pred)
+def log_and_evaluate(X_train, y_train, X_test, y_test, y_pred, features_names, model, model_name, training_time, inf_time, best_params, archive_dir):
+    mae_test = mean_absolute_error(y_test, y_pred)
+    rmse_test = np.sqrt(mean_squared_error(y_test, y_pred))
+    r2_test = r2_score(y_test, y_pred)
 
+    y_train_pred = model.predict(X_train)
+    mae_train = mean_absolute_error(y_train, y_train_pred)
+    rmse_train = np.sqrt(mean_squared_error(y_train, y_train_pred))
+    r2_train = r2_score(y_train, y_train_pred)
+
+    original_features = features_names.copy()
     if hasattr(model, 'named_steps'):
         if 'drop_diff' in model.named_steps:
             features_names = [f for f in features_names if not f.endswith('_diff')]
+            original_features = features_names.copy()
         if 'poly_features' in model.named_steps:
             try: features_names = model.named_steps['poly_features'].get_feature_names_out()
             except: pass
@@ -83,16 +90,19 @@ def log_and_evaluate(y_test, y_pred, features_names, model, model_name, training
         importance_dict = dict(sorted(importance_dict.items(), key=lambda item: np.abs(item[1]), reverse=True))
     else:
         result = permutation_importance(model, X_test, y_test, n_repeats=5, random_state=42)
-        importance_dict = {feat: float(imp) for feat, imp in zip(features_names, result.importances_mean)}
+        importance_dict = {feat: float(imp) for feat, imp in zip(original_features, result.importances_mean)}
         importance_dict = dict(sorted(importance_dict.items(), key=lambda item: item[1], reverse=True))
 
     report = {
         "model_name": model_name,
         "best_params": best_params,
         "metrics": {
-            "MAE": round(mae, 3),
-            "RMSE": round(rmse, 3),
-            "R_squared": round(r2, 3)
+            "MAE": round(mae_test, 3),
+            "RMSE": round(rmse_test, 3),
+            "R_squared": round(r2_test, 3),
+            "train_MAE": round(mae_train, 3),
+            "train_RMSE": round(rmse_train, 3),
+            "train_R_squared": round(r2_train, 3)
         },
         "performance": {
             "training_time_seconds": round(training_time, 4),
@@ -109,7 +119,7 @@ def log_and_evaluate(y_test, y_pred, features_names, model, model_name, training
         
     os.rename(temp_file, final_file)
         
-    return report, mae
+    return report, mae_test
 
 
 
@@ -346,7 +356,15 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
         
     use_lags = config.get("use_lags", False)
     lag_target = config.get("lag_target", True) 
-    task_lags = config.get("lags", DEFAULT_LAGS)
+    task_lags = 0
+
+    if "lags" in config:
+        task_lags = config["lags"]
+    else:
+        task_lags = int(FALLBACK_WINDOW_MINUTES_TIME / freq_minutes)
+
+    if task_lags == 0:
+        raise Exception(f"[{task_name}] ERROR: task_lags must not be equal to 0")
 
     task_dir = os.path.join(BASE_MODEL_DIR, f"{freq_minutes}m", task_name)
     archive_dir, best_dir = [os.path.join(task_dir, p) for p in ["models_archive", "best_model"]]
@@ -383,16 +401,16 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
             print(f"[{task_name}] Target '{target_col}' not found for board {board_id}. Skipping.")
             continue
 
-        df_b = build_advanced_features(df_b, features_list, use_lags)
+        df_b = build_advanced_features(df_b, features_list, use_lags, freq_minutes=freq_minutes)
 
         model_features = [col for col in extended_features_list if col in df_b.columns]
-        
+
         if use_lags:
             print(f"[{task_name}] Generating lags (Depth: {task_lags}) for Board {board_id}...")
 
             features_to_lag = [c for c in extended_features_list if c not in ['time_sin', 'time_cos']]
 
-            df_b = create_lagged_features(df_b, target_col, features_to_lag, lags=task_lags, lag_target=lag_target)
+            df_b = create_lagged_features(df_b, target_col, features_to_lag, lags=task_lags, lag_target=lag_target, freq_minutes=freq_minutes)
         
             cols_to_lag = features_to_lag + ([target_col] if lag_target else [])
             generated_lags = [f"{c}_lag_{i}" for c in cols_to_lag for i in range(1, task_lags + 1)]
@@ -420,8 +438,8 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
         print(f"[{task_name}] Error: Empty datasets after processing all boards. Skipping task.")
         return
 
-    df_train_final = pd.concat(df_train_final_list).sort_values(by=['id_board', '_time'])
-    df_test_final = pd.concat(df_test_final_list).sort_values(by=['id_board', '_time'])
+    df_train_final = pd.concat(df_train_final_list).sort_values(by=['_time'])
+    df_test_final = pd.concat(df_test_final_list).sort_values(by=['_time'])
 
     print(f"[{task_name}] Aggregation Complete | Final Valid Train Vol: {len(df_train_final)} | Test Vol: {len(df_test_final)}")
     
@@ -458,10 +476,11 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
         inf_time = time.time() - start_inf
 
         report, mae = log_and_evaluate(
-            y_test=y_test, y_pred=y_pred, features_names=model_features,
+            X_train=X_train, y_train=y_train, 
+            X_test=X_test, y_test=y_test, y_pred=y_pred, 
+            features_names=model_features,
             model=best_model, model_name=name, training_time=training_time, 
-            inf_time=inf_time, best_params=best_params, archive_dir=archive_dir,
-            X_test=X_test
+            inf_time=inf_time, best_params=best_params, archive_dir=archive_dir
         )
         print(f"[{task_name}] -> {name} Evaluation | MAE: {mae:.3f} | Inference Time: {inf_time:.4f}s")
         
