@@ -29,7 +29,7 @@ from shared_core.tasks import TASKS
 from analytics_plotter import FONT_TITLE, FONT_AXIS, FONT_LEGEND, FONT_TICK, FIGSIZE_WIDE, FIGSIZE_STANDARD
 
 def fetch_clean_data(freq_minutes: int):
-    print(f"[Data Fetch] Pulling clean data from bucket for {freq_minutes}m frequency...")
+    print(f"[fetch_clean_data] Pulling clean data from bucket for {freq_minutes}m frequency...")
     bucket_clean = f"{BUCKET_CLEAN_PREFIX}{freq_minutes}m"
     client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
     query = f'''
@@ -41,7 +41,7 @@ def fetch_clean_data(freq_minutes: int):
     df = client.query_api().query_data_frame(query)
     if isinstance(df, list):
         if len(df) == 0: 
-            print(f"[Data Fetch] Warning: No data found in bucket {bucket_clean}.")
+            print(f"[fetch_clean_data] Warning: No data found in bucket {bucket_clean}.")
             return pd.DataFrame()
         df = pd.concat(df, ignore_index=True)
         
@@ -51,10 +51,12 @@ def fetch_clean_data(freq_minutes: int):
         
         if USE_INDOOR_FEATURE:
             df['is_indoor'] = df['id_board'].map(BOARD_ENV_MAP).fillna(0).astype(int)
-            print(f"[Data Fetch] Injected 'is_indoor' environmental toggle flag.")
+            print(f"[fetch_clean_data] Injected 'is_indoor' environmental toggle flag.")
             
-        print(f"[Data Fetch] Successfully retrieved {len(df)} records.")
+        print(f"[fetch_clean_data] Successfully retrieved {len(df)} records.")
     return df
+
+
 
 def log_and_evaluate(y_test, y_pred, features_names, model, model_name, training_time, inf_time, best_params, archive_dir, X_test=None):
     mae = mean_absolute_error(y_test, y_pred)
@@ -109,18 +111,20 @@ def log_and_evaluate(y_test, y_pred, features_names, model, model_name, training
         
     return report, mae
 
+
+
 def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
-    print(f"\n{'='*60}\n[Trainer {freq_minutes}m] INDEPENDENT ENVIRONMENTAL PROPHET TRAINING\n{'='*60}")
+    print(f"\n{'='*60}\n[train_environmental_prophet - {freq_minutes}m] INDEPENDENT ENVIRONMENTAL PROPHET TRAINING\n{'='*60}")
     os.makedirs(output_dir, exist_ok=True)
     df_train = df_clean[df_clean['id_board'].isin(ACTIVE_BOARDS)].copy()
     
-    effective_days = ENV_MODELS_TRAIN_DAYS if freq_minutes >= 6 else 3
+    effective_days = ENV_MODELS_TRAIN_DAYS if freq_minutes >= 6 else (ENV_MODELS_TRAIN_DAYS // 2)
     tail_samples = int((effective_days * 24 * 60) / freq_minutes)
-    print(f"[Prophet Setup] Target history per board: {effective_days} days ({tail_samples} tail samples).")
+    print(f"[train_environmental_prophet] Target history per board: {effective_days} days ({tail_samples} tail samples).")
     
     for feat in features:
         try:
-            print(f"[Prophet Training] Constructing Panel Dataset for feature: '{feat}'...")
+            print(f"[train_environmental_prophet] Constructing Panel Dataset for feature: '{feat}'...")
             
             df_prophet_full = pd.DataFrame()
             for b_id in ACTIVE_BOARDS:
@@ -147,7 +151,7 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
                 df_prophet_full = pd.concat([df_prophet_full, tmp], ignore_index=True)
                 
             if (len(df_prophet_full) < 20) or (df_prophet_full['y'].nunique() <= 1):
-                print(f"[Prophet Warning] Data for '{feat}' is insufficient or constant. Skipping.")
+                print(f"[train_environmental_prophet] Data for '{feat}' is insufficient or constant. Skipping.")
                 continue
 
             df_prophet_full.dropna(inplace=True)
@@ -157,7 +161,7 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
             df_train_prophet = df_prophet_full[df_prophet_full['ds'] <= split_time]
             df_test_prophet = df_prophet_full[df_prophet_full['ds'] > split_time]
             
-            print(f"[Prophet - {feat}] Temporal 80/20 Split | Train: {len(df_train_prophet)} | Test: {len(df_test_prophet)}")
+            print(f"[train_environmental_prophet - {feat}] Temporal 80/20 Split | Train: {len(df_train_prophet)} | Test: {len(df_test_prophet)}")
             
             final_model = Prophet(daily_seasonality=True, 
                                   yearly_seasonality=False,
@@ -166,11 +170,11 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
 
             if (USE_INDOOR_FEATURE) and ('is_indoor' in df_train_prophet.columns):
                 final_model.add_regressor('is_indoor')
-                print(f"[Prophet - {feat}] Using 'is_indoor' as an Extra Regressor.")
+                print(f"[train_environmental_prophet - {feat}] Using 'is_indoor' as an Extra Regressor.")
             
             final_model.fit(df_train_prophet)
             
-            print(f"[Prophet - {feat}] Generating forecast for evaluation...")
+            print(f"[train_environmental_prophet - {feat}] Generating forecast for evaluation...")
             future = df_test_prophet[['ds']].copy()
             if (USE_INDOOR_FEATURE) and ('is_indoor' in df_test_prophet.columns):
                 future['is_indoor'] = df_test_prophet['is_indoor'].values
@@ -179,7 +183,7 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
             mae = mean_absolute_error(df_test_prophet['y'], forecast['yhat'])
             rmse = np.sqrt(mean_squared_error(df_test_prophet['y'], forecast['yhat']))
             
-            print(f"[Prophet - {feat}] Evaluation Completed -> MAE: {mae:.2f}, RMSE: {rmse:.2f}")
+            print(f"[train_environmental_prophet - {feat}] Evaluation Completed -> MAE: {mae:.2f}, RMSE: {rmse:.2f}")
 
             plt.figure(figsize=FIGSIZE_STANDARD)
             plt.scatter(df_train_prophet['ds'], df_train_prophet['y'], label='Train Data', color='blue', alpha=0.3, s=5)
@@ -191,7 +195,9 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
             plt.savefig(os.path.join(output_dir, f"prophet_plot_{feat}.png"))
             plt.close()
 
-            print(f"[Prophet - {feat}] Refitting on 100% of available data for production...")
+
+            print(f"[train_environmental_prophet - {feat}] Fin eval, now exploit 100% of data")
+            print(f"[train_environmental_prophet - {feat}] Refitting on 100% of available data for production...")
             prod_model = Prophet(daily_seasonality=True, yearly_seasonality=False, weekly_seasonality=False, stan_backend='CMDSTANPY')
             if (USE_INDOOR_FEATURE) and ('is_indoor' in df_prophet_full.columns):
                 prod_model.add_regressor('is_indoor')
@@ -202,10 +208,10 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
             with open(os.path.join(output_dir, f"prophet_metrics_{feat}.json"), 'w') as fout:
                 json.dump({"MAE": mae, "RMSE": rmse}, fout)
             
-            print(f"[Prophet - {feat}] Target successfully completed and saved.")
+            print(f"[train_environmental_prophet - {feat}] Target successfully completed and saved.")
                 
         except Exception as e:
-            print(f"-> [PROPHET ERROR] Training interrupted for {feat}: {str(e)}")
+            print(f"-> [train_environmental_prophet ERROR] Training interrupted for {feat}: {str(e)}")
             continue
 
 def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> dict:
@@ -260,7 +266,7 @@ def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> d
             "params": {"regressor__alpha": [0.01, 0.1, 1.0, 10.0, 100.0]}
         },
         "RandomForest": {
-            "model": Pipeline(scaler_only + [('regressor', RandomForestRegressor(random_state=42, n_jobs=1))]),
+            "model": Pipeline([('regressor', RandomForestRegressor(random_state=42, n_jobs=1))]),
             "params": {
                 "regressor__n_estimators": [100, 300], 
                 "regressor__max_depth": [10, 20, None], 
@@ -269,7 +275,7 @@ def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> d
             }
         },
         "RandomForest_no_diff": {
-            "model": Pipeline(drop_diff + scaler_only + [('regressor', RandomForestRegressor(random_state=42, n_jobs=1))]),
+            "model": Pipeline(drop_diff + [('regressor', RandomForestRegressor(random_state=42, n_jobs=1))]),
             "params": {
                 "regressor__n_estimators": [100, 300], 
                 "regressor__max_depth": [10, 20, None], 
@@ -277,60 +283,60 @@ def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> d
                 "regressor__max_features": ["sqrt", 1.0]
             }
         },
-        "LightGBM": {
-            "model": Pipeline(scaler_only + [('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
-            "params": {
-                "regressor__n_estimators": [100, 300],
-                "regressor__learning_rate": [0.01, 0.05, 0.1],
-                "regressor__num_leaves": [31, 63],
-                "regressor__subsample": [0.8, 1.0] 
-            }
-        },
-        "LightGBM_no_diff": {
-            "model": Pipeline(drop_diff + scaler_only + [('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
-            "params": {
-                "regressor__n_estimators": [100, 300],
-                "regressor__learning_rate": [0.01, 0.05, 0.1],
-                "regressor__num_leaves": [31, 63],
-                "regressor__subsample": [0.8, 1.0] 
-            }
-        },
-        "SVR": {
-            "model": Pipeline(scaler_only + [('regressor', SVR())]),
-            "params": [
-                {
-                    "regressor__kernel": ["linear"],
-                    "regressor__C": [0.1, 1.0, 10.0],
-                    "regressor__epsilon": [0.001, 0.01, 0.1]
-                },
-                {
-                    "regressor__kernel": ["rbf"],
-                    "regressor__C": [0.1, 1.0, 10.0],
-                    "regressor__gamma": ["scale", 0.1, 0.01], 
-                    "regressor__epsilon": [0.001, 0.01, 0.1]
-                }
-            ]
-        },
-        "SVR_no_diff": {
-            "model": Pipeline(drop_diff + scaler_only + [('regressor', SVR())]),
-            "params": [
-                {
-                    "regressor__kernel": ["linear"],
-                    "regressor__C": [0.1, 1.0, 10.0],
-                    "regressor__epsilon": [0.001, 0.01, 0.1]
-                },
-                {
-                    "regressor__kernel": ["rbf"],
-                    "regressor__C": [0.1, 1.0, 10.0],
-                    "regressor__gamma": ["scale", 0.1, 0.01], 
-                    "regressor__epsilon": [0.001, 0.01, 0.1]
-                }
-            ]
-        },
+        # "LightGBM": {
+        #     "model": Pipeline(scaler_only + [('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
+        #     "params": {
+        #         "regressor__n_estimators": [100, 300],
+        #         "regressor__learning_rate": [0.01, 0.05, 0.1],
+        #         "regressor__num_leaves": [31, 63],
+        #         "regressor__subsample": [0.8, 1.0] 
+        #     }
+        # },
+        # "LightGBM_no_diff": {
+        #     "model": Pipeline(drop_diff + scaler_only + [('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
+        #     "params": {
+        #         "regressor__n_estimators": [100, 300],
+        #         "regressor__learning_rate": [0.01, 0.05, 0.1],
+        #         "regressor__num_leaves": [31, 63],
+        #         "regressor__subsample": [0.8, 1.0] 
+        #     }
+        # },
+        # "SVR": {
+        #     "model": Pipeline(scaler_only + [('regressor', SVR())]),
+        #     "params": [
+        #         {
+        #             "regressor__kernel": ["linear"],
+        #             "regressor__C": [0.1, 1.0, 10.0],
+        #             "regressor__epsilon": [0.001, 0.01, 0.1]
+        #         },
+        #         {
+        #             "regressor__kernel": ["rbf"],
+        #             "regressor__C": [0.1, 1.0, 10.0],
+        #             "regressor__gamma": ["scale", 0.1, 0.01], 
+        #             "regressor__epsilon": [0.001, 0.01, 0.1]
+        #         }
+        #     ]
+        # },
+        # "SVR_no_diff": {
+        #     "model": Pipeline(drop_diff + scaler_only + [('regressor', SVR())]),
+        #     "params": [
+        #         {
+        #             "regressor__kernel": ["linear"],
+        #             "regressor__C": [0.1, 1.0, 10.0],
+        #             "regressor__epsilon": [0.001, 0.01, 0.1]
+        #         },
+        #         {
+        #             "regressor__kernel": ["rbf"],
+        #             "regressor__C": [0.1, 1.0, 10.0],
+        #             "regressor__gamma": ["scale", 0.1, 0.01], 
+        #             "regressor__epsilon": [0.001, 0.01, 0.1]
+        #         }
+        #     ]
+        # },
     }
 
 def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
-    print(f"\n{'='*60}\n[Trainer {freq_minutes}m] STARTING PIPELINE: {task_name.upper()}\n{'='*60}")
+    print(f"\n{'='*60}\n[run_pipeline_for_task {freq_minutes}m] STARTING PIPELINE: {task_name.upper()}\n{'='*60}")
     
     target_col = config["target"]
     
@@ -378,14 +384,20 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
             continue
 
         df_b = build_advanced_features(df_b, features_list, use_lags)
+
+        model_features = [col for col in extended_features_list if col in df_b.columns]
+        
         if use_lags:
             print(f"[{task_name}] Generating lags (Depth: {task_lags}) for Board {board_id}...")
-            df_b = create_lagged_features(df_b, target_col, extended_features_list, lags=task_lags, lag_target=lag_target)
 
-        if use_lags:
-            model_features = [col for col in df_b.columns if ('lag' in col and (lag_target or target_col not in col)) or col in extended_features_list]
-        else:
-            model_features = [col for col in extended_features_list if col in df_b.columns] 
+            features_to_lag = [c for c in extended_features_list if c not in ['time_sin', 'time_cos']]
+
+            df_b = create_lagged_features(df_b, target_col, features_to_lag, lags=task_lags, lag_target=lag_target)
+        
+            cols_to_lag = features_to_lag + ([target_col] if lag_target else [])
+            generated_lags = [f"{c}_lag_{i}" for c in cols_to_lag for i in range(1, task_lags + 1)]
+
+            model_features.extend([col for col in generated_lags if col in df_b.columns])
 
         pre_drop_len = len(df_b)
         df_b.dropna(subset=model_features + [target_col], inplace=True)

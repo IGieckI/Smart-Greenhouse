@@ -27,7 +27,7 @@ module.exports = {
     MAX_COMMAND_DURATION_S: 300,
 
 
-    SOIL_MOISTURE_LOWER_THRESHOLD: 60.0,
+    SOIL_MOISTURE_LOWER_THRESHOLD: 70.0,
     PUMP_PATIENCE_COUNT: 5,
     
     MY_TAG: "[Controller]"

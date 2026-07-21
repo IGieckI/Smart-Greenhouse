@@ -4,7 +4,7 @@ const topologyService = require('./topology');
 const mqttService = require('./mqtt');
 const influxService = require('./influx');
 const fallbackService = require('./fallback');
-const ruleEngine = require('./rules');
+const { applyRules } = require('./rules');
 
 const app = express();
 app.use(express.json());
@@ -21,18 +21,17 @@ app.post('/api/data', async (req, res) => {
         return res.status(400).send({ error: "Missing node_id" });
     }
 
-    console.log("\n\n\n")
-    console.log(data)
-    console.log(data.star_id)
-    console.log("\n\n\n")
-
     if (data.star_id) {
         topologyService.updateTopology(data.node_id, data.star_id);
     }
 
     data = fallbackService.processLeafTemp(data);
 
-    ruleEngine.applyRules(data.node_id, data);
+    try {
+        applyRules(data.node_id, data);
+    } catch (err) {
+        console.error("An error occour during rules evaluations", err)
+    }
 
     try {
         await influxService.writeTelemetry(data.node_id, data);
