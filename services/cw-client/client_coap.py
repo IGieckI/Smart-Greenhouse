@@ -16,12 +16,12 @@ STAR_COAP_URI  = os.getenv("STAR_COAP_URI",  f"{STAR_COAP_BASE}/telemetry")
 MQTT_BROKER    = os.getenv("MQTT_BROKER",    "localhost")
 MQTT_PORT      = int(os.getenv("MQTT_PORT",  "1883"))
 
-# CoAP star reconnection timeouts
-INIT_TIMEOUT        = 5.0    # "GET /info?ts" timeout
-SUBSCRIBE_TIMEOUT   = 5.0    # Registration returns timeout
-STREAM_SOFT_TIMEOUT = 300.0  # no-reception timeout
-HEARTBEAT_TIMEOUT   = 5.0    # lightweight /info liveness probe during a quiet stream
-INIT_RETRY_DELAY    = 5.0    # delay between failed INIT attempts
+# CoAP star reconnection timeouts (seconds)
+INIT_TIMEOUT        = 5.0
+SUBSCRIBE_TIMEOUT   = 5.0
+STREAM_SOFT_TIMEOUT = 300.0
+HEARTBEAT_TIMEOUT   = 5.0
+INIT_RETRY_DELAY    = 5.0
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)

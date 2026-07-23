@@ -182,8 +182,6 @@ extern "C" void app_main(void) {
     mod   = new Module(hal, LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);
     radio = new SX1262(mod);
 
-    
-    // Radio init values are taken from Semtech's SX1262 datasheet    
     if (radio->begin(868.0, 125.0, 9, 7, 0x12, 10, 8, 1.6, false) == RADIOLIB_ERR_NONE) {
         ESP_LOGI(TAG, "LoRa initialized successfully");
         xTaskCreatePinnedToCore(lora_rx_task, "lora_rx", 4096, NULL, 5, NULL, 1);

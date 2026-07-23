@@ -51,7 +51,7 @@ float Aht20Bmp280::bmp280_compensate_P(int32_t adc_P) {
     var2 = var2 + (((int64_t)_calib.dig_P4) << 35);
     var1 = ((var1 * var1 * (int64_t)_calib.dig_P3) >> 8) + ((var1 * (int64_t)_calib.dig_P2) << 12);
     var1 = (((((int64_t)1) << 47) + var1)) * ((int64_t)_calib.dig_P1) >> 33;
-    if (var1 == 0) return 0; // Avoid division by zero
+    if (var1 == 0) return 0;
     p = 1048576 - adc_P;
     p = (((p << 31) - var2) * 3125) / var1;
     var1 = (((int64_t)_calib.dig_P9) * (p >> 13) * (p >> 13)) >> 25;
@@ -61,7 +61,6 @@ float Aht20Bmp280::bmp280_compensate_P(int32_t adc_P) {
 }
 
 esp_err_t Aht20Bmp280::init() {
-    // Initialize AHT20
     vTaskDelay(pdMS_TO_TICKS(40));
     uint8_t aht_init_cmd[] = {0xBE, 0x08, 0x00};
     esp_err_t err = i2c_master_write_to_device(_port, AHT20_I2C_ADDRESS, aht_init_cmd, sizeof(aht_init_cmd), pdMS_TO_TICKS(100));
@@ -70,7 +69,6 @@ esp_err_t Aht20Bmp280::init() {
         return err;
     }
 
-    // Initialize BMP280
     uint8_t bmp_id = 0;
     uint8_t id_reg = 0xD0;
     err = i2c_master_write_read_device(_port, _bmp_addr, &id_reg, 1, &bmp_id, 1, pdMS_TO_TICKS(100));
@@ -82,7 +80,6 @@ esp_err_t Aht20Bmp280::init() {
     err = bmp280_read_calib();
     if (err != ESP_OK) return err;
 
-    // Set BMP280 config Normal mode
     err = write_reg(_bmp_addr, 0xF4, 0x27);
     if (err != ESP_OK) return err;
     
@@ -95,7 +92,6 @@ esp_err_t Aht20Bmp280::init() {
 esp_err_t Aht20Bmp280::read(SensorData& out_data) {
     esp_err_t err;
 
-    // Read AHT20
     uint8_t aht_trigger[] = {0xAC, 0x33, 0x00};
     err = i2c_master_write_to_device(_port, AHT20_I2C_ADDRESS, aht_trigger, sizeof(aht_trigger), pdMS_TO_TICKS(100));
     if (err == ESP_OK) {
@@ -112,7 +108,6 @@ esp_err_t Aht20Bmp280::read(SensorData& out_data) {
         }
     }
 
-    // Read BMP280
     uint8_t bmp_data[6];
     uint8_t reg = 0xF7;
     err = i2c_master_write_read_device(_port, _bmp_addr, &reg, 1, bmp_data, 6, pdMS_TO_TICKS(100));

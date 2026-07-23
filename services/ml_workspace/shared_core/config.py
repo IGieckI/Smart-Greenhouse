@@ -1,10 +1,6 @@
 import os
 
-##### Config variables. Just to point out the fact that:
-### ENVIRONMENT METADATA: usefull to eventually enrich data
-#in case True, give a general spartial dimention:
-# 0 -> Unstable / Outdoor-like environment
-# 1 -> Stable / Indoor environment
+# Environment metadata: 0 -> unstable/outdoor-like, 1 -> stable/indoor
 
 INFLUX_URL = os.getenv("INFLUX_URL", "http://influxdb:8086")
 INFLUX_TOKEN = os.getenv("INFLUX_TOKEN")

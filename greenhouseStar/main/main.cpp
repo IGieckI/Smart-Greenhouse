@@ -37,30 +37,23 @@ extern "C" {
 
 static const char *TAG = "GREENHOUSE_STAR";
 
-// Wraps an incoming ESP-NOW packet together with the sender's MAC so
-// reception_task can later reply with a command over the same link.
+// Incoming ESP-NOW packet plus the sender's MAC, so reception_task can reply over the same link
 typedef struct {
     telemetry_packet_t packet;
     uint8_t sender_mac[6];
 } received_espnow_t;
 
 
+// Telemetry ring buffer plus queues of received_espnow_t and telemetry_packet_t
 RingbufHandle_t telemetry_ringbuf = NULL;
-
-// carries received_espnow_t
 QueueHandle_t   telemetry_queue;
-
-// carries telemetry_packet_t
 QueueHandle_t   display_mailbox;
 
 // CoAP
 telemetry_packet_t last_received_data;
 coap_resource_t *telemetry_resource = NULL;
 
-// Raised by reception_task when new telemetry is ready. The observe
-// notification itself is issued by coap_server_task, because this libcoap build
-// is not thread-safe: the CoAP context must only be
-// touched from the task that runs coap_io_process.
+// Raised by reception_task; the observe notification is issued by coap_server_task (libcoap is single-threaded)
 static volatile bool telemetry_dirty = false;
 
 // RadioLib
