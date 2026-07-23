@@ -2,6 +2,7 @@ import paho.mqtt.client as mqtt
 import requests
 import json
 import os
+import time
 import logging
 
 BROKER = os.getenv("MQTT_BROKER", "mosquitto")
@@ -70,6 +71,12 @@ def on_message(client, userdata, msg):
             _subscribed_stars.add(star_id)
             client.subscribe(f"greenhouse/commands/{star_id}")
             logger.info(f"Subscribed to commands for star {star_id}")
+
+        if raw.get("sync"):
+            sync_frame = json.dumps({"sync": 1, "sid": star_id, "ts": int(time.time())})
+            client.publish("greenhouse/gateway/commands", sync_frame)
+            logger.info(f"Time-sync answered for star {star_id}: {sync_frame}")
+            return
 
         response = requests.post(CONTROLLER_URL, json=payload, timeout=5)
         logger.info(f"Forwarded to controller, status={response.status_code}")
