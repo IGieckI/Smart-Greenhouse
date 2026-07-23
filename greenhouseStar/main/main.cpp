@@ -650,10 +650,11 @@ extern "C" void app_main(void) {
     }
     esp_now_register_recv_cb(OnDataRecv);
 
-    xTaskCreatePinnedToCore(coap_server_task,  "coap_server",   8192, NULL, 5, NULL, 0);
+    xTaskCreatePinnedToCore(coap_server_task,  "coap_server",   8192, NULL, 5, NULL, 1);
 
     if (radio != nullptr) {
-        xTaskCreatePinnedToCore(lora_rx_task,  "LoRa_RX",       4096, NULL, 4, NULL, 0);
+        xTaskCreatePinnedToCore(lora_rx_task,  "LoRa_RX",       4096, NULL, 4, &lora_rx_task_handle, 0);
+        xTaskCreatePinnedToCore(time_sync_task, "Time_Sync",    4096, NULL, 3, NULL, 1);
     }
 
     xTaskCreatePinnedToCore(reception_task,    "Telemetry_Recv",4096, NULL, 5, NULL, 0);
