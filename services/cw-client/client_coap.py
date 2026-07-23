@@ -1,10 +1,9 @@
 import os
 
-os.environ['AIOCOAP_CLIENT_TRANSPORT'] = 'simple6'
-
 import asyncio
 import json
 import logging
+import time
 import aiohttp
 import signal
 import struct
@@ -16,7 +15,13 @@ STAR_COAP_BASE = os.getenv("STAR_COAP_BASE", "coap://192.168.4.1")
 STAR_COAP_URI  = os.getenv("STAR_COAP_URI",  f"{STAR_COAP_BASE}/telemetry")
 MQTT_BROKER    = os.getenv("MQTT_BROKER",    "localhost")
 MQTT_PORT      = int(os.getenv("MQTT_PORT",  "1883"))
-TIMEOUT_SECONDS = 180.0
+
+# CoAP star reconnection timeouts
+INIT_TIMEOUT        = 5.0    # "GET /info?ts" timeout
+SUBSCRIBE_TIMEOUT   = 5.0    # Registration returns timeout
+STREAM_SOFT_TIMEOUT = 300.0  # no-reception timeout
+HEARTBEAT_TIMEOUT   = 5.0    # lightweight /info liveness probe during a quiet stream
+INIT_RETRY_DELAY    = 5.0    # delay between failed INIT attempts
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -37,48 +42,61 @@ class TelemetryObserver:
         self.mqtt_client = None
         self.keep_running = True
         self.star_id = ""
-        self._star_id_task = None
 
-    # async def _ensure_star_id(self):
-    #     """
-    #     Poll the Star's /info until its id is known, then stop
-    #     """
-    #     while self.keep_running and not self.star_id:
-    #         ctx = await Context.create_client_context()
-    #         try:
-    #             request = Message(code=GET, uri=f"{STAR_COAP_BASE}/info")
-    #             response = await asyncio.wait_for(ctx.request(request).response, timeout=5)
-    #             self.star_id = str(json.loads(response.payload.decode())["star_id"])
-    #             logger.info(f"Discovered star_id={self.star_id}")
-    #         except Exception as e:
-    #             logger.warning(f"Star /info discovery failed, retrying in 30s: {e}")
-    #             await asyncio.sleep(30)
-    #         finally:
-    #             await ctx.shutdown()
-    async def _ensure_star_id(self):
+    async def _rebuild_context(self):
         """
-        Poll the Star's /info until its id is known, then stop
+        Create a fresh CoAP context and atomically swap it in, then shut the old one
+        down (avoid a network swap problem)
         """
-        while self.keep_running and not self.star_id:
+        new_ctx = await Context.create_client_context()
+        old_ctx, self.context = self.context, new_ctx
+        if old_ctx is not None:
             try:
-                request = Message(code=GET, uri=f"{STAR_COAP_BASE}/info")
-                response = await asyncio.wait_for(self.context.request(request).response, timeout=20.0)
-                payload_str = response.payload.decode('utf-8').strip()
-                
-                if payload_str:
-                    data = json.loads(payload_str)
-                    if "star_id" in data:
-                        self.star_id = str(data["star_id"])
-                        logger.info(f"Discovered star_id={self.star_id}")
-                        break
-                else:
-                    logger.warning("Star /info returned empty payload, retrying...")
-            except asyncio.TimeoutError:
-                logger.warning("Star /info discovery timed out, retrying in 5s...")
-            except Exception as e:
-                logger.warning(f"Star /info discovery failed, retrying in 5s: {e}")
-            
-            await asyncio.sleep(5)
+                await old_ctx.shutdown()
+            except Exception:
+                pass
+
+    async def _init_once(self) -> bool:
+        """
+        Rebuild the context, then GET /info?ts= to discover the star_id and sync the clock.
+        """
+        try:
+            await self._rebuild_context()
+            request = Message(code=GET, uri=f"{STAR_COAP_BASE}/info?ts={int(time.time())}")
+            response = await asyncio.wait_for(self.context.request(request).response,
+                                              timeout=INIT_TIMEOUT)
+            payload_str = response.payload.decode('utf-8').strip()
+            if payload_str:
+                data = json.loads(payload_str)
+                if "star_id" in data:
+                    self.star_id = str(data["star_id"])
+                    logger.info(f"INIT ok: star_id={self.star_id} (clock synced)")
+                    return True
+            logger.warning("Star /info returned no star_id, retrying INIT...")
+        except asyncio.TimeoutError:
+            logger.warning(f"INIT timed out (>{INIT_TIMEOUT}s), retrying...")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"INIT failed ({e}), retrying...")
+        return False
+
+    async def _heartbeat(self) -> bool:
+        """
+        Plain GET /info on the current context. It does NOT rebuild the context or disturb the 
+        active observation, but confirms the Star link availability (check for disconnection).
+        """
+        try:
+            request = Message(code=GET, uri=f"{STAR_COAP_BASE}/info")
+            await asyncio.wait_for(self.context.request(request).response,
+                                   timeout=HEARTBEAT_TIMEOUT)
+            logger.debug("Heartbeat OK, observation still alive")
+            return True
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"Heartbeat probe failed: {e}")
+            return False
 
     def _start_command_listener(self, loop: asyncio.AbstractEventLoop):
         """
@@ -113,13 +131,6 @@ class TelemetryObserver:
                 logger.info(f"MQTT subscribed to {topic}")
             else:
                 logger.error(f"MQTT connect failed rc={rc}")
-            # if rc == 0:
-            #     topic = (f"greenhouse/commands/{self.star_id}"
-            #              if self.star_id else "greenhouse/commands/+")
-            #     client.subscribe(topic)
-            #     logger.info(f"MQTT subscribed to {topic}")
-            # else:
-            #     logger.error(f"MQTT connect failed rc={rc}")
 
         def on_message(client, userdata, msg):
             """
@@ -192,61 +203,70 @@ class TelemetryObserver:
 
     async def start_observing(self):
         """
-        Start observing the Star's telemetry resource over CoAP and forward data to the controller
+        Drive the CoAP connection as a small state machine:
+
+        INIT      -> rebuild context, GET /info?ts= (star_id + clock sync)
+        SUBSCRIBE -> GET /telemetry observe, expect the immediate cached reply
+        STREAM    -> pull notifications; telemetry silence is normal, so a soft
+                        timeout runs a /info heartbeat instead of reconnecting
         """
-        self.context = await Context.create_client_context()
         self.http_session = aiohttp.ClientSession()
-
-        await self._ensure_star_id()
-        if not self.keep_running:
-            return
-
-        # self._star_id_task = asyncio.create_task(self._ensure_star_id())
-
-        self._start_command_listener(asyncio.get_event_loop())
+        command_listener_started = False
 
         while self.keep_running:
-            # observation = None
-            pr = None
+            if not await self._init_once():
+                await asyncio.sleep(INIT_RETRY_DELAY)
+                continue
+
+            if not command_listener_started:
+                self._start_command_listener(asyncio.get_event_loop())
+                command_listener_started = True
+
             try:
-                request = Message(code=GET, uri=STAR_COAP_URI, observe=0)
-                pr = self.context.request(request)
-                # observation = self.context.request(request)
-                logger.info(f"Subscribing to {STAR_COAP_URI}...")
-                # iterator = observation.observation.__aiter__()
-
-                # while self.keep_running:
-                #     response = await asyncio.wait_for(iterator.__anext__(), timeout=TIMEOUT_SECONDS)
-                #     self._parse(response.payload)
-                response = await asyncio.wait_for(pr.response, timeout=TIMEOUT_SECONDS)
-                self._parse(response.payload)
-
-                iterator = pr.observation.__aiter__()
-                while self.keep_running:
-                    response = await asyncio.wait_for(iterator.__anext__(), timeout=TIMEOUT_SECONDS)
-                    self._parse(response.payload)
-
-            except asyncio.TimeoutError:
-                logger.warning(f"No data for {TIMEOUT_SECONDS}s, reconnecting...")
+                await self._stream()
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.error(f"Connection error ({e}), retrying in 5s...")
-                await asyncio.sleep(5)
-            finally:
-                if pr and getattr(pr, 'observation', None) and not pr.observation.cancelled:
-                    pr.observation.cancel()
-            # finally:
-            #     if (observation) and (not observation.observation.cancelled):
-            #         observation.observation.cancel()
+
+    async def _stream(self):
+        """
+        SUBSCRIBE to /telemetry, then STREAM notifications. Returns when connectivity is
+        actually lost so the caller re-runs INIT.
+        """
+        pr = None
+        try:
+            request = Message(code=GET, uri=STAR_COAP_URI, observe=0)
+            pr = self.context.request(request)
+            logger.info(f"Subscribing to {STAR_COAP_URI}...")
+
+            response = await asyncio.wait_for(pr.response, timeout=SUBSCRIBE_TIMEOUT)
+            self._parse(response.payload)
+
+            iterator = pr.observation.__aiter__()
+            while self.keep_running:
+                try:
+                    response = await asyncio.wait_for(iterator.__anext__(),
+                                                      timeout=STREAM_SOFT_TIMEOUT)
+                    self._parse(response.payload)
+                except asyncio.TimeoutError:
+                    if await self._heartbeat():
+                        continue
+                    logger.warning("Heartbeat failed, reconnecting...")
+                    return
+        except asyncio.TimeoutError:
+            logger.warning(f"No reply to subscribe within {SUBSCRIBE_TIMEOUT}s, reconnecting...")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Observe error ({e}), reconnecting...")
+        finally:
+            if pr is not None and getattr(pr, 'observation', None) and not pr.observation.cancelled:
+                pr.observation.cancel()
 
     async def shutdown(self):
         """
         Gracefully shutdown the observer, stopping CoAP observation, MQTT, and HTTP session
         """
         self.keep_running = False
-        # if self._star_id_task:
-        #     self._star_id_task.cancel()
         if self.mqtt_client:
             self.mqtt_client.loop_stop()
         if self.http_session:
