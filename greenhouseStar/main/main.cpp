@@ -73,10 +73,22 @@ static uint32_t star_id = 0;
 // Mutex protecting SPI access to the LoRa radio (shared between lora_rx_task and reception_task)
 static SemaphoreHandle_t lora_mutex = NULL;
 
-// Set by DIO1 interrupt when a LoRa packet arrives and cleared after readData()
-static volatile bool lora_rx_flag = false;
+// lora_rx_task blocks on a task notification. The DIO1 ISR notifies it on RX-done
+static TaskHandle_t lora_rx_task_handle = NULL;
 void IRAM_ATTR setLoraRxFlag() {
-    lora_rx_flag = true;
+    BaseType_t hpw = pdFALSE;
+    vTaskNotifyGiveFromISR(lora_rx_task_handle, &hpw);
+    portYIELD_FROM_ISR(hpw);
+}
+
+// Set once the system clock has been synced
+static volatile bool time_synced = false;
+
+// Discard a stray TX-done notification on lora_rx_task before re-arming RX, so a
+// completed transmit is never mistaken for a received packet. Call while holding
+// lora_mutex, between transmit() and startReceive().
+static inline void lora_notify_clear() {
+    if (lora_rx_task_handle) ulTaskNotifyValueClear(lora_rx_task_handle, 0xFFFFFFFFUL);
 }
 
 // Pending actuation commands keyed by node_id
@@ -117,11 +129,29 @@ void lora_init() {
 }
 
 /**
- * CoAP GET handler for /info, returns the star_id as JSON
+ * CoAP GET handler for /info, returns the star_id as JSON + GET /info?ts=<epoch>
+ * to set the system clock.
  */
 static void hnd_get_info(coap_resource_t *resource, coap_session_t *session,
                          const coap_pdu_t *request, const coap_string_t *query,
                          coap_pdu_t *response) {
+    if (query && query->length > 0) {
+        char qbuf[64];
+        size_t qlen = query->length < sizeof(qbuf) - 1 ? query->length : sizeof(qbuf) - 1;
+        memcpy(qbuf, query->s, qlen);
+        qbuf[qlen] = '\0';
+        char *p = strstr(qbuf, "ts=");
+        if (p && (p == qbuf || p[-1] == '&')) {
+            long int epoch = atol(p + 3);
+            if (epoch > 0) {
+                struct timeval tv = { .tv_sec = epoch, .tv_usec = 0 };
+                settimeofday(&tv, NULL);
+                time_synced = true;
+                ESP_LOGI(TAG, "System time synced via /info?ts=%ld", epoch);
+            }
+        }
+    }
+
     char buf[32];
     int n = snprintf(buf, sizeof(buf), "{\"star_id\":%lu}", (unsigned long)star_id);
     coap_pdu_set_code(response, COAP_RESPONSE_CODE_CONTENT);
@@ -402,9 +432,9 @@ void OnDataRecv(const esp_now_recv_info_t *esp_now_info, const uint8_t *incoming
  */
 static void lora_rx_task(void *p) {
     if (radio == nullptr) {
-        ESP_LOGW(TAG, "Modulo LoRa disabilitato. Terminazione preventiva del task lora_rx_task.");
+        ESP_LOGW(TAG, "LoRa module not initialized.");
         vTaskDelete(NULL);
-        return; 
+        return;
     }
     uint8_t buf[256];
     ESP_LOGI(TAG, "LoRa RX task running on Core %d", xPortGetCoreID());
@@ -415,78 +445,130 @@ static void lora_rx_task(void *p) {
     xSemaphoreGive(lora_mutex);
 
     while (1) {
-        if (lora_rx_flag) {
-            if (xSemaphoreTake(lora_mutex, portMAX_DELAY) == pdTRUE) {
-                lora_rx_flag = false;
-                memset(buf, 0, sizeof(buf));
-                int state = radio->readData(buf, sizeof(buf) - 1);
+        if (ulTaskNotifyTake(pdTRUE, portMAX_DELAY) == 0) continue;
 
-                xSemaphoreGive(lora_mutex);
+        if (xSemaphoreTake(lora_mutex, portMAX_DELAY) != pdTRUE) continue;
+        memset(buf, 0, sizeof(buf));
+        int state = radio->readData(buf, sizeof(buf) - 1);
+        xSemaphoreGive(lora_mutex);
 
-                if (state == RADIOLIB_ERR_NONE) {
-                    ESP_LOGI(TAG, "LoRa RX command: %s", (char *)buf);
-
-                    bool valid = false;
-                    uint32_t acked_nid = 0;
-                    cJSON *json = cJSON_Parse((char *)buf);
-                    if (json) {
-                        cJSON *nid = cJSON_GetObjectItem(json, "nid");
-                        cJSON *act = cJSON_GetObjectItem(json, "act");
-                        cJSON *val = cJSON_GetObjectItem(json, "val");
-                        cJSON *dur = cJSON_GetObjectItem(json, "dur");
-
-                        if (cJSON_IsNumber(nid) && cJSON_IsString(act)
-                            && cJSON_IsNumber(val) && cJSON_IsNumber(dur)) {
-
-                            command_packet_t cp = {};
-                            cp.node_id    = (uint32_t)nid->valuedouble;
-                            strncpy(cp.actuator, act->valuestring, CMD_ACTUATOR_LEN - 1);
-                            cp.value      = (uint8_t)val->valueint;
-                            cp.duration_s = (uint16_t)dur->valueint;
-
-                            xSemaphoreTake(pending_cmds_mutex, portMAX_DELAY);
-                            pending_cmds[cp.node_id] = cp;
-                            xSemaphoreGive(pending_cmds_mutex);
-
-                            ESP_LOGI(TAG, "Command queued for node %lu: %s val=%d dur=%ds",
-                                     (unsigned long)cp.node_id, cp.actuator, cp.value, cp.duration_s);
-                            acked_nid = cp.node_id;
-                            valid = true;
-                        }
-                        cJSON_Delete(json);
-                    }
-
-                    if (valid) {
-                        char ack[32];
-                        snprintf(ack, sizeof(ack), "{\"ack\":1,\"nid\":%lu}", (unsigned long)acked_nid);
-                        vTaskDelay(pdMS_TO_TICKS(50));
-                        xSemaphoreTake(lora_mutex, portMAX_DELAY);
-                        radio->transmit((uint8_t *)ack, strlen(ack));
-                        lora_rx_flag = false;
-                        radio->startReceive();
-                        xSemaphoreGive(lora_mutex);
-                        ESP_LOGI(TAG, "ACK sent");
-                    } else {
-                        xSemaphoreTake(lora_mutex, portMAX_DELAY);
-                        radio->startReceive();
-                        xSemaphoreGive(lora_mutex);
-                    }
-                } else {
-                    ESP_LOGW(TAG, "LoRa readData error: %d", state);
-                    xSemaphoreTake(lora_mutex, portMAX_DELAY);
-                    radio->startReceive();
-                    xSemaphoreGive(lora_mutex);
-                }
-            }
+        if (state != RADIOLIB_ERR_NONE) {
+            ESP_LOGW(TAG, "LoRa readData error: %d", state);
+            xSemaphoreTake(lora_mutex, portMAX_DELAY);
+            radio->startReceive();
+            xSemaphoreGive(lora_mutex);
+            continue;
         }
-        vTaskDelay(pdMS_TO_TICKS(10));
+
+        ESP_LOGI(TAG, "LoRa RX frame: %s", (char *)buf);
+        cJSON *json = cJSON_Parse((char *)buf);
+        if (!json) {
+            xSemaphoreTake(lora_mutex, portMAX_DELAY);
+            radio->startReceive();
+            xSemaphoreGive(lora_mutex);
+            continue;
+        }
+
+        cJSON *ts  = cJSON_GetObjectItem(json, "ts");
+        cJSON *sid = cJSON_GetObjectItem(json, "sid");
+        if (cJSON_IsNumber(ts) && cJSON_IsNumber(sid)
+            && (uint32_t)sid->valuedouble == star_id) {
+            long int epoch = (long int)ts->valuedouble;
+            if (epoch > 0) {
+                struct timeval tv = { .tv_sec = epoch, .tv_usec = 0 };
+                settimeofday(&tv, NULL);
+                time_synced = true;
+                ESP_LOGI(TAG, "System time synced via LoRa backend ACK: %ld", epoch);
+            }
+            cJSON_Delete(json);
+            xSemaphoreTake(lora_mutex, portMAX_DELAY);
+            radio->startReceive();
+            xSemaphoreGive(lora_mutex);
+            continue;
+        }
+
+        cJSON *nid = cJSON_GetObjectItem(json, "nid");
+        cJSON *act = cJSON_GetObjectItem(json, "act");
+        cJSON *val = cJSON_GetObjectItem(json, "val");
+        cJSON *dur = cJSON_GetObjectItem(json, "dur");
+
+        bool valid = false;
+        uint32_t acked_nid = 0;
+        if (cJSON_IsNumber(nid) && cJSON_IsString(act)
+            && cJSON_IsNumber(val) && cJSON_IsNumber(dur)) {
+            command_packet_t cp = {};
+            cp.node_id    = (uint32_t)nid->valuedouble;
+            strncpy(cp.actuator, act->valuestring, CMD_ACTUATOR_LEN - 1);
+            cp.value      = (uint8_t)val->valueint;
+            cp.duration_s = (uint16_t)dur->valueint;
+
+            xSemaphoreTake(pending_cmds_mutex, portMAX_DELAY);
+            pending_cmds[cp.node_id] = cp;
+            xSemaphoreGive(pending_cmds_mutex);
+
+            ESP_LOGI(TAG, "Command queued for node %lu: %s val=%d dur=%ds",
+                     (unsigned long)cp.node_id, cp.actuator, cp.value, cp.duration_s);
+            acked_nid = cp.node_id;
+            valid = true;
+        }
+        cJSON_Delete(json);
+
+        if (valid) {
+            char ack[32];
+            snprintf(ack, sizeof(ack), "{\"ack\":1,\"nid\":%lu}", (unsigned long)acked_nid);
+            vTaskDelay(pdMS_TO_TICKS(50));
+            xSemaphoreTake(lora_mutex, portMAX_DELAY);
+            radio->transmit((uint8_t *)ack, strlen(ack));
+            lora_notify_clear();
+            radio->startReceive();
+            xSemaphoreGive(lora_mutex);
+            ESP_LOGI(TAG, "ACK sent");
+        } else {
+            xSemaphoreTake(lora_mutex, portMAX_DELAY);
+            radio->startReceive();
+            xSemaphoreGive(lora_mutex);
+        }
     }
 }
 
 /**
- * Reception task, runs in its own FreeRTOS task and receives telemetry packets from ESP-NOW, 
- * timestamps them, learns the node's MAC for future replies, forwards the data to LoRa, updates the CoAP observable resource, 
- * pushes to the ring buffer for /dump, updates the display, and dispatches any pending commands to the node.
+ * Tries to synch the board time through LoRa or CoAP, stops when it manages to.
+ */
+static void time_sync_task(void *p) {
+    if (radio == nullptr) { vTaskDelete(NULL); return; }
+    ESP_LOGI(TAG, "Time-sync task running on Core %d", xPortGetCoreID());
+
+    char hello[64];
+    int hello_len = snprintf(hello, sizeof(hello),
+                             "{\"sid\":%lu,\"sync\":1}", (unsigned long)star_id);
+    TickType_t backoff = pdMS_TO_TICKS(5000);
+    const TickType_t backoff_max = pdMS_TO_TICKS(60000);
+
+    while (!time_synced) {
+        xSemaphoreTake(lora_mutex, portMAX_DELAY);
+        int state = radio->transmit((uint8_t *)hello, hello_len);
+        lora_notify_clear();
+        radio->startReceive();
+        xSemaphoreGive(lora_mutex);
+
+        if (state == RADIOLIB_ERR_NONE)
+            ESP_LOGI(TAG, "Sync hello sent, awaiting backend timestamp...");
+        else
+            ESP_LOGW(TAG, "Sync hello TX failed, code: %d", state);
+
+        for (TickType_t waited = 0; waited < backoff && !time_synced;
+             waited += pdMS_TO_TICKS(500))
+            vTaskDelay(pdMS_TO_TICKS(500));
+
+        if (backoff < backoff_max) backoff *= 2;
+    }
+
+    ESP_LOGI(TAG, "Clock synced, time_sync_task exiting.");
+    vTaskDelete(NULL);
+}
+
+/**
+ * Receives telemetry packets from ESP-NOW, timestamps them, learns the node's MAC for future replies, forwards the data to LoRa, updates the CoAP observable resource, 
  */
 void reception_task(void *pvParameters) {
     ESP_LOGI(TAG, "Reception Task running on Core %d", xPortGetCoreID());
@@ -525,7 +607,7 @@ void reception_task(void *pvParameters) {
             if (radio != nullptr) {
                 xSemaphoreTake(lora_mutex, portMAX_DELAY);
                 int state = radio->transmit(lora_payload);
-                lora_rx_flag = false;
+                lora_notify_clear();
                 radio->startReceive();
                 xSemaphoreGive(lora_mutex);
                 if (state == RADIOLIB_ERR_NONE) {
