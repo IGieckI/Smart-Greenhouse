@@ -8,7 +8,6 @@ from shared_core.preprocessing import build_advanced_features, get_extended_feat
 
 FUTURE_HORIZON_MINUTES = 180
 
-
 def recursive_multistep_inference(
     T_current_data: pd.DataFrame, 
     prophet_models: dict, 
@@ -53,6 +52,9 @@ def recursive_multistep_inference(
             env_forecasts[feat] = forecast['yhat'].values
         elif feat == 'is_indoor':
             env_forecasts[feat] = [board_indoor_val] * steps
+        else:
+            last_known_val = float(T_current_data[feat].iloc[-1]) if feat in T_current_data.columns else 0.0
+            env_forecasts[feat] = [last_known_val] * steps
             
     df_future_env = pd.DataFrame(env_forecasts)
     df_future_env.index = future_dates
@@ -83,6 +85,7 @@ def recursive_multistep_inference(
         history_temp = pd.concat([history, current_env_row])
         
         history_advanced = build_advanced_features(history_temp, features, use_lags, freq_minutes=freq_minutes)
+        history_advanced = history_advanced.ffill().bfill()
 
         if not use_lags:
             X_infer = history_advanced[expected_features].iloc[-1:]
@@ -96,8 +99,12 @@ def recursive_multistep_inference(
                 lags=task_lags, lag_target=lag_target, freq_minutes=freq_minutes
             )
             
+            history_lagged = history_lagged.ffill().bfill().fillna(0)
+            
             X_infer = history_lagged[expected_features].iloc[-1:]
-                
+            
+        X_infer = X_infer.fillna(0)
+
         pred_leaf = ml_model_pipeline.predict(X_infer)[0]
 
         current_env_row['leaf_temp'] = pred_leaf
@@ -112,7 +119,6 @@ def recursive_multistep_inference(
         history = history.tail(max_history_needed)
 
     return [p["value"] for p in target_predictions]
-
 
 
 
