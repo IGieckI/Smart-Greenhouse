@@ -3,3 +3,4 @@ httpx==0.24.1
 matplotlib==3.7.2
 pandas<2.2.0
 influxdb-client==1.36.0
+pillow==12.3.0

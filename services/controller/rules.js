@@ -18,7 +18,7 @@ const rules = [
 
             if (data.soil_moisture < config.SOIL_MOISTURE_LOWER_THRESHOLD) {
                 lowMoistureCounters[nodeId]++;
-                console.log("Warning: lower soil moisture level")
+                console.log("Warning: soil moisture value is low")
                 console.log("Actual patience level:", lowMoistureCounters[nodeId])
                 
                 if (lowMoistureCounters[nodeId] >= config.PUMP_PATIENCE_COUNT) {
@@ -26,7 +26,9 @@ const rules = [
                     return true;
                 }
             } else {
+                console.log("No allarm: resetting patience")
                 lowMoistureCounters[nodeId] = 0;
+                console.log("Actual patience level:", lowMoistureCounters[nodeId])
             }
 
             return false;

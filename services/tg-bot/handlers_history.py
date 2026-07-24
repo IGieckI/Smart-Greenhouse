@@ -39,8 +39,14 @@ async def _fetch_vpd_forecast(board_id: str, task: str = "t5", freq_min: int = 6
 async def handle_history_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    data = query.data
     
-    parts = query.data.split("_")
+    if data == "menu_history":
+        keyboard = build_keyboard([[("3 Hours", "hist_3"), ("6 Hours", "hist_6")], [("12 Hours", "hist_12"), ("24 Hours", "hist_24")]], "menu_main")
+        await query.edit_message_text("Select the history timeframe:", reply_markup=keyboard)
+        return
+    
+    parts = data.split("_")
     
     if len(parts) == 2:
         boards = await asyncio.to_thread(fetch_available_boards)

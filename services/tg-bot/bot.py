@@ -17,7 +17,6 @@ from handlers_history import handle_history_menu
 from handlers_training import handle_training_menu
 
 
-
 async def setup_commands(application: Application):
     await application.bot.set_my_commands([
         BotCommand("menu", "🎛 Open Control Panel"),
@@ -40,22 +39,9 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message:
         await update.message.reply_text(text, reply_markup=keyboard, parse_mode='Markdown')
     elif update.callback_query:
+        await update.callback_query.answer() 
         await update.callback_query.edit_message_text(text, reply_markup=keyboard, parse_mode='Markdown')
 
-async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    if query.data == "menu_history":
-        keyboard = build_keyboard([[("3 Hours", "hist_3"), ("6 Hours", "hist_6")], [("12 Hours", "hist_12"), ("24 Hours", "hist_24")]], "menu_main")
-        await query.edit_message_text("Select the history timeframe:", reply_markup=keyboard)
-    
-    elif query.data == "menu_predict":
-        keyboard = build_keyboard([[("🤝🏻 Ensemble Model", "pred_ens")], [("🧍🏻‍♂️ Single Model", "pred_std")]], "menu_main")
-        await query.edit_message_text("Which predictive engine do you want to use?", reply_markup=keyboard)
-    
-    elif query.data == "menu_main":
-        await show_main_menu(update, context)
 
 async def handle_reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("🔄 Requesting API server to reload models into RAM...")
@@ -65,9 +51,12 @@ async def handle_reload_command(update: Update, context: ContextTypes.DEFAULT_TY
     else:
         await msg.edit_text("⚠️ **Failed to reload models.** Check API logs.", parse_mode='Markdown')
 
+
 async def menu_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_main_menu(update, context)
     return ConversationHandler.END
+
+
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error("Unhandled exception while processing update", exc_info=context.error)
@@ -92,6 +81,11 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
             )
         except Exception:
             pass
+
+
+
+
+
 
 def main():
     if not TOKEN:
@@ -131,21 +125,17 @@ def main():
     )
     application.add_handler(actuator_conv)
 
-    application.add_handler(
-        CallbackQueryHandler(handle_main_menu, pattern="^menu_(predict|history|main)$")
-    )
-    application.add_handler(
-        CallbackQueryHandler(handle_history_menu, pattern="^hist_")
-    )
-    application.add_handler(
-        CallbackQueryHandler(handle_predict_menu, pattern="^pred_")
-    )
-    application.add_handler(
-        CallbackQueryHandler(handle_training_menu, pattern="^train_")
-    )
-    application.add_handler(
-        CallbackQueryHandler(handle_actuator_routing, pattern="^act_(menu$|board_|cmd_)")
-    )
+    
+    application.add_handler(CallbackQueryHandler(show_main_menu, pattern="^menu_main$"))
+    
+    application.add_handler(CallbackQueryHandler(handle_history_menu, pattern="^(hist_|menu_history$)"))
+    
+    application.add_handler(CallbackQueryHandler(handle_predict_menu, pattern="^(pred_|menu_predict$)"))
+    
+    application.add_handler(CallbackQueryHandler(handle_training_menu, pattern="^train_"))
+    
+    application.add_handler(CallbackQueryHandler(handle_actuator_routing, pattern="^act_(menu$|board_|cmd_)"))
+    
 
     application.add_error_handler(error_handler)
 

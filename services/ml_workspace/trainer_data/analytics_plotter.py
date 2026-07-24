@@ -233,7 +233,6 @@ def _generate_global_heatmap(all_data, model_names, key, category, out_dir, freq
                     else:
                         annot_dict[task][m] = "N/A"
                 else:
-                    # Per le performance (es. inference_time) c'è un solo valore
                     annot_dict[task][m] = f"{val_test:.3f}" if pd.notna(val_test) else "N/A"
             else:
                 df_dict[task][m] = np.nan

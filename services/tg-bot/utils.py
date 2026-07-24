@@ -2,9 +2,43 @@ import httpx
 import numpy as np
 import io
 import zipfile
+from PIL import Image
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import ContextTypes
 from config import logger
+
+
+def _ensure_valid_photo(img_bytes: bytes, max_dim: int = 3200, max_size_bytes: int = 4 * 1024 * 1024) -> bytes:
+    try:
+        img = Image.open(io.BytesIO(img_bytes))
+        width, height = img.size
+        file_size = len(img_bytes)
+
+        aspect_ratio = max(width / height, height / width) if height != 0 else 1
+
+        needs_downgrade = (
+            width > max_dim or 
+            height > max_dim or 
+            file_size > max_size_bytes or 
+            aspect_ratio > 20
+        )
+
+        if needs_downgrade:
+            img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+            
+            out_io = io.BytesIO()
+            img.convert("RGB").save(out_io, format="JPEG", quality=85)
+            return out_io.getvalue()
+            
+        return img_bytes
+    except Exception as e:
+        logger.error(f"Errore while resize photo: {e}")
+        return img_bytes
+
+
+
+
+
 
 async def fetch_api(url: str, payload: dict = None, timeout: float = 120.0, surface_errors: bool = False) -> dict:
     try:
@@ -30,8 +64,6 @@ async def fetch_api(url: str, payload: dict = None, timeout: float = 120.0, surf
         logger.error(f"API JSON Error at {url}: {e}")
         return {"error": "Could not reach the server."} if surface_errors else {}
 
-
-
 async def fetch_api_raw(url: str, timeout: float = 120.0) -> bytes:
     try:
         async with httpx.AsyncClient() as client:
@@ -44,17 +76,23 @@ async def fetch_api_raw(url: str, timeout: float = 120.0) -> bytes:
 
 
 
+
+
+
 async def unzip_and_send(update: Update, wait_msg, zip_bytes: bytes, title: str):
     try:
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
             media_group = []
             for filename in z.namelist():
-                if filename.endswith(".png"):
+                if filename.endswith(".png") or filename.endswith(".jpg"):
                     img_data = z.read(filename)
-                    media_group.append(InputMediaPhoto(media=img_data))
+                    
+                    safe_img_data = _ensure_valid_photo(img_data)
+                    
+                    media_group.append(InputMediaPhoto(media=safe_img_data))
 
             if not media_group:
-                await wait_msg.edit_text("⚠️ The ZIP archive is empty or contains no PNGs.")
+                await wait_msg.edit_text("⚠️ The ZIP archive is empty or contains no valid images.")
                 return
             
             chunks = [media_group[i:i + 10] for i in range(0, len(media_group), 10)]
@@ -79,6 +117,8 @@ def build_keyboard(buttons: list[list[tuple[str, str]]], back_data: str = None) 
     if back_data:
         keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data=back_data)])
     return InlineKeyboardMarkup(keyboard)
+
+
 
 async def check_spam_lock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     if context.user_data.get('is_processing'):

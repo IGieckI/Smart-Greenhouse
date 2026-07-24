@@ -293,56 +293,56 @@ def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> d
                 "regressor__max_features": ["sqrt", 1.0]
             }
         },
-        # "LightGBM": {
-        #     "model": Pipeline(scaler_only + [('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
-        #     "params": {
-        #         "regressor__n_estimators": [100, 300],
-        #         "regressor__learning_rate": [0.01, 0.05, 0.1],
-        #         "regressor__num_leaves": [31, 63],
-        #         "regressor__subsample": [0.8, 1.0] 
-        #     }
-        # },
-        # "LightGBM_no_diff": {
-        #     "model": Pipeline(drop_diff + scaler_only + [('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
-        #     "params": {
-        #         "regressor__n_estimators": [100, 300],
-        #         "regressor__learning_rate": [0.01, 0.05, 0.1],
-        #         "regressor__num_leaves": [31, 63],
-        #         "regressor__subsample": [0.8, 1.0] 
-        #     }
-        # },
-        # "SVR": {
-        #     "model": Pipeline(scaler_only + [('regressor', SVR())]),
-        #     "params": [
-        #         {
-        #             "regressor__kernel": ["linear"],
-        #             "regressor__C": [0.1, 1.0, 10.0],
-        #             "regressor__epsilon": [0.001, 0.01, 0.1]
-        #         },
-        #         {
-        #             "regressor__kernel": ["rbf"],
-        #             "regressor__C": [0.1, 1.0, 10.0],
-        #             "regressor__gamma": ["scale", 0.1, 0.01], 
-        #             "regressor__epsilon": [0.001, 0.01, 0.1]
-        #         }
-        #     ]
-        # },
-        # "SVR_no_diff": {
-        #     "model": Pipeline(drop_diff + scaler_only + [('regressor', SVR())]),
-        #     "params": [
-        #         {
-        #             "regressor__kernel": ["linear"],
-        #             "regressor__C": [0.1, 1.0, 10.0],
-        #             "regressor__epsilon": [0.001, 0.01, 0.1]
-        #         },
-        #         {
-        #             "regressor__kernel": ["rbf"],
-        #             "regressor__C": [0.1, 1.0, 10.0],
-        #             "regressor__gamma": ["scale", 0.1, 0.01], 
-        #             "regressor__epsilon": [0.001, 0.01, 0.1]
-        #         }
-        #     ]
-        # },
+        "LightGBM": {
+            "model": Pipeline(scaler_only + [('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
+            "params": {
+                "regressor__n_estimators": [100, 300],
+                "regressor__learning_rate": [0.01, 0.05, 0.1],
+                "regressor__num_leaves": [31, 63],
+                "regressor__subsample": [0.8, 1.0] 
+            }
+        },
+        "LightGBM_no_diff": {
+            "model": Pipeline(drop_diff + scaler_only + [('regressor', LGBMRegressor(random_state=42, verbose=-1, n_jobs=1))]),
+            "params": {
+                "regressor__n_estimators": [100, 300],
+                "regressor__learning_rate": [0.01, 0.05, 0.1],
+                "regressor__num_leaves": [31, 63],
+                "regressor__subsample": [0.8, 1.0] 
+            }
+        },
+        "SVR": {
+            "model": Pipeline(scaler_only + [('regressor', SVR())]),
+            "params": [
+                {
+                    "regressor__kernel": ["linear"],
+                    "regressor__C": [0.1, 1.0, 10.0],
+                    "regressor__epsilon": [0.001, 0.01, 0.1]
+                },
+                {
+                    "regressor__kernel": ["rbf"],
+                    "regressor__C": [0.1, 1.0, 10.0],
+                    "regressor__gamma": ["scale", 0.1, 0.01], 
+                    "regressor__epsilon": [0.001, 0.01, 0.1]
+                }
+            ]
+        },
+        "SVR_no_diff": {
+            "model": Pipeline(drop_diff + scaler_only + [('regressor', SVR())]),
+            "params": [
+                {
+                    "regressor__kernel": ["linear"],
+                    "regressor__C": [0.1, 1.0, 10.0],
+                    "regressor__epsilon": [0.001, 0.01, 0.1]
+                },
+                {
+                    "regressor__kernel": ["rbf"],
+                    "regressor__C": [0.1, 1.0, 10.0],
+                    "regressor__gamma": ["scale", 0.1, 0.01], 
+                    "regressor__epsilon": [0.001, 0.01, 0.1]
+                }
+            ]
+        },
     }
 
 def run_pipeline_for_task(task_name, config, df_data, freq_minutes):

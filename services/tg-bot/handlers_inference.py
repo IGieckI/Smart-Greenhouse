@@ -102,12 +102,22 @@ async def _process_prediction(update: Update, mode: str, task_or_group: str, boa
 
 
 
+
+
+
+
+
+
 async def handle_predict_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
     
-    if data == "pred_ens":
+    if data == "menu_predict":
+        keyboard = build_keyboard([[("🤝🏻 Ensemble Model", "pred_ens")], [("🧍🏻‍♂️ Single Model", "pred_std")]], "menu_main")
+        await query.edit_message_text("Which predictive engine do you want to use?", reply_markup=keyboard)
+    
+    elif data == "pred_ens":
         keyboard = build_keyboard([
             [("Group A (Uses TDS)", "pred_sel_ens_A")], 
             [("Group B (No TDS)", "pred_sel_ens_B")],
@@ -144,6 +154,13 @@ async def handle_predict_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 
+
+
+
+
+
+
+
 async def start_whatif(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -154,6 +171,7 @@ async def start_whatif(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
     await query.edit_message_text("🧪 **What-If Simulation**\nSelect the engine type:", reply_markup=keyboard, parse_mode='Markdown')
     return AWAIT_WHATIF_MODE
+
 
 async def choose_whatif_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -197,6 +215,8 @@ async def choose_whatif_board(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.edit_message_text("Select the greenhouse to apply the context to:", reply_markup=build_keyboard(buttons, "whatif_cancel"))
     return AWAIT_WHATIF_BOARD
 
+
+
 async def whatif_ask_values(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -216,6 +236,8 @@ async def whatif_ask_values(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await query.edit_message_text(text, parse_mode='Markdown')
     return AWAIT_WHATIF_VALUES
+
+
 
 async def process_whatif_values(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -253,6 +275,7 @@ async def process_whatif_values(update: Update, context: ContextTypes.DEFAULT_TY
         logger.error(f"What-If simulation failed: {e}")
         await wait_msg.edit_text("⚠️ Simulation failed while building the results. Send /menu to restart.")
     return ConversationHandler.END
+
 
 async def cancel_whatif(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Simulation cancelled. Send /menu to restart.")
