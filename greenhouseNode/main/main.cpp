@@ -88,8 +88,7 @@ static esp_err_t i2c_master_init(void) {
 float get_median(float* data, int size) {
     float temp[size];
     memcpy(temp, data, size * sizeof(float));
-    
-    // Bubble Sort
+
     for (int i = 0; i < size - 1; i++) {
         for (int j = i + 1; j < size; j++) {
             if (temp[i] > temp[j]) {
@@ -151,7 +150,6 @@ float get_leaf_temp(float ambient_temp) {
 }
 
 void setup() {
-    // Initialize NVS (required for Wi-Fi)
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -159,7 +157,6 @@ void setup() {
     }
     ESP_ERROR_CHECK(ret);
 
-    // Initialize Wi-Fi and ESP-NOW
     wifi_init();
     if (esp_now_init() != ESP_OK) {
         ESP_LOGE(TAG, "Error initializing ESP-NOW");
@@ -184,14 +181,12 @@ void setup() {
         return;
     }
 
-    // Set Node ID using MAC Address (last 4 bytes of the MAC address are used)
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
     uint32_t mac_id = ((uint32_t)mac[2] << 24) | ((uint32_t)mac[3] << 16) | ((uint32_t)mac[4] << 8) | (uint32_t)mac[5];
     myData.node_id = mac_id;
     ESP_LOGI(TAG, "Device Node ID set to: %u", mac_id);
 
-    // Initialize Sensors
     adc_oneshot_unit_handle_t shared_adc_handle;
     adc_oneshot_unit_init_cfg_t init_config = {
         .unit_id = TDS_ADC_UNIT,
@@ -225,7 +220,6 @@ void setup() {
 
     envSensor.init();
 
-    // Initialize all actuators (GPIO output; LEDC channel for PWM types)
     ledc_timer_config_t ledc_timer = {};
     ledc_timer.speed_mode      = LEDC_LOW_SPEED_MODE;
     ledc_timer.duty_resolution = LEDC_TIMER_10_BIT;
@@ -245,7 +239,7 @@ void setup() {
         gpio_config(&io);
 
         if (ACTUATOR_TABLE[i].type == ACT_PWM) {
-            ledc_channel_config_t ch = {}; // Inizializza a zero per evitare warning
+            ledc_channel_config_t ch = {};
             ch.gpio_num   = ACTUATOR_TABLE[i].pin;
             ch.speed_mode = LEDC_LOW_SPEED_MODE;
             ch.channel    = ACTUATOR_TABLE[i].ledc_ch;
@@ -267,7 +261,6 @@ extern "C" void app_main(void)
 {
     setup();
 
-    // Arrays to hold samples for median calculation
     float water_temps[NUM_SAMPLES];
     float tds_values[NUM_SAMPLES];
     float moistures[NUM_SAMPLES];
@@ -277,7 +270,6 @@ extern "C" void app_main(void)
     float pressures[NUM_SAMPLES];
     float leaf_temps[NUM_SAMPLES];
 
-    // Take multiple readings to populate the arrays
     for(int i = 0; i < NUM_SAMPLES; i++) {
         water_temps[i] = tempSensor.readTemperatureC(); 
         tdsSensor.setTemperature(water_temps[i]);
@@ -327,7 +319,6 @@ extern "C" void app_main(void)
     xSemaphoreTake(command_sem, 0);
     esp_now_send(central_mac, (uint8_t *)&myData, sizeof(myData));
 
-    // Wait up to 1.5s for an actuation command from the Star.
     if (xSemaphoreTake(command_sem, pdMS_TO_TICKS(1500)) == pdTRUE) {
         ESP_LOGI(TAG, "Command: %.*s val=%d dur=%ds",
                  CMD_ACTUATOR_LEN, received_command.actuator,
@@ -361,11 +352,9 @@ extern "C" void app_main(void)
         }
     }
 
-    // Get milliseconds since boot to calculate how long the node has been awake
-    int64_t awake_time_ms = esp_timer_get_time() / 1000; 
+    int64_t awake_time_ms = esp_timer_get_time() / 1000;
     int64_t sleep_time_ms = DEEP_SLEEP_MS - awake_time_ms;
 
-    // Check if the execution time exceeded DEEP_SLEEP_MS to avoid negative sleep time
     if (sleep_time_ms < 0) {
         sleep_time_ms = 0; 
     }
