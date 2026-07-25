@@ -12,10 +12,10 @@ FIGSIZE_STANDARD = (16, 10)
 FIGSIZE_WIDE = (20, 10)
 FIGSIZE_GRID_BASE = 11
 FIGSIZE_HEATMAP_BASE = 9
-FONT_TITLE = 70
-FONT_AXIS = 50
-FONT_TICK = 40
-FONT_LEGEND = 38
+FONT_TITLE = 30
+FONT_AXIS = 20
+FONT_TICK = 20
+FONT_LEGEND = 20
 
 global_subtitle = "Red box highlight best MAE performer"
 
@@ -89,7 +89,7 @@ def _plot_metrics_comparison(models_data, model_names, task_name, output_dir, be
     
     ax.legend(fontsize=FONT_LEGEND)
     plt.tight_layout()
-    plt.savefig(file_path)
+    plt.savefig(file_path, bbox_inches='tight')
     plt.close()
     return file_path
 
@@ -120,7 +120,7 @@ def _plot_timing_comparison(models_data, model_names, task_name, output_dir, bes
 
     plt.title(f'[{task_name.upper()}] Training vs Inference Times', fontsize=FONT_TITLE)
     fig.tight_layout()
-    plt.savefig(file_path)
+    plt.savefig(file_path, bbox_inches='tight')
     plt.close()
     return file_path
 
@@ -157,7 +157,7 @@ def _plot_hyperparameters_table_task(models_data, model_names, task_name, output
     
     plt.title(f'[{task_name.upper()}] Best Hyperparameters Summary\n{global_subtitle}', pad=20, fontsize=FONT_TITLE)
     plt.tight_layout()
-    plt.savefig(file_path)
+    plt.savefig(file_path, bbox_inches='tight')
     plt.close()
     return file_path
 
@@ -264,48 +264,78 @@ def _generate_global_heatmap(all_data, model_names, key, category, out_dir, freq
     plt.yticks(fontsize=FONT_TICK)
     
     plt.tight_layout()
-    plt.savefig(file_path)
+    plt.savefig(file_path, bbox_inches='tight')
     plt.close()
     return file_path
 
 def _generate_global_params_grid(all_data, model_names, out_dir, freq, best_models):
     file_path = os.path.join(out_dir, "global_best_params.png")
     tasks = sorted(list(all_data.keys()))
+
     cell_text = []
-    
+    row_line_counts = []  
+
     for t in tasks:
         row = []
+        max_lines = 1
         for m in model_names:
             if m in all_data[t]:
                 params = all_data[t][m].get("best_params", {})
                 p_str = "\n".join([f"{k.split('__')[-1]}: {v}" for k, v in params.items()])
-                row.append(p_str if p_str else "Default")
+                cell_val = p_str if p_str else "Default"
             else:
-                row.append("N/A")
+                cell_val = "N/A"
+            row.append(cell_val)
+            max_lines = max(max_lines, cell_val.count("\n") + 1)
         cell_text.append(row)
-        
+        row_line_counts.append(max_lines)
+
     if not cell_text:
         return None
 
-    fig, ax = plt.subplots(figsize=(max(FIGSIZE_WIDE[0], 4 * len(model_names)), max(FIGSIZE_WIDE[1], 2.5 * len(tasks))))
+    line_height_in = 0.32
+    row_padding_in = 0.15
+    header_height_in = 1.0
+    top_margin_in = 1.6
+
+    n_cols = len(model_names)
+    body_height_in = sum(lc * line_height_in + row_padding_in for lc in row_line_counts)
+    fig_height_in = top_margin_in + header_height_in + body_height_in
+    fig_width_in = max(FIGSIZE_WIDE[0], 3.2 * n_cols)
+
+    fig, ax = plt.subplots(figsize=(fig_width_in, fig_height_in))
     ax.axis('off')
-    
-    table = ax.table(cellText=cell_text, rowLabels=[t.upper() for t in tasks], colLabels=model_names, loc='center', cellLoc='center')
+
+    table = ax.table(cellText=cell_text, rowLabels=[t.upper() for t in tasks],
+                      colLabels=model_names, loc='center', cellLoc='center')
     table.auto_set_font_size(False)
     table.set_fontsize(FONT_TICK)
-    table.scale(1, 6)
-    
+    table.auto_set_column_width(col=list(range(n_cols)))
+
+    total_table_height_in = header_height_in + body_height_in
+    header_frac = header_height_in / total_table_height_in
+
+    for c_idx in range(n_cols):
+        table[0, c_idx].set_height(header_frac)
+
+    for r_idx, lc in enumerate(row_line_counts):
+        row_h_in = lc * line_height_in + row_padding_in
+        row_frac = row_h_in / total_table_height_in
+        for c_idx in range(n_cols):
+            table[r_idx + 1, c_idx].set_height(row_frac)
+        table[r_idx + 1, -1].set_height(row_frac)
+
     for r_idx, task in enumerate(tasks):
         best_m = best_models.get(task)
         if best_m in model_names:
             c_idx = model_names.index(best_m)
-            cell = table[r_idx + 1, c_idx] 
+            cell = table[r_idx + 1, c_idx]
             cell.set_edgecolor('red')
             cell.set_linewidth(4)
-    
+
     plt.title(f"BEST HYPERPARAMETERS ({freq}m)\n{global_subtitle}", pad=20, fontsize=FONT_TITLE)
     plt.tight_layout()
-    plt.savefig(file_path)
+    plt.savefig(file_path, bbox_inches='tight')
     plt.close()
     return file_path
 
