@@ -122,12 +122,6 @@ def fetch_history_data(board_id: str, hours: int) -> pd.DataFrame:
 
 
 def fetch_history_with_preds(board_id: str, hours_past: int, hours_future: int = 3, min_window: int = 6) -> pd.DataFrame:
-    """ Dedicated fetcher for History Plots. Grabs future data & aligns timestamps.
-
-    Anchors the window to 'now'. If the board is lagging/offline and that window is
-    empty, falls back to the most recent `hours_past` of data that actually exists,
-    so a stale board still renders its latest history instead of reporting "no data".
-    """
     now = datetime.utcnow()
     try:
         with InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG) as client:

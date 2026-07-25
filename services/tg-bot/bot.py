@@ -43,9 +43,6 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.edit_message_text(text, reply_markup=keyboard, parse_mode='Markdown')
 
 
-async def block_stray_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer("⚠️ Please send a text message or /cancel.", show_alert=True)
-
 async def menu_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_main_menu(update, context)
     return ConversationHandler.END
@@ -106,10 +103,7 @@ def main():
             AWAIT_WHATIF_MODE: [CallbackQueryHandler(choose_whatif_task, pattern='^(whatif_mode_|whatif_cancel)')],
             AWAIT_WHATIF_TASK: [CallbackQueryHandler(choose_whatif_board, pattern='^(whatif_task_|whatif_cancel)')],
             AWAIT_WHATIF_BOARD: [CallbackQueryHandler(whatif_ask_values, pattern='^(whatif_board_|whatif_cancel)')],
-            AWAIT_WHATIF_VALUES: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, process_whatif_values),
-                CallbackQueryHandler(block_stray_callbacks, pattern='.*')
-            ]
+            AWAIT_WHATIF_VALUES: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_whatif_values)]
         },
         fallbacks=[
             CommandHandler('cancel', cancel_whatif),
@@ -122,10 +116,7 @@ def main():
     actuator_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_custom_command, pattern='^act_custom_')],
         states={
-            AWAIT_ACT_CUSTOM: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, process_custom_command),
-                CallbackQueryHandler(block_stray_callbacks, pattern='.*')
-            ]
+            AWAIT_ACT_CUSTOM: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_custom_command)]
         },
         fallbacks=[
             CommandHandler('cancel', cancel_custom),
@@ -149,7 +140,7 @@ def main():
 
     application.add_error_handler(error_handler)
 
-    logger.info("GJGreenhousBot initialized and listening...")
+    logger.info("GJGreenhouseBot initialized and listening...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":

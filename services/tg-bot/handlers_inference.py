@@ -8,17 +8,7 @@ from data_fetcher import fetch_available_boards, fetch_history_with_preds
 from plotting import create_series_plot, create_vpd_plot, PlotLabels
 
 
-import asyncio
-import pandas as pd
-from telegram import Update, InputMediaPhoto
-from telegram.ext import ContextTypes, ConversationHandler
-from config import INFERENCE_URL, AWAIT_WHATIF_MODE, AWAIT_WHATIF_TASK, AWAIT_WHATIF_BOARD, AWAIT_WHATIF_VALUES, logger
-from utils import fetch_api, build_keyboard, check_spam_lock
-from data_fetcher import fetch_available_boards, fetch_history_with_preds
-from plotting import create_series_plot, create_vpd_plot, PlotLabels
-
 def _build_prediction_media(df_hist: pd.DataFrame, data: dict, mode: str, task: str, board_id: str, is_whatif: bool = False):
-    """Data Parser: Estrae le serie temporali e prepara l'array di InputMediaPhoto e il riepilogo testuale."""
     leaf_data = data.get("leaf_temperature", {})
     env_data = data.get("environmental_data", {})
     vpd_data = data.get("vpd", {})
@@ -99,110 +89,12 @@ async def _process_prediction(update: Update, mode: str, task_or_group: str, boa
         return
 
     df_hist = await asyncio.to_thread(fetch_history_with_preds, board_id, 3, 3, 6)
-    
-    # Costruiamo il payload
+
     plots, summary = _build_prediction_media(df_hist, data, mode, task_or_group, board_id, is_whatif=False)
     
-    # Inviamo fisicamente
     await update.get_bot().send_media_group(chat_id=wait_message.chat_id, media=plots)
     await update.get_bot().send_message(chat_id=wait_message.chat_id, text=summary, parse_mode='Markdown')
     await wait_message.delete()
-
-
-async def _send_prediction_results(update: Update, wait_msg, df_hist: pd.DataFrame, data: dict, mode: str, task: str, board_id: str, is_whatif: bool = False):
-    leaf_data = data.get("leaf_temperature", {})
-    env_data = data.get("environmental_data", {})
-    vpd_data = data.get("vpd", {})
-    ens_details = data.get("ensemble_details", {})
-
-    series_temp = {}
-    prophet_series = {}
-
-    if est_hist := leaf_data.get("historical", []):
-        series_temp["Est. History (Soft Sensor)"] = est_hist
-
-    proj_name = PlotLabels.WHATIF_PROJ if is_whatif else (PlotLabels.BLENDED if mode == "ensemble" else PlotLabels.STD_PRED)
-    
-    if mode == "ensemble":
-        if p := leaf_data.get("forecast", []):
-            series_temp[proj_name] = p
-        if p := ens_details.get("forecast_env", []):
-            series_temp[PlotLabels.ENV] = p
-        if p := ens_details.get("forecast_auto", []):
-            series_temp[PlotLabels.AUTO] = p
-    elif mode == "standard":
-        if p := leaf_data.get("forecast", []):
-            series_temp[proj_name] = p
-
-    if env_hist := env_data.get("historical", {}):
-        if air_h := env_hist.get("air_temp", []):
-            prophet_series[PlotLabels.AIR_HIST] = air_h
-        if hum_h := env_hist.get("humidity", []):
-            prophet_series[PlotLabels.HUM_HIST] = hum_h
-        
-    if env_forecast := env_data.get("forecast", {}):
-        if air_f := env_forecast.get("air_temp", []):
-            prophet_series[PlotLabels.AIR_FC] = air_f
-        if hum_f := env_forecast.get("humidity", []):
-            prophet_series[PlotLabels.HUM_FC] = hum_f
-
-    if leaf_h := leaf_data.get("historical", []): prophet_series[PlotLabels.LEAF_HIST] = leaf_h
-    if leaf_f := leaf_data.get("forecast", []):
-        prophet_series[PlotLabels.LEAF_FC] = leaf_f
-
-    historical_vpd = vpd_data.get("historical", [])
-    future_vpd = vpd_data.get("forecast", [])
-
-    plots = []
-    
-    hide_real = bool(series_temp.get(PlotLabels.SOFT_HIST))
-    title_prefix = "What-If Simulation" if is_whatif else "Temp. Prediction"
-
-    plots.append(InputMediaPhoto(media=create_series_plot(df_hist, series_temp, f"{title_prefix}: {task.upper()}", hide_real_history = hide_real)))
-    
-    if prophet_series:
-        plots.append(InputMediaPhoto(media=create_series_plot(pd.DataFrame(), prophet_series, f"{title_prefix} Prophet Forecast", hide_real_history = True)))
-
-    if (historical_vpd) or (future_vpd): 
-        plots.append(InputMediaPhoto(media=create_vpd_plot(df_hist, future_vpd, historical_vpd)))
-
-    action_type = "What-If Simulation" if is_whatif else "ML Prediction"
-    summary = (
-        f"✅ **Request Completed**\n"
-        f"**Action:** {action_type} ({mode.capitalize()})\n"
-        f"**Target:** Unit ({board_id})\n"
-        f"**Task/Group:** {task.upper()}\n"
-    )
-
-    weights = ens_details.get("weights", {})
-    if (mode == "ensemble") and (weights):
-        w_auto = weights.get("autoregressive", 0) * 100
-        w_env = weights.get("environmental", 0) * 100
-        summary += (
-            f"\n⚖️ **Ensemble Weights:**\n"
-            f" • Autoregressive: {w_auto:.1f}%\n"
-            f" • Environmental: {w_env:.1f}%\n"
-        )
-
-    await update.get_bot().send_media_group(chat_id=wait_msg.chat_id, media=plots)
-    await update.get_bot().send_message(chat_id=wait_msg.chat_id, text=summary, parse_mode='Markdown')
-    await wait_msg.delete()
-
-
-# async def _process_prediction(update: Update, mode: str, task_or_group: str, board_id: str, wait_message, freq_min: int = 6):
-#     endpoint = f"{INFERENCE_URL}/predict/{freq_min}m/{mode}/{task_or_group}/latest?board_id={board_id}"
-#     data = await fetch_api(endpoint)
-    
-#     if not data:
-#         await wait_message.edit_text("⚠️ **Timeout or Network Error from API Server.**")
-#         return
-
-#     df_hist = await asyncio.to_thread(fetch_history_with_preds, board_id, 3, 3, 6)
-#     await _send_prediction_results(update, wait_message, df_hist, data, mode, task_or_group, board_id, is_whatif=False)
-
-
-
-
 
 
 
@@ -335,7 +227,8 @@ async def whatif_ask_values(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📝 _Example:_\n`25.5 60 1013 22.0 400 45 10000`\n"
         "_(Type /cancel to exit)_"
     )
-    await query.edit_message_text(text, parse_mode='Markdown')
+
+    await query.edit_message_text(text, parse_mode='Markdown', reply_markup=None)
     return AWAIT_WHATIF_VALUES
 
 
@@ -369,7 +262,6 @@ async def process_whatif_values(update: Update, context: ContextTypes.DEFAULT_TY
 
         df_hist = await asyncio.to_thread(fetch_history_with_preds, board_id, 3, 3, 6)
         
-        # Riutilizziamo la stessa logica di format
         plots, summary = _build_prediction_media(df_hist, data, mode, task, board_id, is_whatif=True)
         
         await update.get_bot().send_media_group(chat_id=wait_msg.chat_id, media=plots)
@@ -380,47 +272,8 @@ async def process_whatif_values(update: Update, context: ContextTypes.DEFAULT_TY
         logger.error(f"What-If simulation failed: {e}")
         await wait_msg.edit_text("⚠️ Simulation failed while building the results. Send /menu to restart.")
     
-    # Rimuoviamo il ritorno a END per permettere testing continuo!
     await update.message.reply_text("🧪 **Want to test another configuration?**\nSend 7 new values or /cancel to exit.")
     return AWAIT_WHATIF_VALUES
-
-
-# async def process_whatif_values(update: Update, context: ContextTypes.DEFAULT_TYPE):
-#     text = update.message.text
-#     try:
-#         vals = [float(x.strip().replace(',', '.')) for x in text.split()]
-#         if len(vals) != 7:
-#             raise ValueError
-#     except ValueError:
-#         await update.message.reply_text("⚠️ Invalid format. Exactly 7 numbers are required. Try again:")
-#         return AWAIT_WHATIF_VALUES
-
-#     mode = context.user_data.get('wi_mode')
-#     task = context.user_data.get('wi_task')
-#     board_id = context.user_data.get('wi_board')
-#     if (not (mode and task) and (board_id)):
-#         await update.message.reply_text("⚠️ Simulation context lost. Send /menu to restart.")
-#         return ConversationHandler.END
-
-#     wait_msg = await update.message.reply_text("🧪 Contacting the ML Server for simulation...")
-#     payload = {
-#         "air_temp": vals[0], "humidity": vals[1], "pressure": vals[2],
-#         "water_temp": vals[3], "tds": vals[4], "soil_moisture": vals[5], "light_lux": vals[6]
-#     }
-#     endpoint = f"{INFERENCE_URL}/predict/6m/{mode}/{task}/manual?board_id={board_id}"
-
-#     try:
-#         data = await fetch_api(endpoint, payload=payload)
-#         if not data:
-#             await wait_msg.edit_text("⚠️ **Timeout or Network Error from API Server.**")
-#             return ConversationHandler.END
-
-#         df_hist = await asyncio.to_thread(fetch_history_with_preds, board_id, 3, 3, 6)
-#         await _send_prediction_results(update, wait_msg, df_hist, data, mode, task, board_id, is_whatif=True)
-#     except Exception as e:
-#         logger.error(f"What-If simulation failed: {e}")
-#         await wait_msg.edit_text("⚠️ Simulation failed while building the results. Send /menu to restart.")
-#     return ConversationHandler.END
 
 
 async def cancel_whatif(update: Update, context: ContextTypes.DEFAULT_TYPE):

@@ -76,7 +76,8 @@ async def start_custom_command(update: Update, context: ContextTypes.DEFAULT_TYP
         "📝 _Example:_\n"
         "`pump 200 30`\n\n"
         "_(Type /cancel to exit)_",
-        parse_mode='Markdown'
+        parse_mode='Markdown',
+        reply_markup=None
     )
     return AWAIT_ACT_CUSTOM
 

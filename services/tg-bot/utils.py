@@ -32,7 +32,7 @@ def _ensure_valid_photo(img_bytes: bytes, max_dim: int = 3200, max_size_bytes: i
             
         return img_bytes
     except Exception as e:
-        logger.error(f"Errore while resize photo: {e}")
+        logger.error(f"Error while resizing photo: {e}")
         return img_bytes
 
 
