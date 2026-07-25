@@ -1228,8 +1228,8 @@
     ]
   },
   "time": {
-    "from": "2026-07-01T21:33:18.182Z",
-    "to": "2026-07-02T03:38:42.194Z"
+    "from": "now-24h",
+    "to": "now"
   },
   "timepicker": {
     "refresh_intervals": [

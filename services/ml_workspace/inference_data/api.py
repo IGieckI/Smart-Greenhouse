@@ -15,11 +15,11 @@ from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
 sys.path.append('/app')
-from shared_core.data_sync import sync_clean_bucket
+from shared_core.data_sync import sync_clean_bucket, execute_influx_query_to_df
 from shared_core.tasks import TASKS, GROUPS, ENV_FEATURES
 from shared_core.config import *
-from shared_core.preprocessing import build_advanced_features, DropDiffFeatures
-from .predictor import recursive_multistep_inference, ensemble_multistep_inference
+from shared_core.preprocessing import build_advanced_features
+from .predictor import recursive_multistep_inference, ensemble_multistep_inference, get_model_expected_features
 from .sensor_payload import SensorData
 
 app = FastAPI(title="Greenhouse IoT Inference API")
@@ -123,25 +123,18 @@ def fetch_historical_data(board_id: str, limit: int, freq_minutes: int) -> pd.Da
           |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
           |> tail(n: {limit})
     '''
-    try:
-        df = client.query_api().query_data_frame(query)
-        if isinstance(df, list):
-            if len(df) == 0: 
-                return pd.DataFrame()
-            df = pd.concat(df, ignore_index=True)
-        if not df.empty:
-            df.set_index('_time', inplace=True)
-            df.sort_index(inplace=True)
-            
-            df = df[~df.index.duplicated(keep='last')]
-            if USE_INDOOR_FEATURE:
-                df['is_indoor'] = df['id_board'].map(BOARD_ENV_MAP).fillna(0).astype(int)
-            
-        return df
-    except Exception as e:
-        print(f"InfluxDB Query Error: {e}")
-        return pd.DataFrame()
 
+    df = execute_influx_query_to_df(client.query_api(), query)
+    
+    if not df.empty:
+        df.set_index('_time', inplace=True)
+        df.sort_index(inplace=True)
+        
+        df = df[~df.index.duplicated(keep='last')]
+        if USE_INDOOR_FEATURE:
+            df['is_indoor'] = df['id_board'].map(BOARD_ENV_MAP).fillna(0).astype(int)
+            
+    return df
 
 def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: str, 
                                custom_data: Optional[SensorData] = None, 
@@ -174,23 +167,16 @@ def _prepare_inference_context(freq_minutes: int, board_id: str, task_or_group: 
         soft_features = soft_config["features"].copy()
         if (USE_INDOOR_FEATURE) and ('is_indoor' not in soft_features):
             soft_features.append('is_indoor')
-        
+
         df_history_adv = build_advanced_features(
             df_history, 
             soft_features, 
             soft_config.get("use_lags", False),
             freq_minutes=freq_minutes
         )
+
+        expected_features = get_model_expected_features(soft_model)
         
-        if hasattr(soft_model, 'feature_names_in_'):
-            expected_features = list(soft_model.feature_names_in_)
-        else:
-            step_idx = 1 if (hasattr(soft_model, 'named_steps') and 'drop_diff' in soft_model.named_steps) else 0
-            expected_features = list(soft_model.steps[step_idx][1].feature_names_in_)
-
-        if (hasattr(soft_model, 'named_steps')) and ('drop_diff' in soft_model.named_steps):
-            expected_features = [f for f in expected_features if not f.endswith('_diff')]
-
         valid_idx = df_history_adv.dropna(subset=expected_features).index
         
         if not valid_idx.empty:
@@ -498,13 +484,15 @@ def _run_ensemble_inference(freq_minutes: int, group: str, board_id: str,
                            hist_air, hist_hum,
                            fut_air, fut_hum,
                            hist_vpd, fut_vpd)
-    tmp["group"] = group
     ens_det = {
             "weights": result.get("weights", {}),
             "forecast_env": format_series(future_timestamps, result.get("forecast_env", [])),
             "forecast_auto": format_series(future_timestamps, result.get("forecast_auto", []))
         }
+
+    tmp["group"] = group
     tmp["ensemble_details"] = ens_det
+
     return tmp
 
 @app.get("/predict/{freq_minutes}m/ensemble/{group}/latest")

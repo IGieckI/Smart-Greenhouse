@@ -1,4 +1,3 @@
-import os
 import pandas as pd
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
@@ -6,19 +5,28 @@ from shared_core.config import *
 from shared_core.preprocessing import apply_board_pipeline
 
 
+def execute_influx_query_to_df(query_api, query: str) -> pd.DataFrame:
+    try:
+        df = query_api.query_data_frame(query)
+        if isinstance(df, list):
+            if len(df) == 0:
+                return pd.DataFrame()
+            df = pd.concat(df, ignore_index=True)
+        return df
+    except Exception as e:
+        print(f"InfluxDB Query Error: {e}")
+        return pd.DataFrame()
+
 
 def _get_max_time(query_api, query):
-    try:
-        res = query_api.query_data_frame(query)
-        if isinstance(res, list):
-            res = pd.concat(res, ignore_index=True) if len(res) > 0 else pd.DataFrame()
-        if (res is not None) and (not res.empty) and ('_time' in res.columns):
-            max_val = res['_time'].max()
-            if pd.notna(max_val):
-                return max_val
-    except Exception as e:
-        print(f"[_get_max_time] Error extracting max time: {e}")
+    df = execute_influx_query_to_df(query_api, query)
+    if (df is not None) and (not df.empty) and ('_time' in df.columns):
+        max_val = df['_time'].max()
+        if pd.notna(max_val):
+            return max_val
     return None
+
+
 
 
 
@@ -63,11 +71,9 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
           |> filter(fn: (r) => r._measurement == "sensor_measurements")
           |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
     '''
-    
-    df_raw = query_api.query_data_frame(query_raw)
-    if isinstance(df_raw, list):
-        df_raw = pd.concat(df_raw, ignore_index=True) if len(df_raw) > 0 else pd.DataFrame()
 
+    df_raw = execute_influx_query_to_df(query_api, query_raw)
+    
     if (df_raw is not None) and (not df_raw.empty):
         print(f"[{local_tag} {freq_minutes}m] Pre-processing {len(df_raw)} raw records...")
 
@@ -146,10 +152,9 @@ def sync_clean_bucket(influx_url, influx_token, influx_org, freq_minutes=6):
     '''
 
     try:
-        df_caveaux = query_api.query_data_frame(query_caveaux)
-        if isinstance(df_caveaux, list):
-            df_caveaux = pd.concat(df_caveaux, ignore_index=True) if len(df_caveaux) > 0 else pd.DataFrame()
-            
+        df_caveaux = execute_influx_query_to_df(query_api, query_caveaux)
+
+        
         if (df_caveaux is not None) and (not df_caveaux.empty):
             cav_points = []
             for _, row in df_caveaux.iterrows():

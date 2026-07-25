@@ -138,8 +138,8 @@ public:
 
   void delayMicroseconds(unsigned long us) override { esp_rom_delay_us(us); }
 
-  // ADD THIS FUNCTION: Let FreeRTOS breathe during blocking RadioLib loops
-  void yield() override { vTaskDelay(1); } // Guarantee at least 1 RTOS tick
+  // Let FreeRTOS breathe during blocking RadioLib loops
+  void yield() override { vTaskDelay(1); }
 
   unsigned long millis() override {
     return (unsigned long)(esp_timer_get_time() / 1000ULL);

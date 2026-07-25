@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 import sys
 
 sys.path.append('/app')
@@ -7,6 +6,19 @@ from shared_core.config import *
 from shared_core.preprocessing import build_advanced_features, get_extended_features_list, create_lagged_features, DropDiffFeatures
 
 FUTURE_HORIZON_MINUTES = 180
+
+def get_model_expected_features(model) -> list:
+    if hasattr(model, 'feature_names_in_'):
+        feats = list(model.feature_names_in_)
+    else:
+        step_idx = 1 if (hasattr(model, 'named_steps') and 'drop_diff' in model.named_steps) else 0
+        feats = list(model.steps[step_idx][1].feature_names_in_)
+        
+    if (hasattr(model, 'named_steps')) and ('drop_diff' in model.named_steps):
+        feats = [f for f in feats if not f.endswith('_diff')]
+    return feats
+
+
 
 def recursive_multistep_inference(
     T_current_data: pd.DataFrame, 
@@ -67,16 +79,7 @@ def recursive_multistep_inference(
         
     history = T_current_data[cols_to_keep].copy()
 
-    if hasattr(ml_model_pipeline, 'feature_names_in_'):
-        expected_features = list(ml_model_pipeline.feature_names_in_)
-    else:
-        step_idx = 1 
-        if ((hasattr(ml_model_pipeline, 'named_steps')) and ('drop_diff' in ml_model_pipeline.named_steps)):
-            step_idx = 0
-        expected_features = list(ml_model_pipeline.steps[step_idx][1].feature_names_in_)
-
-    if (hasattr(ml_model_pipeline, 'named_steps')) and ('drop_diff' in ml_model_pipeline.named_steps):
-        expected_features = [f for f in expected_features if not f.endswith('_diff')]
+    expected_features = get_model_expected_features(ml_model_pipeline)
 
     for step_i in range(steps):
         current_env_row = df_future_env.iloc[[step_i]].copy()
@@ -122,6 +125,8 @@ def recursive_multistep_inference(
 
 
 
+
+
 def ensemble_multistep_inference(
     T_current_data: pd.DataFrame,
     prophet_models: dict,
@@ -154,14 +159,9 @@ def ensemble_multistep_inference(
     
     generated_history = []
     if not X_soft.empty:
-        if hasattr(ml_models["soft"], 'feature_names_in_'):
-            soft_expected_features = list(ml_models["soft"].feature_names_in_)
-        else:
-            step_idx = 1 if (hasattr(ml_models["soft"], 'named_steps') and 'drop_diff' in ml_models["soft"].named_steps) else 0
-            soft_expected_features = list(ml_models["soft"].steps[step_idx][1].feature_names_in_)
 
-        if (hasattr(ml_models["soft"], 'named_steps')) and ('drop_diff' in ml_models["soft"].named_steps):
-             soft_expected_features = [f for f in soft_expected_features if not f.endswith('_diff')]
+        soft_expected_features = get_model_expected_features(ml_models["soft"])
+
 
         X_soft = X_soft[soft_expected_features]
         

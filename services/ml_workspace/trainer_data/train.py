@@ -21,6 +21,8 @@ from sklearn.preprocessing import PolynomialFeatures
 from prophet import Prophet
 from prophet.serialize import model_to_json
 
+from shared_core.data_sync import execute_influx_query_to_df
+
 sys.path.append('/app')
 from shared_core.preprocessing import build_advanced_features, get_extended_features_list, create_lagged_features, DropDiffFeatures
 from shared_core.config import *
@@ -38,22 +40,20 @@ def fetch_clean_data(freq_minutes: int):
           |> filter(fn: (r) => r._measurement == "sensor_measurements")
           |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
     '''
-    df = client.query_api().query_data_frame(query)
-    if isinstance(df, list):
-        if len(df) == 0: 
-            print(f"[fetch_clean_data] Warning: No data found in bucket {bucket_clean}.")
-            return pd.DataFrame()
-        df = pd.concat(df, ignore_index=True)
+    df = execute_influx_query_to_df(client.query_api(), query)
+    
+    if df.empty:
+        print(f"[fetch_clean_data] Warning: No data found in bucket {bucket_clean}.")
+        return pd.DataFrame()
         
-    if not df.empty:
-        df.set_index('_time', inplace=True)
-        df.sort_index(inplace=True)
+    df.set_index('_time', inplace=True)
+    df.sort_index(inplace=True)
+    
+    if USE_INDOOR_FEATURE:
+        df['is_indoor'] = df['id_board'].map(BOARD_ENV_MAP).fillna(0).astype(int)
+        print(f"[fetch_clean_data] Injected 'is_indoor' environmental toggle flag.")
         
-        if USE_INDOOR_FEATURE:
-            df['is_indoor'] = df['id_board'].map(BOARD_ENV_MAP).fillna(0).astype(int)
-            print(f"[fetch_clean_data] Injected 'is_indoor' environmental toggle flag.")
-            
-        print(f"[fetch_clean_data] Successfully retrieved {len(df)} records.")
+    print(f"[fetch_clean_data] Successfully retrieved {len(df)} records.")
     return df
 
 
@@ -124,7 +124,7 @@ def log_and_evaluate(X_train, y_train, X_test, y_test, y_pred, features_names, m
 
 
 def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
-    print(f"\n{'='*60}\n[train_environmental_prophet - {freq_minutes}m] INDEPENDENT ENVIRONMENTAL PROPHET TRAINING\n{'='*60}")
+    print(f"\n{'='*10}\n[train_environmental_prophet - {freq_minutes}m] INDEPENDENT ENVIRONMENTAL PROPHET TRAINING\n")
     os.makedirs(output_dir, exist_ok=True)
     df_train = df_clean[df_clean['id_board'].isin(ACTIVE_BOARDS)].copy()
     
@@ -224,7 +224,7 @@ def train_environmental_prophet(df_clean, features, output_dir, freq_minutes):
             print(f"-> [train_environmental_prophet ERROR] Training interrupted for {feat}: {str(e)}")
             continue
 
-def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> dict:
+def get_models_grid(freq_minutes: int, poly_transformer: ColumnTransformer) -> dict:
     is_high_freq = freq_minutes < 6
     drop_diff = [('drop_diff', DropDiffFeatures())]
     scaler_and_poly = [('poly_features', poly_transformer), ('scaler', MinMaxScaler())]
@@ -346,7 +346,7 @@ def get_model_grids(freq_minutes: int, poly_transformer: ColumnTransformer) -> d
     }
 
 def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
-    print(f"\n{'='*60}\n[run_pipeline_for_task {freq_minutes}m] STARTING PIPELINE: {task_name.upper()}\n{'='*60}")
+    print(f"\n{'='*10}\n[run_pipeline_for_task {freq_minutes}m] STARTING PIPELINE: {task_name.upper()}\n")
     
     target_col = config["target"]
     
@@ -451,7 +451,7 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
         remainder='passthrough'
     )
 
-    models_grids = get_model_grids(freq_minutes, poly_transformer)
+    models_grid = get_models_grid(freq_minutes, poly_transformer)
     cv_splits = 2 if freq_minutes < 6 else 3
     tscv = TimeSeriesSplit(n_splits=cv_splits)
     
@@ -459,7 +459,7 @@ def run_pipeline_for_task(task_name, config, df_data, freq_minutes):
     best_overall_mae = float('inf')
     best_model_name = ""
 
-    for name, config in models_grids.items():
+    for name, config in models_grid.items():
         print(f"[{task_name}] Initiating GridSearchCV Training for {name}...")
         grid_search = GridSearchCV(estimator=config["model"], param_grid=config["params"], cv=tscv, scoring='neg_mean_absolute_error', n_jobs=-1)
         
