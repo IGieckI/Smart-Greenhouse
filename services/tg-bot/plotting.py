@@ -13,23 +13,63 @@ FONT_AXIS = 14
 FONT_TICK = 12
 FONT_LEGEND = 12
 
-def _finalize_and_save_plot(title: str, xlabel: str = 'Time (Local)', ylabel: str = 'Value') -> io.BytesIO:
-    plt.title(title, fontsize=FONT_TITLE)
-    plt.xlabel(xlabel, fontsize=FONT_AXIS)
-    plt.ylabel(ylabel, fontsize=FONT_AXIS)
-    plt.grid(True, alpha=0.3)
-    plt.legend(fontsize=FONT_LEGEND)
-    plt.xticks(rotation=45, fontsize=FONT_TICK)
-    plt.yticks(fontsize=FONT_TICK)
-    plt.tight_layout()
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png', dpi=100)
-    buf.seek(0)
-    plt.close()
-    return buf
+
+class PlotLabels:
+    BLENDED = "Blended (Final)"
+    ENV = "Environment (Env)"
+    AUTO = "Autoregressive (Auto)"
+    SOFT_HIST = "T1/T4 Est. History (Soft Sensor)"
+    STD_PRED = "Standard Prediction"
+    WHATIF_PROJ = "What-If Projection"
+    AIR_HIST = "Air Temp History (°C)"
+    AIR_FC = "Air Temp Forecast (°C)"
+    HUM_HIST = "Humidity History (%)"
+    HUM_FC = "Humidity Forecast (%)"
+    LEAF_HIST = "Leaf Temp History (°C)"
+    LEAF_FC = "Leaf Temp Forecast (°C)"
+
+
 
 def _is_humidity_series(label: str) -> bool:
     return ("Humidity" in label) or ("(%)" in label)
+
+
+def _forecast_xy(series: list, anchor_time=None, anchor_val=None):
+    times = [pd.to_datetime(d['timestamp']).astimezone(TZ_ROME) for d in series]
+    vals = [d['value'] for d in series]
+    if (anchor_time is not None) and (anchor_val is not None):
+        times = [anchor_time] + times
+        vals = [anchor_val] + vals
+    return times, vals
+
+
+
+def _finalize_and_save_plot(fig: plt.Figure, ax: plt.Axes, title: str, xlabel: str = 'Time (Local)', ylabel: str = 'Value') -> io.BytesIO:
+    ax.set_title(title, fontsize=FONT_TITLE)
+    ax.set_xlabel(xlabel, fontsize=FONT_AXIS)
+    ax.set_ylabel(ylabel, fontsize=FONT_AXIS)
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=FONT_LEGEND)
+    
+    ax.tick_params(axis='both', which='major', labelsize=FONT_TICK)
+    for label in ax.get_xticklabels():
+        label.set_rotation(45)
+        
+    fig.tight_layout()
+    buf = io.BytesIO()
+    
+    try:
+        fig.savefig(buf, format='png', dpi=100)
+        buf.seek(0)
+    finally:
+        plt.close(fig)
+    return buf
+
+
+
+
+
+
 
 def create_series_plot(df_hist: pd.DataFrame, series_dict: dict, title: str, hide_real_history: bool = False) -> io.BytesIO:
     fig, ax_temp = plt.subplots(figsize=FIGSIZE_STANDARD)
@@ -51,18 +91,18 @@ def create_series_plot(df_hist: pd.DataFrame, series_dict: dict, title: str, hid
                 ax_temp.plot(df_plot.index, df_plot['leaf_temp'], label='Real History', color='black', alpha=0.4, linewidth=2)
 
     styles = {
-        "Blended (Final)": {"color": "blue", "linewidth": 2.5, "marker": "o", "markersize": 6, "alpha": 1.0, "zorder": 5},
-        "Environment (Env)": {"color": "orange", "linewidth": 1.5, "linestyle": "--", "marker": "x", "markersize": 6, "alpha": 0.8},
-        "Autoregressive (Auto)": {"color": "green", "linewidth": 1.5, "linestyle": "--", "marker": "s", "markersize": 5, "alpha": 0.8},
-        "T1/T4 Est. History (Soft Sensor)": {"color": "purple", "linewidth": 2.5, "linestyle": "-", "alpha": 0.8},
-        "Standard Prediction": {"color": "red", "linewidth": 2.0, "linestyle": "--", "marker": "o", "markersize": 5},
-        "What-If Projection": {"color": "orange", "linewidth": 2.0, "linestyle": "dashed", "marker": "o", "markersize": 5},
-        "Air Temp History (°C)": {"color": "red", "linewidth": 1.5, "linestyle": "-", "alpha": 0.6},
-        "Air Temp Forecast (°C)": {"color": "red", "linewidth": 1.5, "linestyle": "--", "marker": "."},
-        "Humidity History (%)": {"color": "cyan", "linewidth": 1.5, "linestyle": "-", "alpha": 0.6},
-        "Humidity Forecast (%)": {"color": "cyan", "linewidth": 1.5, "linestyle": "--", "marker": "."},
-        "Leaf Temp History (°C)": {"color": "green", "linewidth": 1.5, "linestyle": "-", "alpha": 0.8},
-        "Leaf Temp Forecast (°C)": {"color": "green", "linewidth": 2.0, "linestyle": "--", "marker": "*"}
+        PlotLabels.BLENDED: {"color": "blue", "linewidth": 2.5, "marker": "o", "markersize": 6, "alpha": 1.0, "zorder": 5},
+        PlotLabels.ENV: {"color": "orange", "linewidth": 1.5, "linestyle": "--", "marker": "x", "markersize": 6, "alpha": 0.8},
+        PlotLabels.AUTO: {"color": "green", "linewidth": 1.5, "linestyle": "--", "marker": "s", "markersize": 5, "alpha": 0.8},
+        PlotLabels.SOFT_HIST: {"color": "purple", "linewidth": 2.5, "linestyle": "-", "alpha": 0.8},
+        PlotLabels.STD_PRED: {"color": "red", "linewidth": 2.0, "linestyle": "--", "marker": "o", "markersize": 5},
+        PlotLabels.WHATIF_PROJ: {"color": "orange", "linewidth": 2.0, "linestyle": "dashed", "marker": "o", "markersize": 5},
+        PlotLabels.AIR_HIST: {"color": "red", "linewidth": 1.5, "linestyle": "-", "alpha": 0.6},
+        PlotLabels.AIR_FC: {"color": "red", "linewidth": 1.5, "linestyle": "--", "marker": "."},
+        PlotLabels.HUM_HIST: {"color": "cyan", "linewidth": 1.5, "linestyle": "-", "alpha": 0.6},
+        PlotLabels.HUM_FC: {"color": "cyan", "linewidth": 1.5, "linestyle": "--", "marker": "."},
+        PlotLabels.LEAF_HIST: {"color": "green", "linewidth": 1.5, "linestyle": "-", "alpha": 0.8},
+        PlotLabels.LEAF_FC: {"color": "green", "linewidth": 2.0, "linestyle": "--", "marker": "*"}
     }
 
     for label, data in series_dict.items():
@@ -105,122 +145,101 @@ def create_series_plot(df_hist: pd.DataFrame, series_dict: dict, title: str, hid
     plt.close(fig)
     return buf
 
+
+
 def create_vpd_plot(df_hist: pd.DataFrame, future_vpd: list = None, historical_vpd: list = None) -> io.BytesIO:
-    plt.figure(figsize=FIGSIZE_STANDARD)
-    last_time = pd.Timestamp.now(tz=TZ_ROME)
-    last_val = None
-    has_data = False
-    
-    if historical_vpd:
-        times = [pd.to_datetime(d['timestamp']).astimezone(TZ_ROME) for d in historical_vpd]
-        vals = [d['value'] for d in historical_vpd]
-        plt.plot(times, vals, label='Historical VPD (API)', color='magenta', linewidth=2)
-        if times:
-            last_time = times[-1]
-            last_val = vals[-1]
-        has_data = True
-    elif (not df_hist.empty) and ('vpd' in df_hist.columns):
-        df_plot = df_hist.dropna(subset=['vpd'])
-        if not df_plot.empty:
-            plt.plot(df_plot.index, df_plot['vpd'], label='Historical VPD (Sensor)', color='magenta', linewidth=2)
-            last_time = df_plot.index[-1]
-            last_val = df_plot['vpd'].iloc[-1]
+    fig, ax = plt.subplots(figsize=FIGSIZE_STANDARD)
+    try:
+        last_time = pd.Timestamp.now(tz=TZ_ROME)
+        last_val = None
+        has_data = False
+        
+        if historical_vpd:
+            times = [pd.to_datetime(d['timestamp']).astimezone(TZ_ROME) for d in historical_vpd]
+            vals = [d['value'] for d in historical_vpd]
+            ax.plot(times, vals, label='Historical VPD (API)', color='magenta', linewidth=2)
+            if times:
+                last_time = times[-1]
+                last_val = vals[-1]
+            has_data = True
+        elif (not df_hist.empty) and ('vpd' in df_hist.columns):
+            df_plot = df_hist.dropna(subset=['vpd'])
+            if not df_plot.empty:
+                ax.plot(df_plot.index, df_plot['vpd'], label='Historical VPD (Sensor)', color='magenta', linewidth=2)
+                last_time = df_plot.index[-1]
+                last_val = df_plot['vpd'].iloc[-1]
+                has_data = True
+
+        if future_vpd:
+            times = [pd.to_datetime(d['timestamp']).astimezone(TZ_ROME) for d in future_vpd]
+            vals = [d['value'] for d in future_vpd]
+            if last_val is not None:
+                times = [last_time] + times
+                vals = [last_val] + vals
+            ax.plot(times, vals, label='Future VPD Projection', color='purple', linestyle='--', marker='o', markersize=4)
             has_data = True
 
-    if future_vpd:
-        times = [pd.to_datetime(d['timestamp']).astimezone(TZ_ROME) for d in future_vpd]
-        vals = [d['value'] for d in future_vpd]
-        if last_val is not None:
-            times = [last_time] + times
-            vals = [last_val] + vals
-        plt.plot(times, vals, label='Future VPD Projection', color='purple', linestyle='--', marker='o', markersize=4)
-        has_data = True
+        if not has_data:
+            ax.text(0.5, 0.5, 'VPD Data Unavailable', horizontalalignment='center', verticalalignment='center', transform=ax.transAxes, fontsize=FONT_AXIS)
 
-    if not has_data:
-        plt.text(0.5, 0.5, 'VPD Data Unavailable', horizontalalignment='center', verticalalignment='center', transform=plt.gca().transAxes, fontsize=FONT_AXIS)
-
-    plt.axvline(x=last_time, color='red', linestyle=':', alpha=0.6, label='Now')
-    return _finalize_and_save_plot("Vapor Pressure Deficit (VPD)", ylabel="VPD (kPa)")
-
-def create_semantic_category_plots(df_hist: pd.DataFrame) -> list[io.BytesIO]:
-    plots = []
-    categories = {
-        "Temperatures (°C)": (['air_temp', 'leaf_temp', 'water_temp'], ['red', 'green', 'blue']),
-        "Luminosity (Lux)": (['light_lux'], ['orange']),
-        "Pressure (hPa)": (['pressure'], ['purple']),
-        "Humidity & Soil Moisture (%)": (['humidity', 'soil_moisture'], ['cyan', 'brown']),
-        "Water Quality (TDS - ppm)": (['tds'], ['olive'])
-    }
-    
-    for title, (columns, colors) in categories.items():
-        available_cols = [c for c in columns if c in df_hist.columns]
-        if not available_cols: 
-            continue
-        plt.figure(figsize=FIGSIZE_SUBPLOT)
-        for idx, col in enumerate(available_cols):
-            df_plot = df_hist.dropna(subset=[col])
-            if not df_plot.empty:
-                plt.plot(df_plot.index, df_plot[col], label=col, color=colors[idx % len(colors)], linewidth=2)
-        plots.append(_finalize_and_save_plot(title))
-        
-    plots.append(create_vpd_plot(df_hist))
-    return plots
-
-def _forecast_xy(series: list, anchor_time=None, anchor_val=None):
-    times = [pd.to_datetime(d['timestamp']).astimezone(TZ_ROME) for d in series]
-    vals = [d['value'] for d in series]
-    if (anchor_time is not None) and (anchor_val is not None):
-        times = [anchor_time] + times
-        vals = [anchor_val] + vals
-    return times, vals
+        ax.axvline(x=last_time, color='red', linestyle=':', alpha=0.6, label='Now')
+        return _finalize_and_save_plot(fig, ax, "Vapor Pressure Deficit (VPD)", ylabel="VPD (kPa)")
+    except Exception as e:
+        plt.close(fig)
+        raise e
 
 def create_history_vpd_plot(df_hist: pd.DataFrame, vpd_forecast: dict = None) -> io.BytesIO:
-    plt.figure(figsize=FIGSIZE_STANDARD)
-    last_time = pd.Timestamp.now(tz=TZ_ROME)
-    has_data = False
-    last_air_time = last_air_val = None
-    last_leaf_time = last_leaf_val = None
+    fig, ax = plt.subplots(figsize=FIGSIZE_STANDARD)
+    try:
+        last_time = pd.Timestamp.now(tz=TZ_ROME)
+        has_data = False
+        last_air_time = last_air_val = None
+        last_leaf_time = last_leaf_val = None
 
-    if not df_hist.empty:
-        if ('vpd_air' in df_hist.columns) and (not df_hist['vpd_air'].dropna().empty):
-            df_plot = df_hist.dropna(subset=['vpd_air'])
-            plt.plot(df_plot.index, df_plot['vpd_air'], label='Actual VPD (Air)', color='blue', linewidth=1.5, linestyle='-.', alpha=0.6)
-            last_time = df_plot.index[-1]
-            last_air_time, last_air_val = df_plot.index[-1], df_plot['vpd_air'].iloc[-1]
-            has_data = True
+        if not df_hist.empty:
+            if ('vpd_air' in df_hist.columns) and (not df_hist['vpd_air'].dropna().empty):
+                df_plot = df_hist.dropna(subset=['vpd_air'])
+                ax.plot(df_plot.index, df_plot['vpd_air'], label='Actual VPD (Air)', color='blue', linewidth=1.5, linestyle='-.', alpha=0.6)
+                last_time = df_plot.index[-1]
+                last_air_time, last_air_val = df_plot.index[-1], df_plot['vpd_air'].iloc[-1]
+                has_data = True
 
-        if ('vpd_leaf' in df_hist.columns) and (not df_hist['vpd_leaf'].dropna().empty):
-            df_plot = df_hist.dropna(subset=['vpd_leaf'])
-            plt.plot(df_plot.index, df_plot['vpd_leaf'], label='Actual VPD (Leaf)', color='magenta', linewidth=2)
-            last_time = df_plot.index[-1]
-            last_leaf_time, last_leaf_val = df_plot.index[-1], df_plot['vpd_leaf'].iloc[-1]
-            has_data = True
+            if ('vpd_leaf' in df_hist.columns) and (not df_hist['vpd_leaf'].dropna().empty):
+                df_plot = df_hist.dropna(subset=['vpd_leaf'])
+                ax.plot(df_plot.index, df_plot['vpd_leaf'], label='Actual VPD (Leaf)', color='magenta', linewidth=2)
+                last_time = df_plot.index[-1]
+                last_leaf_time, last_leaf_val = df_plot.index[-1], df_plot['vpd_leaf'].iloc[-1]
+                has_data = True
 
-        if ('vpd_air_pred' in df_hist.columns) and (not df_hist['vpd_air_pred'].dropna().empty):
-            df_plot = df_hist.dropna(subset=['vpd_air_pred'])
-            plt.plot(df_plot.index, df_plot['vpd_air_pred'], label='Predicted VPD (Air)', color='cyan', linewidth=1.5, linestyle='--')
-            has_data = True
+            if ('vpd_air_pred' in df_hist.columns) and (not df_hist['vpd_air_pred'].dropna().empty):
+                df_plot = df_hist.dropna(subset=['vpd_air_pred'])
+                ax.plot(df_plot.index, df_plot['vpd_air_pred'], label='Predicted VPD (Air)', color='cyan', linewidth=1.5, linestyle='--')
+                has_data = True
 
-        if ('vpd_leaf_pred' in df_hist.columns) and (not df_hist['vpd_leaf_pred'].dropna().empty):
-            df_plot = df_hist.dropna(subset=['vpd_leaf_pred'])
-            plt.plot(df_plot.index, df_plot['vpd_leaf_pred'], label='Predicted VPD (Leaf)', color='orange', linewidth=1.5, linestyle='--')
-            has_data = True
+            if ('vpd_leaf_pred' in df_hist.columns) and (not df_hist['vpd_leaf_pred'].dropna().empty):
+                df_plot = df_hist.dropna(subset=['vpd_leaf_pred'])
+                ax.plot(df_plot.index, df_plot['vpd_leaf_pred'], label='Predicted VPD (Leaf)', color='orange', linewidth=1.5, linestyle='--')
+                has_data = True
 
-    if vpd_forecast:
-        if air_fc := vpd_forecast.get('air'):
-            times, vals = _forecast_xy(air_fc, last_air_time, last_air_val)
-            plt.plot(times, vals, label='Forecast VPD (Air)', color='dodgerblue', linewidth=2.0, linestyle='--', marker='.', markersize=6)
-            has_data = True
-        if leaf_fc := vpd_forecast.get('leaf'):
-            times, vals = _forecast_xy(leaf_fc, last_leaf_time, last_leaf_val)
-            plt.plot(times, vals, label='Forecast VPD (Leaf)', color='red', linewidth=2.0, linestyle='--', marker='*', markersize=7)
-            has_data = True
+        if vpd_forecast:
+            if air_fc := vpd_forecast.get('air'):
+                times, vals = _forecast_xy(air_fc, last_air_time, last_air_val)
+                ax.plot(times, vals, label='Forecast VPD (Air)', color='dodgerblue', linewidth=2.0, linestyle='--', marker='.', markersize=6)
+                has_data = True
+            if leaf_fc := vpd_forecast.get('leaf'):
+                times, vals = _forecast_xy(leaf_fc, last_leaf_time, last_leaf_val)
+                ax.plot(times, vals, label='Forecast VPD (Leaf)', color='red', linewidth=2.0, linestyle='--', marker='*', markersize=7)
+                has_data = True
 
-    if not has_data:
-        plt.text(0.5, 0.5, 'VPD Data Unavailable', horizontalalignment='center', verticalalignment='center', transform=plt.gca().transAxes, fontsize=FONT_AXIS)
+        if not has_data:
+            ax.text(0.5, 0.5, 'VPD Data Unavailable', horizontalalignment='center', verticalalignment='center', transform=ax.transAxes, fontsize=FONT_AXIS)
 
-    plt.axvline(x=last_time, color='red', linestyle=':', alpha=0.6, label='Now')
-    return _finalize_and_save_plot("Vapor Pressure Deficit (VPD) [History]", ylabel="VPD (kPa)")
+        ax.axvline(x=last_time, color='red', linestyle=':', alpha=0.6, label='Now')
+        return _finalize_and_save_plot(fig, ax, "Vapor Pressure Deficit (VPD) [History]", ylabel="VPD (kPa)")
+    except Exception as e:
+        plt.close(fig)
+        raise e
+
 
 def create_history_plots(df_hist: pd.DataFrame, vpd_forecast: dict = None) -> list[io.BytesIO]:
     plots = []
@@ -257,19 +276,22 @@ def create_history_plots(df_hist: pd.DataFrame, vpd_forecast: dict = None) -> li
         if (not avail_actuals) and (not avail_preds): 
             continue
         
-        plt.figure(figsize=FIGSIZE_SUBPLOT)
-        
-        for idx, col in enumerate(avail_actuals):
-            df_plot = df_hist.dropna(subset=[col])
-            if not df_plot.empty:
-                plt.plot(df_plot.index, df_plot[col], label=f"Actual {col.replace('_', ' ').title()}", color=actual_colors[idx % len(actual_colors)], linewidth=2)
-                
-        for idx, col in enumerate(avail_preds):
-            df_plot = df_hist.dropna(subset=[col])
-            if not df_plot.empty:
-                plt.plot(df_plot.index, df_plot[col], label=f"Predicted {col.replace('_pred', '').replace('_', ' ').title()}", color=pred_colors[idx % len(pred_colors)], linewidth=1.5, linestyle='--')
-        
-        plots.append(_finalize_and_save_plot(title))
+        fig, ax = plt.subplots(figsize=FIGSIZE_SUBPLOT)
+        try:
+            for idx, col in enumerate(avail_actuals):
+                df_plot = df_hist.dropna(subset=[col])
+                if not df_plot.empty:
+                    ax.plot(df_plot.index, df_plot[col], label=f"Actual {col.replace('_', ' ').title()}", color=actual_colors[idx % len(actual_colors)], linewidth=2)
+                    
+            for idx, col in enumerate(avail_preds):
+                df_plot = df_hist.dropna(subset=[col])
+                if not df_plot.empty:
+                    ax.plot(df_plot.index, df_plot[col], label=f"Predicted {col.replace('_pred', '').replace('_', ' ').title()}", color=pred_colors[idx % len(pred_colors)], linewidth=1.5, linestyle='--')
+            
+            plots.append(_finalize_and_save_plot(fig, ax, title))
+        except Exception as e:
+            plt.close(fig)
+            raise e
         
     plots.append(create_history_vpd_plot(df_hist, vpd_forecast))
     return plots

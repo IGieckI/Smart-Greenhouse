@@ -7,34 +7,30 @@ from influxdb_client.client.flux_table import TableList
 from config import INFLUX_URL, INFLUX_TOKEN, INFLUX_ORG, BUCKET, TZ_ROME, CONTROLLER_URL, logger
 
 
-
 def calculate_svp(t):
     return 0.61078 * np.exp((17.27 * t) / (t + 237.3))
 
 
-def calculate_vpd(df: pd.DataFrame) -> pd.DataFrame:
-    if ('air_temp' in df.columns) and ('humidity' in df.columns):
-        svp_air = calculate_svp(df['air_temp'])
-        avp_air = svp_air * (df['humidity'] / 100.0)
-        df['vpd_air'] = np.maximum(0, svp_air - avp_air)
+def _compute_vpd_for_cols(df: pd.DataFrame, air_col: str, hum_col: str, leaf_col: str, prefix: str):
+    if (air_col in df.columns) and (hum_col in df.columns):
+        svp_air = calculate_svp(df[air_col])
+        avp_air = svp_air * (df[hum_col] / 100.0)
+        df[f'vpd_air{prefix}'] = np.maximum(0, svp_air - avp_air)
         
-        if 'leaf_temp' in df.columns:
-            valid_leaf = df['leaf_temp'] > -20.0
-            svp_leaf = calculate_svp(df['leaf_temp'])
-            df['vpd_leaf'] = np.where(valid_leaf, np.maximum(0, svp_leaf - avp_air), np.nan)
-            df['vpd'] = df['vpd_leaf'] 
+        if leaf_col in df.columns:
+            valid_leaf = df[leaf_col] > -20.0
+            svp_leaf = calculate_svp(df[leaf_col])
+            df[f'vpd_leaf{prefix}'] = np.where(valid_leaf, np.maximum(0, svp_leaf - avp_air), np.nan)
+            if prefix == "":
+                df['vpd'] = df[f'vpd_leaf{prefix}']
         else:
-            df['vpd'] = df['vpd_air']
+            if prefix == "":
+                df['vpd'] = df[f'vpd_air{prefix}']
 
-    if ('air_temp_pred' in df.columns) and ('humidity_pred' in df.columns):
-        svp_air_pred = calculate_svp(df['air_temp_pred'])
-        avp_pred = svp_air_pred * (df['humidity_pred'] / 100.0)
-        df['vpd_air_pred'] = np.maximum(0, svp_air_pred - avp_pred)
-        
-        if 'leaf_temp_pred' in df.columns:
-            svp_leaf_pred = calculate_svp(df['leaf_temp_pred'])
-            df['vpd_leaf_pred'] = np.maximum(0, svp_leaf_pred - avp_pred)
-            
+
+def calculate_vpd(df: pd.DataFrame) -> pd.DataFrame:
+    _compute_vpd_for_cols(df, 'air_temp', 'humidity', 'leaf_temp', '')
+    _compute_vpd_for_cols(df, 'air_temp_pred', 'humidity_pred', 'leaf_temp_pred', '_pred')
     return df
 
 
@@ -125,7 +121,6 @@ def fetch_history_data(board_id: str, hours: int) -> pd.DataFrame:
 
 
 
-
 def fetch_history_with_preds(board_id: str, hours_past: int, hours_future: int = 3, min_window: int = 6) -> pd.DataFrame:
     """ Dedicated fetcher for History Plots. Grabs future data & aligns timestamps.
 
@@ -133,32 +128,30 @@ def fetch_history_with_preds(board_id: str, hours_past: int, hours_future: int =
     empty, falls back to the most recent `hours_past` of data that actually exists,
     so a stale board still renders its latest history instead of reporting "no data".
     """
-    client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
     now = datetime.utcnow()
     try:
-        df = _query_history_window(
-            client, board_id,
-            now - timedelta(hours=hours_past),
-            now + timedelta(hours=hours_future),
-            min_window,
-        )
-        if df.empty:
-            latest = _latest_board_timestamp(client, board_id)
-            if latest is not None:
-                logger.info(f"Board {board_id} has no data in the last {hours_past}h; "
-                            f"falling back to latest available data at {latest}.")
-                df = _query_history_window(
-                    client, board_id,
-                    latest - timedelta(hours=hours_past),
-                    latest + timedelta(hours=hours_future),
-                    min_window,
-                )
-        return df
+        with InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG) as client:
+            df = _query_history_window(
+                client, board_id,
+                now - timedelta(hours=hours_past),
+                now + timedelta(hours=hours_future),
+                min_window,
+            )
+            if df.empty:
+                latest = _latest_board_timestamp(client, board_id)
+                if latest is not None:
+                    logger.info(f"Board {board_id} has no data in the last {hours_past}h; "
+                                f"falling back to latest available data at {latest}.")
+                    df = _query_history_window(
+                        client, board_id,
+                        latest - timedelta(hours=hours_past),
+                        latest + timedelta(hours=hours_future),
+                        min_window,
+                    )
+            return df
     except Exception as e:
         logger.error(f"InfluxDB plot fetch error: {e}")
         return pd.DataFrame()
-    finally:
-        client.close()
 
 
 
@@ -172,18 +165,14 @@ def fetch_topology_boards() -> set[str] | None:
         return None
 
 def fetch_available_boards() -> list[str]:
-    client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
     query = f'''
         import "influxdata/influxdb/schema"
         schema.tagValues(bucket: "{BUCKET}", tag: "id_board")
     '''
     try:
-        result : TableList = client.query_api().query(query)
-        boards = [record.get_value() for table in result for record in table.records]
-        print("\n\n\n")
-        print(boards)
-
-        print("\n\n\n")
+        with InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG) as client:
+            result : TableList = client.query_api().query(query)
+            boards = [record.get_value() for table in result for record in table.records]
     except Exception as e:
         logger.error(f"InfluxDB board fetch error: {e}")
         return []

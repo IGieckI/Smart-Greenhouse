@@ -43,20 +43,12 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.edit_message_text(text, reply_markup=keyboard, parse_mode='Markdown')
 
 
-async def handle_reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("🔄 Requesting API server to reload models into RAM...")
-    data = await fetch_api(f"{INFERENCE_URL}/reload-models", payload={})
-    if (data) and (data.get("status") == "ok"):
-        await msg.edit_text("✅ **Models reloaded successfully!**", parse_mode='Markdown')
-    else:
-        await msg.edit_text("⚠️ **Failed to reload models.** Check API logs.", parse_mode='Markdown')
-
+async def block_stray_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer("⚠️ Please send a text message or /cancel.", show_alert=True)
 
 async def menu_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_main_menu(update, context)
     return ConversationHandler.END
-
-
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error("Unhandled exception while processing update", exc_info=context.error)
@@ -86,6 +78,18 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+async def handle_reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("🔄 Requesting API server to reload models into RAM...")
+    data = await fetch_api(f"{INFERENCE_URL}/reload-models", payload={})
+    if (data) and (data.get("status") == "ok"):
+        await msg.edit_text("✅ **Models reloaded successfully!**", parse_mode='Markdown')
+    else:
+        await msg.edit_text("⚠️ **Failed to reload models.** Check API logs.", parse_mode='Markdown')
+
+
+
+
+
 
 def main():
     if not TOKEN:
@@ -102,7 +106,10 @@ def main():
             AWAIT_WHATIF_MODE: [CallbackQueryHandler(choose_whatif_task, pattern='^(whatif_mode_|whatif_cancel)')],
             AWAIT_WHATIF_TASK: [CallbackQueryHandler(choose_whatif_board, pattern='^(whatif_task_|whatif_cancel)')],
             AWAIT_WHATIF_BOARD: [CallbackQueryHandler(whatif_ask_values, pattern='^(whatif_board_|whatif_cancel)')],
-            AWAIT_WHATIF_VALUES: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_whatif_values)]
+            AWAIT_WHATIF_VALUES: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, process_whatif_values),
+                CallbackQueryHandler(block_stray_callbacks, pattern='.*')
+            ]
         },
         fallbacks=[
             CommandHandler('cancel', cancel_whatif),
@@ -115,7 +122,10 @@ def main():
     actuator_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_custom_command, pattern='^act_custom_')],
         states={
-            AWAIT_ACT_CUSTOM: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_custom_command)]
+            AWAIT_ACT_CUSTOM: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, process_custom_command),
+                CallbackQueryHandler(block_stray_callbacks, pattern='.*')
+            ]
         },
         fallbacks=[
             CommandHandler('cancel', cancel_custom),
