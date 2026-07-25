@@ -29,7 +29,6 @@ class PlotLabels:
     LEAF_FC = "Leaf Temp Forecast (°C)"
 
 
-
 def _is_humidity_series(label: str) -> bool:
     return ("Humidity" in label) or ("(%)" in label)
 
@@ -41,7 +40,6 @@ def _forecast_xy(series: list, anchor_time=None, anchor_val=None):
         times = [anchor_time] + times
         vals = [anchor_val] + vals
     return times, vals
-
 
 
 def _finalize_and_save_plot(fig: plt.Figure, ax: plt.Axes, title: str, xlabel: str = 'Time (Local)', ylabel: str = 'Value') -> io.BytesIO:
@@ -66,85 +64,81 @@ def _finalize_and_save_plot(fig: plt.Figure, ax: plt.Axes, title: str, xlabel: s
     return buf
 
 
-
-
-
-
-
 def create_series_plot(df_hist: pd.DataFrame, series_dict: dict, title: str, hide_real_history: bool = False) -> io.BytesIO:
     fig, ax_temp = plt.subplots(figsize=FIGSIZE_STANDARD)
-    last_time = pd.Timestamp.now(tz=TZ_ROME)
-    last_val = None
+    try:
+        last_time = pd.Timestamp.now(tz=TZ_ROME)
+        last_val = None
 
-    has_humidity = any(_is_humidity_series(label) for label, data in series_dict.items() if data)
-    ax_hum = ax_temp.twinx() if has_humidity else None
+        has_humidity = any(_is_humidity_series(label) for label, data in series_dict.items() if data)
+        ax_hum = ax_temp.twinx() if has_humidity else None
 
-    def _axis_for(label: str):
-        return ax_hum if (ax_hum is not None and _is_humidity_series(label)) else ax_temp
+        def _axis_for(label: str):
+            return ax_hum if (ax_hum is not None and _is_humidity_series(label)) else ax_temp
 
-    if (not df_hist.empty) and ('leaf_temp' in df_hist.columns):
-        df_plot = df_hist.dropna(subset=['leaf_temp'])
-        if not df_plot.empty:
-            last_time = df_plot.index[-1]
-            last_val = df_plot['leaf_temp'].iloc[-1]
-            if not hide_real_history:
-                ax_temp.plot(df_plot.index, df_plot['leaf_temp'], label='Real History', color='black', alpha=0.4, linewidth=2)
+        if (not df_hist.empty) and ('leaf_temp' in df_hist.columns):
+            df_plot = df_hist.dropna(subset=['leaf_temp'])
+            if not df_plot.empty:
+                last_time = df_plot.index[-1]
+                last_val = df_plot['leaf_temp'].iloc[-1]
+                if not hide_real_history:
+                    ax_temp.plot(df_plot.index, df_plot['leaf_temp'], label='Real History', color='black', alpha=0.4, linewidth=2)
 
-    styles = {
-        PlotLabels.BLENDED: {"color": "blue", "linewidth": 2.5, "marker": "o", "markersize": 6, "alpha": 1.0, "zorder": 5},
-        PlotLabels.ENV: {"color": "orange", "linewidth": 1.5, "linestyle": "--", "marker": "x", "markersize": 6, "alpha": 0.8},
-        PlotLabels.AUTO: {"color": "green", "linewidth": 1.5, "linestyle": "--", "marker": "s", "markersize": 5, "alpha": 0.8},
-        PlotLabels.SOFT_HIST: {"color": "purple", "linewidth": 2.5, "linestyle": "-", "alpha": 0.8},
-        PlotLabels.STD_PRED: {"color": "red", "linewidth": 2.0, "linestyle": "--", "marker": "o", "markersize": 5},
-        PlotLabels.WHATIF_PROJ: {"color": "orange", "linewidth": 2.0, "linestyle": "dashed", "marker": "o", "markersize": 5},
-        PlotLabels.AIR_HIST: {"color": "red", "linewidth": 1.5, "linestyle": "-", "alpha": 0.6},
-        PlotLabels.AIR_FC: {"color": "red", "linewidth": 1.5, "linestyle": "--", "marker": "."},
-        PlotLabels.HUM_HIST: {"color": "cyan", "linewidth": 1.5, "linestyle": "-", "alpha": 0.6},
-        PlotLabels.HUM_FC: {"color": "cyan", "linewidth": 1.5, "linestyle": "--", "marker": "."},
-        PlotLabels.LEAF_HIST: {"color": "green", "linewidth": 1.5, "linestyle": "-", "alpha": 0.8},
-        PlotLabels.LEAF_FC: {"color": "green", "linewidth": 2.0, "linestyle": "--", "marker": "*"}
-    }
+        styles = {
+            PlotLabels.BLENDED: {"color": "blue", "linewidth": 2.5, "marker": "o", "markersize": 6, "alpha": 1.0, "zorder": 5},
+            PlotLabels.ENV: {"color": "orange", "linewidth": 1.5, "linestyle": "--", "marker": "x", "markersize": 6, "alpha": 0.8},
+            PlotLabels.AUTO: {"color": "green", "linewidth": 1.5, "linestyle": "--", "marker": "s", "markersize": 5, "alpha": 0.8},
+            PlotLabels.SOFT_HIST: {"color": "purple", "linewidth": 2.5, "linestyle": "-", "alpha": 0.8},
+            PlotLabels.STD_PRED: {"color": "red", "linewidth": 2.0, "linestyle": "--", "marker": "o", "markersize": 5},
+            PlotLabels.WHATIF_PROJ: {"color": "orange", "linewidth": 2.0, "linestyle": "dashed", "marker": "o", "markersize": 5},
+            PlotLabels.AIR_HIST: {"color": "red", "linewidth": 1.5, "linestyle": "-", "alpha": 0.6},
+            PlotLabels.AIR_FC: {"color": "red", "linewidth": 1.5, "linestyle": "--", "marker": "."},
+            PlotLabels.HUM_HIST: {"color": "cyan", "linewidth": 1.5, "linestyle": "-", "alpha": 0.6},
+            PlotLabels.HUM_FC: {"color": "cyan", "linewidth": 1.5, "linestyle": "--", "marker": "."},
+            PlotLabels.LEAF_HIST: {"color": "green", "linewidth": 1.5, "linestyle": "-", "alpha": 0.8},
+            PlotLabels.LEAF_FC: {"color": "green", "linewidth": 2.0, "linestyle": "--", "marker": "*"}
+        }
 
-    for label, data in series_dict.items():
-        if not data:
-            continue
-        times = [pd.to_datetime(d['timestamp']).astimezone(TZ_ROME) for d in data]
-        vals = [d['value'] for d in data]
+        for label, data in series_dict.items():
+            if not data:
+                continue
+            times = [pd.to_datetime(d['timestamp']).astimezone(TZ_ROME) for d in data]
+            vals = [d['value'] for d in data]
 
-        if (("History" not in label and "Forecast" not in label)) and ((last_val is not None)):
-            times = [last_time] + times
-            vals = [last_val] + vals
+            if ("History" not in label and "Forecast" not in label) and (last_val is not None):
+                times = [last_time] + times
+                vals = [last_val] + vals
 
-        style = styles.get(label, {"marker": "o", "markersize": 4, "linestyle": "--"})
-        _axis_for(label).plot(times, vals, label=label, **style)
+            style = styles.get(label, {"marker": "o", "markersize": 4, "linestyle": "--"})
+            _axis_for(label).plot(times, vals, label=label, **style)
 
-    ax_temp.axvline(x=last_time, color='red', linestyle=':', alpha=0.6, label='Now')
+        ax_temp.axvline(x=last_time, color='red', linestyle=':', alpha=0.6, label='Now')
 
-    ax_temp.set_title(title, fontsize=FONT_TITLE)
-    ax_temp.set_xlabel('Time (Local)', fontsize=FONT_AXIS)
-    ax_temp.set_ylabel('Temperature (°C)' if ax_hum is not None else 'Value', fontsize=FONT_AXIS)
-    ax_temp.grid(True, alpha=0.3)
-    
-    ax_temp.tick_params(axis='both', which='major', labelsize=FONT_TICK)
-    for label in ax_temp.get_xticklabels():
-        label.set_rotation(45)
+        ax_temp.set_title(title, fontsize=FONT_TITLE)
+        ax_temp.set_xlabel('Time (Local)', fontsize=FONT_AXIS)
+        ax_temp.set_ylabel('Temperature (°C)' if ax_hum is not None else 'Value', fontsize=FONT_AXIS)
+        ax_temp.grid(True, alpha=0.3)
+        
+        ax_temp.tick_params(axis='both', which='major', labelsize=FONT_TICK)
+        for label in ax_temp.get_xticklabels():
+            label.set_rotation(45)
 
-    if ax_hum is not None:
-        ax_hum.set_ylabel('Humidity (%)', fontsize=FONT_AXIS)
-        ax_hum.tick_params(axis='y', which='major', labelsize=FONT_TICK)
-        handles, labels = ax_temp.get_legend_handles_labels()
-        h2, l2 = ax_hum.get_legend_handles_labels()
-        ax_temp.legend(handles + h2, labels + l2, loc='best', fontsize=FONT_LEGEND)
-    else:
-        ax_temp.legend(loc='best', fontsize=FONT_LEGEND)
+        if ax_hum is not None:
+            ax_hum.set_ylabel('Humidity (%)', fontsize=FONT_AXIS)
+            ax_hum.tick_params(axis='y', which='major', labelsize=FONT_TICK)
+            handles, labels = ax_temp.get_legend_handles_labels()
+            h2, l2 = ax_hum.get_legend_handles_labels()
+            ax_temp.legend(handles + h2, labels + l2, loc='best', fontsize=FONT_LEGEND)
+        else:
+            ax_temp.legend(loc='best', fontsize=FONT_LEGEND)
 
-    fig.tight_layout()
-    buf = io.BytesIO()
-    fig.savefig(buf, format='png', dpi=100)
-    buf.seek(0)
-    plt.close(fig)
-    return buf
-
+        fig.tight_layout()
+        buf = io.BytesIO()
+        fig.savefig(buf, format='png', dpi=100)
+        buf.seek(0)
+        return buf
+    finally:
+        plt.close(fig)
 
 
 def create_vpd_plot(df_hist: pd.DataFrame, future_vpd: list = None, historical_vpd: list = None) -> io.BytesIO:

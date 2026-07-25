@@ -23,8 +23,6 @@ async def setup_commands(application: Application):
         BotCommand("reload", "🔄 Reload API Models into RAM")
     ])
 
-
-
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['is_processing'] = False 
     keyboard = build_keyboard([
@@ -71,21 +69,13 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-
-
-
-
 async def handle_reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("🔄 Requesting API server to reload models into RAM...")
     data = await fetch_api(f"{INFERENCE_URL}/reload-models", payload={})
-    if (data) and (data.get("status") == "ok"):
+    if data and (data.get("status") == "ok"):
         await msg.edit_text("✅ **Models reloaded successfully!**", parse_mode='Markdown')
     else:
         await msg.edit_text("⚠️ **Failed to reload models.** Check API logs.", parse_mode='Markdown')
-
-
-
-
 
 
 def main():
@@ -126,18 +116,12 @@ def main():
     )
     application.add_handler(actuator_conv)
 
-    
     application.add_handler(CallbackQueryHandler(show_main_menu, pattern="^menu_main$"))
-    
     application.add_handler(CallbackQueryHandler(handle_history_menu, pattern="^(hist_|menu_history$)"))
-    
     application.add_handler(CallbackQueryHandler(handle_predict_menu, pattern="^(pred_|menu_predict$)"))
-    
     application.add_handler(CallbackQueryHandler(handle_training_menu, pattern="^train_"))
-    
     application.add_handler(CallbackQueryHandler(handle_actuator_routing, pattern="^act_(menu$|board_|cmd_)"))
     
-
     application.add_error_handler(error_handler)
 
     logger.info("GJGreenhouseBot initialized and listening...")
